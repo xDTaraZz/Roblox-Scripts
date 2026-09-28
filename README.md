@@ -7,7 +7,7 @@
 **Roblox scripts by xDTaraZ**
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20the%20server-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/FHVfmeSceA)
-[![Games](https://img.shields.io/badge/Games-5-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
+[![Games](https://img.shields.io/badge/Games-6-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
 [![Keyless](https://img.shields.io/badge/Key-None-2EA043?style=for-the-badge)](#-how-to-use)
 
 </div>
@@ -33,6 +33,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 | **[Open Sea For Animals](#-open-sea-for-animals)** | Loot every wave from your base, auto hatch, sell filters, Kaitun |
 | **[Murder Mystery 2](#-murder-mystery-2)** | Silent aim, auto shoot, kill all, coin farm, role ESP, auto win |
 | **[Driving Empire](#-driving-empire)** | Auto ATM farm, auto drive, playtime rewards, teleport, ESP |
+| **[Sniper Arena](#-sniper-arena)** | Auto farm kills, aimbot, kill aura, no spread, ESP with preview and radar |
 
 ---
 
@@ -124,6 +125,28 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 - Teleport to any place or player
 - ESP for ATMs, players by job and drop-off points
 - Walk speed, jump power, noclip, infinite jump, fullbright, anti AFK, auto rejoin
+
+</details>
+
+---
+
+### 🎯 Sniper Arena
+
+<details>
+<summary><b>Features</b></summary>
+
+- **Auto Farm (Kaitun)**: joins rounds, hunts enemies, aims, fires and respawns on its own
+- **Aimbot** with hold, toggle or always mode, head/body/arm/leg, smoothness and prediction
+- Target priority: crosshair, mouse, distance or lowest health, with FOV circle and max distance
+- **Trigger bot** and **Kill aura**
+- **No spread** and **No recoil**
+- Works in every mode with team check (FFA, TDM, Duel, Boss)
+- **ESP**: box, name, health, distance, tracers, head dot, chams, off-screen arrows, live preview beside the menu
+- **Radar** minimap
+- Infinite dash, walk speed, high jump, fly, noclip, infinite jump
+- Auto respawn, anti AFK
+- Auto open owned cases, auto sell by rarity with a price limit, auto claim quests
+- Auto capture flag
 
 </details>
 
