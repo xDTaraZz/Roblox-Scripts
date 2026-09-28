@@ -1,4 +1,4 @@
--- Mario Hub UI · standalone build 2026-09-27
+-- Mario Hub UI · standalone build 2026-09-29
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
@@ -4208,6 +4208,605 @@ function Intro.Finale(scene, track)
     end
 end
 
+-- ESP กลางของ UI วาดด้วย GUI ล้วน (ไม่พึ่ง Drawing) สคริปต์ส่งแค่ Provider ที่คืนรายการเป้า
+local Visuals = {
+    Settings = {
+        Enabled = false,
+        Preview = false,
+        Box = true,
+        BoxStyle = "Full",
+        BoxFill = false,
+        Name = true,
+        Health = true,
+        HealthText = false,
+        Distance = true,
+        Tracer = false,
+        TracerOrigin = "Bottom",
+        HeadDot = false,
+        Chams = false,
+        Arrows = false,
+        TeamCheck = true,
+        MaxDistance = 2000,
+        TextSize = 13,
+        EnemyColor = Color3.fromRGB(232, 88, 76),
+        FriendColor = Color3.fromRGB(96, 196, 120),
+    },
+    Entries = {},
+    Targets = {},
+    Provider = nil,
+    LastScan = 0,
+    ScanInterval = 0.2,
+    Preview = {},
+}
+
+function Visuals.DefaultProvider()
+    local targets = {}
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then
+            continue
+        end
+        local char = player.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            targets[#targets + 1] = {
+                Model = char,
+                Name = player.DisplayName,
+                Health = hum.Health,
+                MaxHealth = hum.MaxHealth,
+                Friendly = player.Team ~= nil and player.Team == LocalPlayer.Team,
+            }
+        end
+    end
+    return targets
+end
+
+function Visuals.EnsureGui()
+    if Visuals.Gui and Visuals.Gui.Parent then
+        return Visuals.Gui
+    end
+    Visuals.Gui = Draw.New("ScreenGui", { Name = "MarioVisuals", IgnoreGuiInset = true, ResetOnSpawn = false, DisplayOrder = 5, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, Parent = Util.GuiParent() })
+    return Visuals.Gui
+end
+
+function Visuals.Line(parent, color)
+    return Draw.New("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = color, Visible = false, Parent = parent })
+end
+
+function Visuals.Label(parent, alignY)
+    local label = Draw.New("TextLabel", {
+        BackgroundTransparency = 1,
+        AnchorPoint = Vector2.new(0.5, alignY),
+        Size = UDim2.fromOffset(200, 16),
+        Font = Enum.Font.GothamBold,
+        TextColor3 = Color3.new(1, 1, 1),
+        TextStrokeTransparency = 0.35,
+        Visible = false,
+        Parent = parent,
+    })
+    return label
+end
+
+--@return table ชุด GUI ของเป้าหนึ่งตัว สร้างครั้งเดียวแล้วใช้ซ้ำ
+function Visuals.BuildEntry(parent)
+    local entry = {}
+    entry.Box = Draw.New("Frame", { BackgroundTransparency = 1, Visible = false, Parent = parent })
+    entry.BoxStroke = Draw.New("UIStroke", { Thickness = 1.5, Parent = entry.Box })
+    entry.BoxOutline = Draw.New("Frame", { BackgroundTransparency = 1, Position = UDim2.fromOffset(-1, -1), Size = UDim2.new(1, 2, 1, 2), Parent = entry.Box })
+    Draw.New("UIStroke", { Thickness = 1, Color = Color3.new(0, 0, 0), Transparency = 0.3, Parent = entry.BoxOutline })
+    entry.Corners = {}
+    for index = 1, 8 do
+        entry.Corners[index] = Draw.New("Frame", { BorderSizePixel = 0, Visible = false, Parent = parent })
+    end
+    entry.HealthBack = Draw.New("Frame", { BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0.35, Visible = false, Parent = parent })
+    entry.HealthFill = Draw.New("Frame", { AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Parent = entry.HealthBack })
+    entry.HealthText = Visuals.Label(parent, 0.5)
+    entry.Name = Visuals.Label(parent, 1)
+    entry.Distance = Visuals.Label(parent, 0)
+    entry.Tracer = Visuals.Line(parent, Color3.new(1, 1, 1))
+    entry.Dot = Draw.New("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(6, 6), Visible = false, Parent = parent })
+    Draw.Corner(entry.Dot, 3)
+    entry.Arrow = Visuals.Label(parent, 0.5)
+    entry.Arrow.Text = "▲"
+    entry.Arrow.Size = UDim2.fromOffset(20, 20)
+    return entry
+end
+
+function Visuals.HideEntry(entry)
+    entry.Box.Visible = false
+    for _, corner in ipairs(entry.Corners) do
+        corner.Visible = false
+    end
+    entry.HealthBack.Visible, entry.HealthText.Visible = false, false
+    entry.Name.Visible, entry.Distance.Visible = false, false
+    entry.Tracer.Visible, entry.Dot.Visible, entry.Arrow.Visible = false, false, false
+    if entry.Highlight then
+        entry.Highlight.Enabled = false
+    end
+end
+
+function Visuals.DestroyEntry(entry)
+    for _, key in ipairs({ "Box", "HealthBack", "HealthText", "Name", "Distance", "Tracer", "Dot", "Arrow", "Highlight" }) do
+        if entry[key] then
+            entry[key]:Destroy()
+        end
+    end
+    for _, corner in ipairs(entry.Corners) do
+        corner:Destroy()
+    end
+end
+
+function Visuals.SetLine(line, from, to, thickness)
+    local delta = to - from
+    line.Position = UDim2.fromOffset((from.X + to.X) / 2, (from.Y + to.Y) / 2)
+    line.Size = UDim2.fromOffset(delta.Magnitude, thickness)
+    line.Rotation = math.deg(math.atan2(delta.Y, delta.X))
+    line.Visible = true
+end
+
+-- วางกล่อง/แถบ/ป้ายจากกรอบ 2D (x,y มุมซ้ายบน, w,h) ใช้ร่วมกันทั้ง ESP จริงและกรอบ preview
+function Visuals.Layout(entry, x, y, w, h, info, color, origin)
+    local settings = Visuals.Settings
+    local full = settings.Box and settings.BoxStyle ~= "Corner"
+    entry.Box.Visible = full
+    if full then
+        entry.Box.Position, entry.Box.Size = UDim2.fromOffset(x, y), UDim2.fromOffset(w, h)
+        entry.BoxStroke.Color = color
+        entry.Box.BackgroundTransparency = settings.BoxFill and 0.82 or 1
+        entry.Box.BackgroundColor3 = color
+    end
+
+    local corner = settings.Box and settings.BoxStyle == "Corner"
+    local cw, ch = math.max(w / 4, 3), math.max(h / 5, 3)
+    local spots = {
+        { x, y, cw, 2 }, { x, y, 2, ch }, { x + w - cw, y, cw, 2 }, { x + w - 2, y, 2, ch },
+        { x, y + h - 2, cw, 2 }, { x, y + h - ch, 2, ch }, { x + w - cw, y + h - 2, cw, 2 }, { x + w - 2, y + h - ch, 2, ch },
+    }
+    for index, piece in ipairs(entry.Corners) do
+        piece.Visible = corner
+        if corner then
+            local spot = spots[index]
+            piece.Position, piece.Size, piece.BackgroundColor3 = UDim2.fromOffset(spot[1], spot[2]), UDim2.fromOffset(spot[3], spot[4]), color
+        end
+    end
+
+    local ratio = math.clamp((info.Health or 0) / math.max(info.MaxHealth or 100, 1), 0, 1)
+    entry.HealthBack.Visible = settings.Health
+    if settings.Health then
+        entry.HealthBack.Position, entry.HealthBack.Size = UDim2.fromOffset(x - 6, y), UDim2.fromOffset(3, h)
+        entry.HealthFill.Size = UDim2.fromScale(1, ratio)
+        entry.HealthFill.BackgroundColor3 = Color3.fromRGB(232, 88, 76):Lerp(Color3.fromRGB(96, 214, 110), ratio)
+    end
+    entry.HealthText.Visible = settings.HealthText
+    if settings.HealthText then
+        entry.HealthText.Text = tostring(math.floor(info.Health or 0))
+        entry.HealthText.TextSize = settings.TextSize - 2
+        entry.HealthText.Position = UDim2.fromOffset(x - 20, y + h * (1 - ratio))
+    end
+
+    entry.Name.Visible = settings.Name
+    if settings.Name then
+        entry.Name.Text, entry.Name.TextSize, entry.Name.TextColor3 = info.Name or "", settings.TextSize, color
+        entry.Name.Position = UDim2.fromOffset(x + w / 2, y - 2)
+    end
+    entry.Distance.Visible = settings.Distance and info.Distance ~= nil
+    if entry.Distance.Visible then
+        entry.Distance.Text = math.floor(info.Distance) .. "m"
+        entry.Distance.TextSize = settings.TextSize - 1
+        entry.Distance.Position = UDim2.fromOffset(x + w / 2, y + h + 2)
+    end
+
+    entry.Dot.Visible = settings.HeadDot
+    if settings.HeadDot then
+        entry.Dot.Position, entry.Dot.BackgroundColor3 = UDim2.fromOffset(x + w / 2, y + h * 0.1), color
+    end
+
+    if settings.Tracer and origin then
+        entry.Tracer.BackgroundColor3 = color
+        Visuals.SetLine(entry.Tracer, origin, Vector2.new(x + w / 2, y + h), 1.5)
+    else
+        entry.Tracer.Visible = false
+    end
+end
+
+function Visuals.TracerOrigin(viewport)
+    local mode = Visuals.Settings.TracerOrigin
+    if mode == "Center" then
+        return viewport / 2
+    end
+    if mode == "Mouse" then
+        return UserInputService:GetMouseLocation()
+    end
+    return Vector2.new(viewport.X / 2, viewport.Y)
+end
+
+function Visuals.Chams(entry, model, color, on)
+    if not on then
+        if entry.Highlight then
+            entry.Highlight.Enabled = false
+        end
+        return
+    end
+    if not entry.Highlight then
+        entry.Highlight = Draw.New("Highlight", { DepthMode = Enum.HighlightDepthMode.AlwaysOnTop, FillTransparency = 0.55, OutlineTransparency = 0, Parent = Visuals.EnsureGui() })
+    end
+    entry.Highlight.Adornee = model
+    entry.Highlight.FillColor, entry.Highlight.OutlineColor = color, color
+    entry.Highlight.Enabled = true
+end
+
+function Visuals.Arrow(entry, screen, viewport, color)
+    local center = viewport / 2
+    local dir = Vector2.new(screen.X, screen.Y) - center
+    if screen.Z < 0 then
+        dir = -dir
+    end
+    if dir.Magnitude < 1 then
+        return
+    end
+    local unit = dir.Unit
+    local radius = math.min(viewport.X, viewport.Y) / 2 - 40
+    local pos = center + unit * radius
+    entry.Arrow.Position = UDim2.fromOffset(pos.X, pos.Y)
+    entry.Arrow.Rotation = math.deg(math.atan2(unit.Y, unit.X)) + 90
+    entry.Arrow.TextColor3 = color
+    entry.Arrow.TextSize = 18
+    entry.Arrow.Visible = true
+end
+
+function Visuals.Scan()
+    local now = os.clock()
+    if now - Visuals.LastScan < Visuals.ScanInterval then
+        return
+    end
+    Visuals.LastScan = now
+    local ok, list = pcall(Visuals.Provider or Visuals.DefaultProvider)
+    Visuals.Targets = ok and type(list) == "table" and list or {}
+end
+
+function Visuals.Render()
+    local settings = Visuals.Settings
+    if not settings.Enabled then
+        return
+    end
+    Visuals.Scan()
+    local cam = Workspace.CurrentCamera
+    if not cam then
+        return
+    end
+    local gui = Visuals.EnsureGui()
+    local viewport = cam.ViewportSize
+    local origin = Visuals.TracerOrigin(viewport)
+    local camPos = cam.CFrame.Position
+    local seen = {}
+
+    for _, info in ipairs(Visuals.Targets) do
+        local model = info.Model
+        if typeof(model) ~= "Instance" or not model.Parent then
+            continue
+        end
+        if settings.TeamCheck and info.Friendly then
+            continue
+        end
+        local root = info.Root or model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+        if not root then
+            continue
+        end
+        local distance = (root.Position - camPos).Magnitude
+        if distance > settings.MaxDistance then
+            continue
+        end
+
+        seen[model] = true
+        local entry = Visuals.Entries[model]
+        if not entry then
+            entry = Visuals.BuildEntry(gui)
+            Visuals.Entries[model] = entry
+        end
+        local color = info.Color or (info.Friendly and settings.FriendColor or settings.EnemyColor)
+        Visuals.Chams(entry, model, color, settings.Chams)
+
+        local top, onTop = cam:WorldToViewportPoint(root.Position + Vector3.new(0, 3, 0))
+        local bottom, onBottom = cam:WorldToViewportPoint(root.Position - Vector3.new(0, 3.5, 0))
+        if not (onTop and onBottom) then
+            Visuals.HideEntry(entry)
+            if settings.Chams and entry.Highlight then
+                entry.Highlight.Enabled = true
+            end
+            if settings.Arrows then
+                Visuals.Arrow(entry, cam:WorldToViewportPoint(root.Position), viewport, color)
+            end
+            continue
+        end
+        entry.Arrow.Visible = false
+        local h = math.max(bottom.Y - top.Y, 4)
+        local w = h * 0.55
+        info.Distance = distance
+        Visuals.Layout(entry, top.X - w / 2, top.Y, w, h, info, color, origin)
+    end
+
+    for model, entry in pairs(Visuals.Entries) do
+        if not seen[model] then
+            if model.Parent then
+                Visuals.HideEntry(entry)
+            else
+                Visuals.DestroyEntry(entry)
+                Visuals.Entries[model] = nil
+            end
+        end
+    end
+end
+
+function Visuals.ClearAll()
+    for model, entry in pairs(Visuals.Entries) do
+        Visuals.DestroyEntry(entry)
+        Visuals.Entries[model] = nil
+    end
+end
+
+function Visuals:SetProvider(provider)
+    self.Provider = provider
+    self.LastScan = 0
+end
+
+function Visuals:Set(key, value)
+    self.Settings[key] = value
+    if key == "Enabled" and not value then
+        Visuals.ClearAll()
+    elseif key == "Preview" then
+        Visuals.PreviewSetVisible(value)
+    end
+    Visuals.PreviewRender()
+end
+
+function Visuals:Get(key)
+    return self.Settings[key]
+end
+
+function Visuals:SetEnabled(on)
+    self:Set("Enabled", on == true)
+end
+
+function Visuals:SetPreview(on)
+    self:Set("Preview", on == true)
+end
+
+-- กรอบ preview ด้านขวาของหน้าต่าง: โคลนตัวละครเราใส่ ViewportFrame แล้ววาด ESP ทับด้วยค่าเดียวกัน
+function Visuals.PreviewBuild()
+    local window = State.Window
+    if not window or Visuals.Preview.Frame then
+        return
+    end
+    local panel = Draw.Box("Frame", { Name = "EspPreview", Position = UDim2.new(1, 6, 0, 0), Size = UDim2.new(0, 230, 1, -Config.Window.Shadow), BackgroundTransparency = 0, Visible = false, ClipsDescendants = true, Parent = window.Root }, "Backdrop", "Outline", Config.Window.Radius, Config.Window.Stroke)
+    local title = Draw.Text({ Position = UDim2.fromOffset(12, 8), Size = UDim2.new(1, -24, 0, 22) }, "Display", Util.TextSize("Group"), "Text", { EN = "ESP Preview", TH = "ตัวอย่าง ESP" })
+    title.Parent = panel
+    local view = Draw.New("ViewportFrame", { Position = UDim2.fromOffset(10, 38), Size = UDim2.new(1, -20, 1, -48), BackgroundColor3 = Color3.fromRGB(18, 18, 24), BackgroundTransparency = 0.15, Ambient = Color3.fromRGB(180, 180, 190), LightColor = Color3.new(1, 1, 1), Parent = panel })
+    Draw.Corner(view, 8)
+    local cam = Draw.New("Camera", { FieldOfView = 40, Parent = view })
+    view.CurrentCamera = cam
+    local overlay = Draw.New("Frame", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 3, Parent = view })
+    Visuals.Preview = { Frame = panel, View = view, Camera = cam, Overlay = overlay, Entry = Visuals.BuildEntry(overlay), Angle = 0 }
+    Util.Connect(view:GetPropertyChangedSignal("AbsoluteSize"), Visuals.PreviewRender)
+    Util.Connect(window.Root:GetPropertyChangedSignal("Size"), Visuals.PreviewRender)
+end
+
+function Visuals.PreviewModel()
+    local preview = Visuals.Preview
+    if preview.Model and preview.Model.Parent then
+        return preview.Model
+    end
+    local char = LocalPlayer.Character
+    if not char then
+        return nil
+    end
+    local archivable = char.Archivable
+    char.Archivable = true
+    local ok, clone = pcall(char.Clone, char)
+    char.Archivable = archivable
+    if not ok or not clone then
+        return nil
+    end
+    for _, item in ipairs(clone:GetDescendants()) do
+        if item:IsA("LuaSourceContainer") or item:IsA("Sound") or item:IsA("ForceField") then
+            item:Destroy()
+        elseif item:IsA("BasePart") then
+            item.Anchored = true
+            item:SetAttribute("MarioColor", item.Color)
+        end
+    end
+    clone:PivotTo(CFrame.new())
+    clone.Parent = preview.View
+    local box, size = clone:GetBoundingBox()
+    preview.Model, preview.Size, preview.Center = clone, size, box.Position
+    return clone
+end
+
+function Visuals.PreviewChams(model, color, on)
+    for _, part in ipairs(model:GetDescendants()) do
+        if part:IsA("BasePart") and part.Transparency < 1 then
+            local base = part:GetAttribute("MarioColor")
+            if base then
+                part.Color = on and color or base
+                part.Material = on and Enum.Material.ForceField or Enum.Material.SmoothPlastic
+            end
+        end
+    end
+end
+
+function Visuals.PreviewWanted()
+    local window = State.Window
+    return Visuals.Settings.Preview and window ~= nil and window.Visible and not window.Minimized
+        and (Visuals.PreviewTab == nil or window.ActiveTab == Visuals.PreviewTab)
+end
+
+-- เลื่อนเข้าแบบเด้งตอนเปิด เลื่อนกลับเข้าหลังหน้าต่างตอนปิด
+function Visuals.PreviewShow(on)
+    local preview = Visuals.Preview
+    if not preview.Frame or preview.Shown == on then
+        return
+    end
+    preview.Shown = on
+    local open, tucked = UDim2.new(1, 6, 0, 0), UDim2.new(1, -236, 0, 0)
+    if on then
+        preview.Frame.Position = tucked
+        preview.Frame.Visible = true
+        preview.Pulse = 0
+        Anim.Tween(preview.Frame, { Position = open }, Config.Tween.Pop, "Back")
+        Anim.Bump(preview.View, 8)
+        Visuals.PreviewRender()
+        return
+    end
+    local slide = Anim.Tween(preview.Frame, { Position = tucked }, Config.Tween.Fast, "In")
+    slide.Completed:Once(function()
+        if not preview.Shown then
+            preview.Frame.Visible = false
+        end
+    end)
+end
+
+function Visuals.PreviewRender()
+    local preview = Visuals.Preview
+    local window = State.Window
+    if not (preview.Frame and window and preview.Shown) then
+        return
+    end
+    preview.Frame.Size = UDim2.fromOffset(230, window.Size.Y)
+    local model = Visuals.PreviewModel()
+    if model then
+        local root = Visuals.PreviewRoot()
+        local center = (root and root.Position or Vector3.zero) - Vector3.new(0, 0.25, 0)
+        local fit = 6.5 / 0.55 / (2 * math.tan(math.rad(preview.Camera.FieldOfView) / 2))
+        preview.Camera.CFrame = CFrame.lookAt(center + Vector3.new(0, 0, fit), center)
+        local settings = Visuals.Settings
+        Visuals.PreviewChams(model, settings.EnemyColor, settings.Enabled and settings.Chams)
+    end
+    Visuals.PreviewDraw()
+end
+
+-- เลือดขึ้นลงเหมือนโดนยิงแล้วฟื้น ระยะแกว่งไปมา ให้เห็นว่าทุกองค์ประกอบขยับตามจริง
+function Visuals.PreviewRoot()
+    local model = Visuals.Preview.Model
+    return model and (model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart)
+end
+
+--@return Vector2 จุดบนจอของ ViewportFrame (กล้องใน viewport ใช้ WorldToViewportPoint ไม่ได้)
+function Visuals.PreviewProject(pos, size)
+    local cam = Visuals.Preview.Camera
+    local rel = cam.CFrame:PointToObjectSpace(pos)
+    local depth = math.max(-rel.Z, 0.01)
+    local half = math.tan(math.rad(cam.FieldOfView) / 2)
+    return Vector2.new((0.5 + rel.X / depth / (2 * half * size.X / size.Y)) * size.X, (0.5 - rel.Y / depth / (2 * half)) * size.Y)
+end
+
+function Visuals.PreviewDraw()
+    local preview = Visuals.Preview
+    local size = preview.View.AbsoluteSize
+    local root = Visuals.PreviewRoot()
+    if size.X <= 0 or size.Y <= 0 or not root or not Visuals.Settings.Enabled then
+        Visuals.HideEntry(preview.Entry)
+        return
+    end
+    local t = preview.Pulse or 0
+    local top = Visuals.PreviewProject(root.Position + Vector3.new(0, 3, 0), size)
+    local bottom = Visuals.PreviewProject(root.Position - Vector3.new(0, 3.5, 0), size)
+    local h = math.max(bottom.Y - top.Y, 4)
+    local w = h * 0.55
+    local x, y = top.X - w / 2, top.Y
+    local info = {
+        Name = LocalPlayer.DisplayName,
+        Health = 55 + 45 * math.cos(t * 0.9),
+        MaxHealth = 100,
+        Distance = 24 + 10 * math.sin(t * 0.5),
+    }
+    Visuals.Layout(preview.Entry, x, y, w, h, info, Visuals.Settings.EnemyColor, Vector2.new(size.X / 2, size.Y))
+end
+
+function Visuals.PreviewSetVisible()
+    Visuals.PreviewBuild()
+    Visuals.PreviewShow(Visuals.PreviewWanted())
+end
+
+function Visuals.PreviewStep(deltaTime)
+    local preview = Visuals.Preview
+    if not preview.Frame then
+        return
+    end
+    local wanted = Visuals.PreviewWanted()
+    if wanted ~= (preview.Shown == true) then
+        Visuals.PreviewShow(wanted)
+    end
+    if not preview.Shown then
+        return
+    end
+    preview.Pulse = (preview.Pulse or 0) + deltaTime
+    Visuals.PreviewDraw()
+    if preview.Model then
+        preview.Angle = (preview.Angle + deltaTime * 0.6) % (math.pi * 2)
+        preview.Model:PivotTo(CFrame.Angles(0, preview.Angle, 0))
+    end
+end
+
+function Visuals.Start()
+    if Visuals.Started then
+        return
+    end
+    Visuals.Started = true
+    Util.Connect(RunService.RenderStepped, function(deltaTime)
+        Visuals.Render()
+        Visuals.PreviewStep(deltaTime)
+    end)
+    table.insert(State.UnloadHooks, function()
+        Visuals.ClearAll()
+        if Visuals.Gui then
+            Visuals.Gui:Destroy()
+            Visuals.Gui = nil
+        end
+    end)
+end
+
+-- สร้างแท็บ Visuals ครบชุดในบรรทัดเดียว คืนค่า tab ให้สคริปต์เติมกลุ่มเองได้
+function Window:AddVisualsTab(options)
+    options = options or {}
+    Visuals.Start()
+    if options.Provider then
+        Visuals:SetProvider(options.Provider)
+    end
+    local T = function(en, th) return { EN = en, TH = th } end
+    local function Bind(key)
+        return function(value)
+            Visuals:Set(key, value)
+        end
+    end
+    local tab = self:AddTab(options.Name or T("Visuals", "การมองเห็น"), options.Icon or "eye", options.Description or T("Player ESP", "ESP ผู้เล่น"))
+    Visuals.PreviewTab = tab
+    Visuals:SetPreview(options.Preview == true)
+
+    local main = tab:AddLeftGroupbox(T("ESP", "ESP"), "eye")
+    main:AddToggle("MarioEsp", { Text = T("Enable ESP", "เปิด ESP"), Callback = Bind("Enabled") })
+    main:AddToggle("MarioEspTeam", { Text = T("Team check", "เช็คทีม"), Default = true, Callback = Bind("TeamCheck") })
+    main:AddSlider("MarioEspRange", { Text = T("Max distance", "ระยะสูงสุด"), Min = 50, Max = 5000, Default = 2000, Suffix = "m", Callback = Bind("MaxDistance") })
+    main:AddSlider("MarioEspText", { Text = T("Text size", "ขนาดตัวอักษร"), Min = 9, Max = 20, Default = 13, Callback = Bind("TextSize") })
+
+    local look = tab:AddRightGroupbox(T("Elements", "องค์ประกอบ"), "star")
+    look:AddToggle("MarioEspBox", { Text = T("Box", "กล่อง"), Default = true, Callback = Bind("Box") })
+    look:AddDropdown("MarioEspBoxStyle", { Text = T("Box style", "แบบกล่อง"), Values = { "Full", "Corner" }, Default = "Full", Callback = Bind("BoxStyle") })
+    look:AddToggle("MarioEspFill", { Text = T("Box fill", "ถมสีกล่อง"), Callback = Bind("BoxFill") })
+    look:AddToggle("MarioEspName", { Text = T("Name", "ชื่อ"), Default = true, Callback = Bind("Name") })
+    look:AddToggle("MarioEspHealth", { Text = T("Health bar", "แถบเลือด"), Default = true, Callback = Bind("Health") })
+    look:AddToggle("MarioEspHealthText", { Text = T("Health number", "ตัวเลขเลือด"), Callback = Bind("HealthText") })
+    look:AddToggle("MarioEspDistance", { Text = T("Distance", "ระยะ"), Default = true, Callback = Bind("Distance") })
+    look:AddToggle("MarioEspDot", { Text = T("Head dot", "จุดหัว"), Callback = Bind("HeadDot") })
+    look:AddToggle("MarioEspTracer", { Text = T("Tracers", "เส้นนำสายตา"), Callback = Bind("Tracer") })
+    look:AddDropdown("MarioEspTracerFrom", { Text = T("Tracer from", "เส้นเริ่มจาก"), Values = { "Bottom", "Center", "Mouse" }, Default = "Bottom", Callback = Bind("TracerOrigin") })
+    look:AddToggle("MarioEspChams", { Text = T("Chams", "เรืองแสงทะลุกำแพง"), Callback = Bind("Chams") })
+    look:AddToggle("MarioEspArrows", { Text = T("Off-screen arrows", "ลูกศรนอกจอ"), Callback = Bind("Arrows") })
+
+    local colors = tab:AddLeftGroupbox(T("Colors", "สี"), "flower")
+    colors:AddLabel(T("Enemy", "ศัตรู")):AddColorPicker("MarioEspEnemyColor", { Default = Visuals.Settings.EnemyColor, Callback = Bind("EnemyColor") })
+    colors:AddLabel(T("Friendly", "พวกเดียวกัน")):AddColorPicker("MarioEspFriendColor", { Default = Visuals.Settings.FriendColor, Callback = Bind("FriendColor") })
+    return tab
+end
+
+Library.Visuals = Visuals
 
 --@return {EN,TH} ข้อความจาก Lang.Strings ที่ format แล้วทั้งสองภาษา
 function Lang.Format(key, ...)
@@ -4650,3 +5249,4 @@ end
 Library.Themes = Themes.Order
 
 return Library
+
