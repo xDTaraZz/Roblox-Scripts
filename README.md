@@ -7,7 +7,7 @@
 **Roblox scripts by xDTaraZ**
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20the%20server-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/FHVfmeSceA)
-[![Games](https://img.shields.io/badge/Games-4-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
+[![Games](https://img.shields.io/badge/Games-5-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
 [![Keyless](https://img.shields.io/badge/Key-None-2EA043?style=for-the-badge)](#-how-to-use)
 
 </div>
@@ -32,6 +32,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 | **[Loot To Forge](#%EF%B8%8F-loot-to-forge)** | Max gear, infinite ore, instant kill, tower farm, Kaitun |
 | **[Open Sea For Animals](#-open-sea-for-animals)** | Loot every wave from your base, auto hatch, sell filters, Kaitun |
 | **[Murder Mystery 2](#-murder-mystery-2)** | Silent aim, auto shoot, kill all, coin farm, role ESP, auto win |
+| **[Driving Empire](#-driving-empire)** | Auto ATM farm, auto drive, playtime rewards, teleport, ESP |
 
 ---
 
@@ -104,6 +105,25 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 - Teleport to lobby, map, murderer, sheriff or any player
 - Troll: fling, fling everyone, stick to player, spectate
 - Walk speed, jump power, fly, noclip, anti fling, skin copier, server hop
+
+</details>
+
+---
+
+### 🚗 Driving Empire
+
+<details>
+<summary><b>Features</b></summary>
+
+- **Auto ATM Farm**: robs every ATM with the full crime bonus, then cashes out
+- Avoid police, cash out after a set number of robberies, server hop when empty
+- Scan the whole map for ATMs once and remember them
+- **Auto Drive** for passive cash
+- Redeem all codes, auto playtime rewards, auto claim pending rewards
+- Spawn any owned car, car speed boost
+- Teleport to any place or player
+- ESP for ATMs, players by job and drop-off points
+- Walk speed, jump power, noclip, infinite jump, fullbright, anti AFK, auto rejoin
 
 </details>
 
