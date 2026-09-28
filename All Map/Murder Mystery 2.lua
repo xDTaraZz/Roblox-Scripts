@@ -144,12 +144,8 @@ local State = xDTaraZ.State
 for _, name in ipairs({ "Util", "Round", "Sheriff", "Murderer", "Troll", "Survive", "Kaitun", "Farm", "Aim", "Skin", "Teleport", "Movement", "Esp", "Visual", "Session", "Scheduler" }) do
     xDTaraZ[name] = {}
 end
-local Util, Round, Sheriff, Murderer = xDTaraZ.Util, xDTaraZ.Round, xDTaraZ.Sheriff, xDTaraZ.Murderer
-local Troll, Survive, Kaitun, Farm = xDTaraZ.Troll, xDTaraZ.Survive, xDTaraZ.Kaitun, xDTaraZ.Farm
-local Aim, Skin, Teleport, Movement = xDTaraZ.Aim, xDTaraZ.Skin, xDTaraZ.Teleport, xDTaraZ.Movement
-local Esp, Visual, Session, Scheduler = xDTaraZ.Esp, xDTaraZ.Visual, xDTaraZ.Session, xDTaraZ.Scheduler
 
-function Util.Try(fn, ...)
+function xDTaraZ.Util.Try(fn, ...)
     local ok, err = pcall(fn, ...)
     if not ok then
         warn("[MM2]", err)
@@ -157,29 +153,29 @@ function Util.Try(fn, ...)
     return ok, err
 end
 
-function Util.Connect(signal, fn)
+function xDTaraZ.Util.Connect(signal, fn)
     local conn = signal:Connect(fn)
     table.insert(State.Conns, conn)
     return conn
 end
 
-function Util.Root(player)
+function xDTaraZ.Util.Root(player)
     local character = (player or LocalPlayer).Character
     return character and character:FindFirstChild("HumanoidRootPart")
 end
 
-function Util.Humanoid(player)
+function xDTaraZ.Util.Humanoid(player)
     local character = (player or LocalPlayer).Character
     return character and character:FindFirstChildOfClass("Humanoid")
 end
 
-function Util.Tool(player, name)
+function xDTaraZ.Util.Tool(player, name)
     local character = player.Character
     local backpack = player:FindFirstChild("Backpack")
     return (character and character:FindFirstChild(name)) or (backpack and backpack:FindFirstChild(name))
 end
 
-function Util.PlayerNames()
+function xDTaraZ.Util.PlayerNames()
     local names = {}
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer then
@@ -190,7 +186,7 @@ function Util.PlayerNames()
     return names
 end
 
-function Round.RefreshRoles()
+function xDTaraZ.Round.RefreshRoles()
     if os.clock() - State.LastRoleFetch < Config.RoleRefresh then
         return
     end
@@ -202,29 +198,29 @@ function Round.RefreshRoles()
 end
 
 ---@return string?  role, falls back to the tools in their backpack
-function Round.RoleOf(player)
+function xDTaraZ.Round.RoleOf(player)
     local entry = State.Roles[player.Name]
     if entry and not entry.Dead and entry.Role then
         return entry.Role
     end
-    if Util.Tool(player, "Knife") then
+    if xDTaraZ.Util.Tool(player, "Knife") then
         return "Murderer"
     end
-    if Util.Tool(player, "Gun") then
+    if xDTaraZ.Util.Tool(player, "Gun") then
         return "Sheriff"
     end
     return entry and entry.Dead and "Dead" or "Innocent"
 end
 
-function Round.FindByRole(role)
+function xDTaraZ.Round.FindByRole(role)
     for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and Round.RoleOf(player) == role and Util.Root(player) then
+        if player ~= LocalPlayer and xDTaraZ.Round.RoleOf(player) == role and xDTaraZ.Util.Root(player) then
             return player
         end
     end
 end
 
-function Round.Map()
+function xDTaraZ.Round.Map()
     for _, child in ipairs(workspace:GetChildren()) do
         if child.Name ~= Config.LobbyName and child:IsA("Model") and child:FindFirstChild("CoinContainer") then
             return child
@@ -232,19 +228,19 @@ function Round.Map()
     end
 end
 
-function Round.IAmPlaying()
+function xDTaraZ.Round.IAmPlaying()
     local entry = State.Roles[LocalPlayer.Name]
-    local humanoid = Util.Humanoid()
-    return Round.Map() ~= nil and humanoid ~= nil and humanoid.Health > 0 and not (entry and entry.Dead)
+    local humanoid = xDTaraZ.Util.Humanoid()
+    return xDTaraZ.Round.Map() ~= nil and humanoid ~= nil and humanoid.Health > 0 and not (entry and entry.Dead)
 end
 
-function Round.GunDrop()
-    local map = Round.Map()
+function xDTaraZ.Round.GunDrop()
+    local map = xDTaraZ.Round.Map()
     local drop = (map and map:FindFirstChild("GunDrop", true)) or workspace:FindFirstChild("GunDrop")
     return drop
 end
 
-function Movement.SetNoclip(enabled)
+function xDTaraZ.Movement.SetNoclip(enabled)
     if State.NoclipConn then
         State.NoclipConn:Disconnect()
         State.NoclipConn = nil
@@ -252,7 +248,7 @@ function Movement.SetNoclip(enabled)
     if not enabled then
         return
     end
-    State.NoclipConn = Util.Connect(RunService.Stepped, function()
+    State.NoclipConn = xDTaraZ.Util.Connect(RunService.Stepped, function()
         local character = LocalPlayer.Character
         if not character then
             return
@@ -265,12 +261,12 @@ function Movement.SetNoclip(enabled)
     end)
 end
 
-function Movement.RefreshNoclip()
-    Movement.SetNoclip(State.Opt.Noclip or State.FarmBusy)
+function xDTaraZ.Movement.RefreshNoclip()
+    xDTaraZ.Movement.SetNoclip(State.Opt.Noclip or State.FarmBusy)
 end
 
-function Movement.Apply()
-    local humanoid = Util.Humanoid()
+function xDTaraZ.Movement.Apply()
+    local humanoid = xDTaraZ.Util.Humanoid()
     if not humanoid then
         return
     end
@@ -284,30 +280,30 @@ function Movement.Apply()
     end
 end
 
-function Movement.RestoreSpeed()
-    local humanoid = Util.Humanoid()
+function xDTaraZ.Movement.RestoreSpeed()
+    local humanoid = xDTaraZ.Util.Humanoid()
     if humanoid then
         humanoid.WalkSpeed = Config.SpeedDefault
     end
 end
 
-function Movement.RestoreJump()
-    local humanoid = Util.Humanoid()
+function xDTaraZ.Movement.RestoreJump()
+    local humanoid = xDTaraZ.Util.Humanoid()
     if humanoid then
         humanoid.JumpPower = Config.JumpDefault
     end
 end
 
-function Movement.InitInfJump()
-    Util.Connect(UserInputService.JumpRequest, function()
-        local humanoid = Util.Humanoid()
+function xDTaraZ.Movement.InitInfJump()
+    xDTaraZ.Util.Connect(UserInputService.JumpRequest, function()
+        local humanoid = xDTaraZ.Util.Humanoid()
         if State.Opt.InfJump and humanoid then
             humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
         end
     end)
 end
 
-function Movement.SetFly(enabled)
+function xDTaraZ.Movement.SetFly(enabled)
     if State.FlyConn then
         State.FlyConn:Disconnect()
         State.FlyConn = nil
@@ -316,7 +312,7 @@ function Movement.SetFly(enabled)
         State.FlyVelocity:Destroy()
         State.FlyVelocity = nil
     end
-    local humanoid = Util.Humanoid()
+    local humanoid = xDTaraZ.Util.Humanoid()
     if humanoid then
         humanoid.PlatformStand = false
     end
@@ -327,8 +323,8 @@ function Movement.SetFly(enabled)
     mover.MaxForce = Vector3.one * 1e9
     mover.Velocity = Vector3.zero
     State.FlyVelocity = mover
-    State.FlyConn = Util.Connect(RunService.RenderStepped, function()
-        local root, hum = Util.Root(), Util.Humanoid()
+    State.FlyConn = xDTaraZ.Util.Connect(RunService.RenderStepped, function()
+        local root, hum = xDTaraZ.Util.Root(), xDTaraZ.Util.Humanoid()
         if not root or not hum then
             return
         end
@@ -339,48 +335,48 @@ function Movement.SetFly(enabled)
     end)
 end
 
-function Util.Busy()
+function xDTaraZ.Util.Busy()
     return State.ActionBusy and os.clock() - State.BusySince < Config.BusyTimeout
 end
 
-function Util.SetBusy(busy)
+function xDTaraZ.Util.SetBusy(busy)
     State.ActionBusy = busy
     State.BusySince = os.clock()
 end
 
 ---@return any  result of action, character moved back after
-function Util.WarpAndReturn(targetCFrame, action)
-    local root = Util.Root()
-    if not root or not targetCFrame or Util.Busy() then
+function xDTaraZ.Util.WarpAndReturn(targetCFrame, action)
+    local root = xDTaraZ.Util.Root()
+    if not root or not targetCFrame or xDTaraZ.Util.Busy() then
         return false
     end
-    Util.SetBusy(true)
+    xDTaraZ.Util.SetBusy(true)
     local home = root.CFrame
-    local ok = Util.Try(function()
+    local ok = xDTaraZ.Util.Try(function()
         root.CFrame = targetCFrame
         root.AssemblyLinearVelocity = Vector3.zero
         action()
     end)
-    local current = Util.Root()
+    local current = xDTaraZ.Util.Root()
     if current then
         current.CFrame = home
     end
-    Util.SetBusy(false)
+    xDTaraZ.Util.SetBusy(false)
     return ok
 end
 
-function Sheriff.Gun()
-    return Util.Tool(LocalPlayer, "Gun")
+function xDTaraZ.Sheriff.Gun()
+    return xDTaraZ.Util.Tool(LocalPlayer, "Gun")
 end
 
-function Sheriff.Equip(tool)
-    local humanoid = Util.Humanoid()
+function xDTaraZ.Sheriff.Equip(tool)
+    local humanoid = xDTaraZ.Util.Humanoid()
     if humanoid and tool.Parent ~= LocalPlayer.Character then
         humanoid:EquipTool(tool)
     end
 end
 
-function Sheriff.ClearStand(target, targetRoot)
+function xDTaraZ.Sheriff.ClearStand(target, targetRoot)
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = { LocalPlayer.Character, target.Character }
@@ -393,41 +389,41 @@ function Sheriff.ClearStand(target, targetRoot)
     return CFrame.lookAt((targetRoot.CFrame * CFrame.new(Config.ShootStands[1])).Position, targetRoot.Position)
 end
 
-function Sheriff.ShootTarget(target)
-    local gun, targetRoot = Sheriff.Gun(), Util.Root(target)
+function xDTaraZ.Sheriff.ShootTarget(target)
+    local gun, targetRoot = xDTaraZ.Sheriff.Gun(), xDTaraZ.Util.Root(target)
     if not gun or not targetRoot or os.clock() - State.LastShoot < Config.ShootCooldown then
         return false
     end
     State.LastShoot = os.clock()
-    Sheriff.Equip(gun)
-    return Util.WarpAndReturn(Sheriff.ClearStand(target, targetRoot), function()
+    xDTaraZ.Sheriff.Equip(gun)
+    return xDTaraZ.Util.WarpAndReturn(xDTaraZ.Sheriff.ClearStand(target, targetRoot), function()
         task.wait(Config.ShootSettle)
-        local root = Util.Root()
+        local root = xDTaraZ.Util.Root()
         local attachment = root and root:FindFirstChild("GunRaycastAttachment")
-        local aimRoot = Util.Root(target) or targetRoot
+        local aimRoot = xDTaraZ.Util.Root(target) or targetRoot
         gun.Shoot:FireServer(attachment and attachment.WorldCFrame or root.CFrame, aimRoot.CFrame)
         task.wait(Config.ShootReturn)
     end)
 end
 
-function Util.IsDead(player)
-    local humanoid = Util.Humanoid(player)
+function xDTaraZ.Util.IsDead(player)
+    local humanoid = xDTaraZ.Util.Humanoid(player)
     return not humanoid or humanoid.Health <= 0
 end
 
-function Sheriff.ShootMurderer()
-    Round.RefreshRoles()
-    local murderer = Round.FindByRole("Murderer")
+function xDTaraZ.Sheriff.ShootMurderer()
+    xDTaraZ.Round.RefreshRoles()
+    local murderer = xDTaraZ.Round.FindByRole("Murderer")
     if not murderer then
         return false, "No murderer found"
     end
     for _ = 1, Config.ShootAttempts do
-        if not Sheriff.Gun() then
+        if not xDTaraZ.Sheriff.Gun() then
             break
         end
-        Sheriff.ShootTarget(murderer)
+        xDTaraZ.Sheriff.ShootTarget(murderer)
         task.wait(Config.ShootConfirm)
-        if Util.IsDead(murderer) then
+        if xDTaraZ.Util.IsDead(murderer) then
             return true, murderer.Name
         end
         task.wait(math.max(0, Config.ShootCooldown - Config.ShootConfirm))
@@ -435,118 +431,118 @@ function Sheriff.ShootMurderer()
     return false, murderer.Name .. " survived"
 end
 
-function Sheriff.AutoShootStep()
-    if not State.Opt.AutoShoot or State.ShootBusy or not Sheriff.Gun() or not Round.IAmPlaying() then
+function xDTaraZ.Sheriff.AutoShootStep()
+    if not State.Opt.AutoShoot or State.ShootBusy or not xDTaraZ.Sheriff.Gun() or not xDTaraZ.Round.IAmPlaying() then
         return
     end
     State.ShootBusy = true
     task.spawn(function()
-        Util.Try(Sheriff.ShootMurderer)
+        xDTaraZ.Util.Try(xDTaraZ.Sheriff.ShootMurderer)
         State.ShootBusy = false
     end)
 end
 
-function Sheriff.GrabGun()
-    local drop = Round.GunDrop()
-    if not drop or Sheriff.Gun() or not Round.IAmPlaying() then
+function xDTaraZ.Sheriff.GrabGun()
+    local drop = xDTaraZ.Round.GunDrop()
+    if not drop or xDTaraZ.Sheriff.Gun() or not xDTaraZ.Round.IAmPlaying() then
         return false
     end
     local part = drop:IsA("BasePart") and drop or drop:FindFirstChildWhichIsA("BasePart", true)
     if not part then
         return false
     end
-    return Util.WarpAndReturn(part.CFrame, function()
-        local root = Util.Root()
+    return xDTaraZ.Util.WarpAndReturn(part.CFrame, function()
+        local root = xDTaraZ.Util.Root()
         firetouchinterest(root, part, 0)
         firetouchinterest(root, part, 1)
         task.wait(Config.GunGrabHold)
     end)
 end
 
-function Sheriff.AutoGrabStep()
-    if State.Opt.AutoGrabGun and Round.RoleOf(LocalPlayer) ~= "Murderer" and Round.GunDrop() then
-        task.spawn(Sheriff.GrabGun)
+function xDTaraZ.Sheriff.AutoGrabStep()
+    if State.Opt.AutoGrabGun and xDTaraZ.Round.RoleOf(LocalPlayer) ~= "Murderer" and xDTaraZ.Round.GunDrop() then
+        task.spawn(xDTaraZ.Sheriff.GrabGun)
     end
 end
 
-function Murderer.Knife()
-    return Util.Tool(LocalPlayer, "Knife")
+function xDTaraZ.Murderer.Knife()
+    return xDTaraZ.Util.Tool(LocalPlayer, "Knife")
 end
 
-function Murderer.Stab(target)
-    local knife, targetRoot = Murderer.Knife(), Util.Root(target)
+function xDTaraZ.Murderer.Stab(target)
+    local knife, targetRoot = xDTaraZ.Murderer.Knife(), xDTaraZ.Util.Root(target)
     if not knife or not targetRoot then
         return false
     end
-    Sheriff.Equip(knife)
+    xDTaraZ.Sheriff.Equip(knife)
     local events = knife:FindFirstChild("Events")
     if not events then
         return false
     end
     local stand = targetRoot.CFrame * CFrame.new(0, 0, Config.StabOffset)
-    return Util.WarpAndReturn(stand, function()
+    return xDTaraZ.Util.WarpAndReturn(stand, function()
         events.KnifeStabbed:FireServer()
         task.wait()
-        local aimRoot = Util.Root(target) or targetRoot
+        local aimRoot = xDTaraZ.Util.Root(target) or targetRoot
         events.HandleTouched:FireServer(aimRoot)
         task.wait(Config.StabCooldown)
     end)
 end
 
-function Murderer.Victims()
+function xDTaraZ.Murderer.Victims()
     local victims = {}
     for _, player in ipairs(Players:GetPlayers()) do
-        local humanoid = Util.Humanoid(player)
+        local humanoid = xDTaraZ.Util.Humanoid(player)
         local entry = State.Roles[player.Name]
         local inRound = entry == nil or not entry.Dead
-        if player ~= LocalPlayer and humanoid and humanoid.Health > 0 and inRound and Util.Root(player) then
+        if player ~= LocalPlayer and humanoid and humanoid.Health > 0 and inRound and xDTaraZ.Util.Root(player) then
             table.insert(victims, player)
         end
     end
     table.sort(victims, function(a, b)
-        return (Config.VictimPriority[Round.RoleOf(a)] or 3) < (Config.VictimPriority[Round.RoleOf(b)] or 3)
+        return (Config.VictimPriority[xDTaraZ.Round.RoleOf(a)] or 3) < (Config.VictimPriority[xDTaraZ.Round.RoleOf(b)] or 3)
     end)
     return victims
 end
 
-function Murderer.KillAll()
-    if not Murderer.Knife() then
+function xDTaraZ.Murderer.KillAll()
+    if not xDTaraZ.Murderer.Knife() then
         return 0
     end
     local kills = 0
-    for _, victim in ipairs(Murderer.Victims()) do
-        if not State.Alive or not Murderer.Knife() then
+    for _, victim in ipairs(xDTaraZ.Murderer.Victims()) do
+        if not State.Alive or not xDTaraZ.Murderer.Knife() then
             break
         end
-        if Murderer.Stab(victim) then
+        if xDTaraZ.Murderer.Stab(victim) then
             kills = kills + 1
         end
     end
     return kills
 end
 
-function Murderer.AutoKillStep()
-    if not State.Opt.AutoKillAll or State.KillBusy or not Murderer.Knife() or not Round.IAmPlaying() then
+function xDTaraZ.Murderer.AutoKillStep()
+    if not State.Opt.AutoKillAll or State.KillBusy or not xDTaraZ.Murderer.Knife() or not xDTaraZ.Round.IAmPlaying() then
         return
     end
     State.KillBusy = true
     task.spawn(function()
-        Util.Try(Murderer.KillAll)
+        xDTaraZ.Util.Try(xDTaraZ.Murderer.KillAll)
         State.KillBusy = false
     end)
 end
 
-function Murderer.KillAuraStep()
-    local knife, root = Murderer.Knife(), Util.Root()
+function xDTaraZ.Murderer.KillAuraStep()
+    local knife, root = xDTaraZ.Murderer.Knife(), xDTaraZ.Util.Root()
     if not State.Opt.KillAura or not knife or not root or os.clock() - State.LastStab < Config.StabCooldown then
         return
     end
     local events = knife:FindFirstChild("Events")
-    for _, victim in ipairs(Murderer.Victims()) do
-        local victimRoot = Util.Root(victim)
+    for _, victim in ipairs(xDTaraZ.Murderer.Victims()) do
+        local victimRoot = xDTaraZ.Util.Root(victim)
         if events and victimRoot and (victimRoot.Position - root.Position).Magnitude <= Config.KillAuraRange then
             State.LastStab = os.clock()
-            Sheriff.Equip(knife)
+            xDTaraZ.Sheriff.Equip(knife)
             events.KnifeStabbed:FireServer()
             events.HandleTouched:FireServer(victimRoot)
             return
@@ -554,10 +550,10 @@ function Murderer.KillAuraStep()
     end
 end
 
-function Murderer.NearestVictimRoot(origin)
+function xDTaraZ.Murderer.NearestVictimRoot(origin)
     local best, bestDistance
-    for _, victim in ipairs(Murderer.Victims()) do
-        local victimRoot = Util.Root(victim)
+    for _, victim in ipairs(xDTaraZ.Murderer.Victims()) do
+        local victimRoot = xDTaraZ.Util.Root(victim)
         local distance = victimRoot and (victimRoot.Position - origin).Magnitude
         if distance and (not bestDistance or distance < bestDistance) then
             best, bestDistance = victimRoot, distance
@@ -566,7 +562,7 @@ function Murderer.NearestVictimRoot(origin)
     return best
 end
 
-function Sheriff.InstallAimHook()
+function xDTaraZ.Sheriff.InstallAimHook()
     local original
     original = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         if not State.Alive or getnamecallmethod() ~= "FireServer" or checkcaller() then
@@ -575,15 +571,15 @@ function Sheriff.InstallAimHook()
         local parent = self.Parent
         local opt = State.Opt
         if opt.SilentAim and self.Name == "Shoot" and parent and parent.Name == "Gun" then
-            local murderer = Round.FindByRole("Murderer")
-            local murdererRoot = murderer and Util.Root(murderer)
+            local murderer = xDTaraZ.Round.FindByRole("Murderer")
+            local murdererRoot = murderer and xDTaraZ.Util.Root(murderer)
             if murdererRoot then
                 local origin = ...
                 return original(self, origin, murdererRoot.CFrame)
             end
         elseif opt.KnifeAim and self.Name == "KnifeThrown" and parent and parent.Name == "Events" then
             local origin = ...
-            local victimRoot = Murderer.NearestVictimRoot(origin.Position)
+            local victimRoot = xDTaraZ.Murderer.NearestVictimRoot(origin.Position)
             if victimRoot then
                 return original(self, origin, victimRoot.Position)
             end
@@ -593,8 +589,8 @@ function Sheriff.InstallAimHook()
     State.Hook = original
 end
 
-function Survive.SafestSpot(threatPosition)
-    local map = Round.Map()
+function xDTaraZ.Survive.SafestSpot(threatPosition)
+    local map = xDTaraZ.Round.Map()
     local best, bestDistance
     for _, coin in ipairs(map and map.CoinContainer:GetChildren() or {}) do
         if coin:IsA("BasePart") then
@@ -607,17 +603,17 @@ function Survive.SafestSpot(threatPosition)
     return best and CFrame.new(best.Position + Vector3.new(0, 3, 0))
 end
 
-function Survive.DodgeStep()
-    local root = Util.Root()
-    local murderer = Round.FindByRole("Murderer")
-    local threat = murderer and Util.Root(murderer)
-    if not State.Opt.AutoDodge or not root or not threat or Murderer.Knife() or Util.Busy() then
+function xDTaraZ.Survive.DodgeStep()
+    local root = xDTaraZ.Util.Root()
+    local murderer = xDTaraZ.Round.FindByRole("Murderer")
+    local threat = murderer and xDTaraZ.Util.Root(murderer)
+    if not State.Opt.AutoDodge or not root or not threat or xDTaraZ.Murderer.Knife() or xDTaraZ.Util.Busy() then
         return
     end
     if os.clock() - State.LastDodge < Config.DodgeCooldown or (threat.Position - root.Position).Magnitude > Config.DodgeRange then
         return
     end
-    local spot = Survive.SafestSpot(threat.Position)
+    local spot = xDTaraZ.Survive.SafestSpot(threat.Position)
     if spot then
         State.LastDodge = os.clock()
         root.CFrame = spot
@@ -625,21 +621,21 @@ function Survive.DodgeStep()
     end
 end
 
-function Kaitun.Step()
-    if not State.Opt.Kaitun or not Round.IAmPlaying() then
+function xDTaraZ.Kaitun.Step()
+    if not State.Opt.Kaitun or not xDTaraZ.Round.IAmPlaying() then
         return
     end
     local opt = State.Opt
-    opt.AutoKillAll = Murderer.Knife() ~= nil
-    opt.AutoShoot = Sheriff.Gun() ~= nil
+    opt.AutoKillAll = xDTaraZ.Murderer.Knife() ~= nil
+    opt.AutoShoot = xDTaraZ.Sheriff.Gun() ~= nil
     opt.AutoGrabGun = true
     opt.AutoDodge = true
     opt.AutoFarm = true
 end
 
-function Farm.NearestCoin(map, origin)
-    local murderer = not Murderer.Knife() and Round.FindByRole("Murderer")
-    local threat = murderer and Util.Root(murderer)
+function xDTaraZ.Farm.NearestCoin(map, origin)
+    local murderer = not xDTaraZ.Murderer.Knife() and xDTaraZ.Round.FindByRole("Murderer")
+    local threat = murderer and xDTaraZ.Util.Root(murderer)
     local best, bestDistance
     for _, coin in ipairs(map.CoinContainer:GetChildren()) do
         local visual = coin:FindFirstChild("CoinVisual")
@@ -656,15 +652,15 @@ function Farm.NearestCoin(map, origin)
     return best
 end
 
-function Farm.BagFull()
+function xDTaraZ.Farm.BagFull()
     return State.Bag.Max > 0 and State.Bag.Current >= State.Bag.Max
 end
 
-function Farm.CanRun()
-    return State.Alive and State.Opt.AutoFarm and Round.IAmPlaying() and not Farm.BagFull()
+function xDTaraZ.Farm.CanRun()
+    return State.Alive and State.Opt.AutoFarm and xDTaraZ.Round.IAmPlaying() and not xDTaraZ.Farm.BagFull()
 end
 
-function Farm.AttachMover(root)
+function xDTaraZ.Farm.AttachMover(root)
     local attachment = Instance.new("Attachment")
     attachment.Parent = root
     local mover = Instance.new("LinearVelocity")
@@ -677,7 +673,7 @@ function Farm.AttachMover(root)
     return mover
 end
 
-function Farm.DetachMover()
+function xDTaraZ.Farm.DetachMover()
     local mover = State.FarmMover
     if mover then
         mover.Velocity:Destroy()
@@ -686,14 +682,14 @@ function Farm.DetachMover()
     end
 end
 
-function Farm.GlideTo(position)
-    local root = Util.Root()
+function xDTaraZ.Farm.GlideTo(position)
+    local root = xDTaraZ.Util.Root()
     local mover = State.FarmMover
     if not root or not mover or mover.Velocity.Parent ~= root then
-        Farm.DetachMover()
-        mover = root and { Velocity = Farm.AttachMover(root) }
+        xDTaraZ.Farm.DetachMover()
+        mover = root and { Velocity = xDTaraZ.Farm.AttachMover(root) }
     end
-    while mover and Farm.CanRun() and root.Parent do
+    while mover and xDTaraZ.Farm.CanRun() and root.Parent do
         local delta = position - root.Position
         if delta.Magnitude <= Config.FarmArrive then
             break
@@ -706,18 +702,18 @@ function Farm.GlideTo(position)
     end
 end
 
-function Farm.Run()
+function xDTaraZ.Farm.Run()
     State.FarmBusy = true
-    local root = Util.Root()
+    local root = xDTaraZ.Util.Root()
     if root then
-        Farm.AttachMover(root)
+        xDTaraZ.Farm.AttachMover(root)
     end
-    Movement.RefreshNoclip()
-    while Farm.CanRun() do
-        local map, root = Round.Map(), Util.Root()
-        local coin = map and root and Farm.NearestCoin(map, root.Position)
-        if coin and not Util.Busy() then
-            Farm.GlideTo(coin.Position)
+    xDTaraZ.Movement.RefreshNoclip()
+    while xDTaraZ.Farm.CanRun() do
+        local map, root = xDTaraZ.Round.Map(), xDTaraZ.Util.Root()
+        local coin = map and root and xDTaraZ.Farm.NearestCoin(map, root.Position)
+        if coin and not xDTaraZ.Util.Busy() then
+            xDTaraZ.Farm.GlideTo(coin.Position)
             task.wait(Config.FarmSettle)
             State.SkippedCoins[coin] = os.clock()
         else
@@ -728,33 +724,33 @@ function Farm.Run()
             task.wait(Config.FarmIdleWait)
         end
     end
-    Farm.DetachMover()
+    xDTaraZ.Farm.DetachMover()
     State.FarmBusy = false
-    Movement.RefreshNoclip()
-    local humanoid = Util.Humanoid()
-    if Farm.BagFull() and State.Opt.ResetWhenFull and humanoid then
+    xDTaraZ.Movement.RefreshNoclip()
+    local humanoid = xDTaraZ.Util.Humanoid()
+    if xDTaraZ.Farm.BagFull() and State.Opt.ResetWhenFull and humanoid then
         humanoid.Health = 0
     end
 end
 
-function Farm.Step()
-    if not State.FarmBusy and Farm.CanRun() then
-        task.spawn(Farm.Run)
+function xDTaraZ.Farm.Step()
+    if not State.FarmBusy and xDTaraZ.Farm.CanRun() then
+        task.spawn(xDTaraZ.Farm.Run)
     end
 end
 
-function Farm.InitBagTracking()
-    Util.Connect(GameplayRemotes.CoinCollected.OnClientEvent, function(_, current, maximum)
+function xDTaraZ.Farm.InitBagTracking()
+    xDTaraZ.Util.Connect(GameplayRemotes.CoinCollected.OnClientEvent, function(_, current, maximum)
         State.Bag.Current = tonumber(current) or 0
         State.Bag.Max = tonumber(maximum) or 0
     end)
-    Util.Connect(GameplayRemotes.CoinsStarted.OnClientEvent, function()
+    xDTaraZ.Util.Connect(GameplayRemotes.CoinsStarted.OnClientEvent, function()
         State.Bag.Current, State.Bag.Max = 0, 0
         table.clear(State.SkippedCoins)
     end)
 end
 
-function Movement.AntiFlingStep()
+function xDTaraZ.Movement.AntiFlingStep()
     if not State.Opt.AntiFling then
         return
     end
@@ -768,26 +764,26 @@ function Movement.AntiFlingStep()
             end
         end
     end
-    local root = Util.Root()
-    if root and not Util.Busy() and not State.Opt.Fly and root.AssemblyLinearVelocity.Magnitude > Config.FlingVelocityCap then
+    local root = xDTaraZ.Util.Root()
+    if root and not xDTaraZ.Util.Busy() and not State.Opt.Fly and root.AssemblyLinearVelocity.Magnitude > Config.FlingVelocityCap then
         root.AssemblyLinearVelocity = Vector3.zero
         root.AssemblyAngularVelocity = Vector3.zero
     end
 end
 
 ---@return Player?  next victim with the knife, otherwise the murderer
-function Aim.Target()
-    if Murderer.Knife() then
-        return Murderer.Victims()[1]
+function xDTaraZ.Aim.Target()
+    if xDTaraZ.Murderer.Knife() then
+        return xDTaraZ.Murderer.Victims()[1]
     end
-    return Round.FindByRole("Murderer")
+    return xDTaraZ.Round.FindByRole("Murderer")
 end
 
-function Aim.Step(dt)
+function xDTaraZ.Aim.Step(dt)
     if not State.Opt.Aimbot then
         return
     end
-    local target = Aim.Target()
+    local target = xDTaraZ.Aim.Target()
     local head = target and target.Character and target.Character:FindFirstChild("Head")
     if not head then
         return
@@ -798,7 +794,7 @@ function Aim.Step(dt)
     camera.CFrame = camera.CFrame:Lerp(goal, math.clamp(alpha, 0, 1))
 end
 
-function Visual.ClearXRay()
+function xDTaraZ.Visual.ClearXRay()
     for part, original in pairs(State.XRayParts) do
         if part.Parent then
             part.Transparency = original
@@ -808,18 +804,18 @@ function Visual.ClearXRay()
     State.XRayMap = nil
 end
 
-function Visual.XRayStep()
+function xDTaraZ.Visual.XRayStep()
     if not State.Opt.XRay then
         if State.XRayMap then
-            Visual.ClearXRay()
+            xDTaraZ.Visual.ClearXRay()
         end
         return
     end
-    local map = Round.Map() or workspace:FindFirstChild(Config.LobbyName)
+    local map = xDTaraZ.Round.Map() or workspace:FindFirstChild(Config.LobbyName)
     if not map or State.XRayMap == map then
         return
     end
-    Visual.ClearXRay()
+    xDTaraZ.Visual.ClearXRay()
     State.XRayMap = map
     local coins = map:FindFirstChild("CoinContainer")
     for _, part in ipairs(map:GetDescendants()) do
@@ -830,14 +826,14 @@ function Visual.XRayStep()
     end
 end
 
-function Skin.MeshOf(tool)
+function xDTaraZ.Skin.MeshOf(tool)
     local handle = tool and tool:FindFirstChild("Handle")
     return handle and handle:FindFirstChildWhichIsA("SpecialMesh")
 end
 
-function Skin.Copy(sourceName, weaponName)
+function xDTaraZ.Skin.Copy(sourceName, weaponName)
     local source = sourceName and Players:FindFirstChild(sourceName)
-    local mesh = source and Skin.MeshOf(Util.Tool(source, weaponName))
+    local mesh = source and xDTaraZ.Skin.MeshOf(xDTaraZ.Util.Tool(source, weaponName))
     if not mesh then
         return false
     end
@@ -845,34 +841,34 @@ function Skin.Copy(sourceName, weaponName)
     return true
 end
 
-function Skin.ApplyStep()
+function xDTaraZ.Skin.ApplyStep()
     for weaponName, look in pairs(State.Skins) do
-        local mesh = Skin.MeshOf(Util.Tool(LocalPlayer, weaponName))
+        local mesh = xDTaraZ.Skin.MeshOf(xDTaraZ.Util.Tool(LocalPlayer, weaponName))
         if mesh and mesh.MeshId ~= look.MeshId then
             mesh.MeshId, mesh.TextureId, mesh.Scale = look.MeshId, look.TextureId, look.Scale
         end
     end
 end
 
-function Troll.Target()
+function xDTaraZ.Troll.Target()
     return State.Opt.TrollTarget and Players:FindFirstChild(State.Opt.TrollTarget)
 end
 
-function Troll.Fling(target)
-    local root, targetRoot = Util.Root(), Util.Root(target)
-    if not root or not targetRoot or Util.Busy() then
+function xDTaraZ.Troll.Fling(target)
+    local root, targetRoot = xDTaraZ.Util.Root(), xDTaraZ.Util.Root(target)
+    if not root or not targetRoot or xDTaraZ.Util.Busy() then
         return false
     end
-    Util.SetBusy(true)
+    xDTaraZ.Util.SetBusy(true)
     local home = root.CFrame
     local spin = Instance.new("BodyAngularVelocity")
     spin.MaxTorque = Vector3.one * math.huge
     spin.AngularVelocity = Vector3.new(0, Config.FlingForce, 0)
     spin.Parent = root
-    Movement.SetNoclip(true)
+    xDTaraZ.Movement.SetNoclip(true)
     local started = os.clock()
     while os.clock() - started < Config.FlingTime do
-        local currentTarget = Util.Root(target)
+        local currentTarget = xDTaraZ.Util.Root(target)
         if not currentTarget or not root.Parent then
             break
         end
@@ -886,28 +882,28 @@ function Troll.Fling(target)
         root.AssemblyLinearVelocity = Vector3.zero
         root.CFrame = home
     end
-    Util.SetBusy(false)
-    Movement.RefreshNoclip()
+    xDTaraZ.Util.SetBusy(false)
+    xDTaraZ.Movement.RefreshNoclip()
     return true
 end
 
-function Troll.Spectate(target)
-    local humanoid = target and Util.Humanoid(target) or Util.Humanoid()
+function xDTaraZ.Troll.Spectate(target)
+    local humanoid = target and xDTaraZ.Util.Humanoid(target) or xDTaraZ.Util.Humanoid()
     if humanoid then
         workspace.CurrentCamera.CameraSubject = humanoid
     end
 end
 
-function Troll.StickStep()
+function xDTaraZ.Troll.StickStep()
     local target = State.StickTarget and Players:FindFirstChild(State.StickTarget)
-    local root, targetRoot = Util.Root(), target and Util.Root(target)
-    if root and targetRoot and not Util.Busy() then
+    local root, targetRoot = xDTaraZ.Util.Root(), target and xDTaraZ.Util.Root(target)
+    if root and targetRoot and not xDTaraZ.Util.Busy() then
         root.CFrame = targetRoot.CFrame * CFrame.new(0, 0, 2)
     end
 end
 
-function Teleport.To(cframe)
-    local root = Util.Root()
+function xDTaraZ.Teleport.To(cframe)
+    local root = xDTaraZ.Util.Root()
     if root and cframe then
         root.CFrame = cframe + Vector3.new(0, 3, 0)
         return true
@@ -915,47 +911,47 @@ function Teleport.To(cframe)
     return false
 end
 
-function Teleport.ToPlayer(name)
+function xDTaraZ.Teleport.ToPlayer(name)
     local player = name and Players:FindFirstChild(name)
-    local root = player and Util.Root(player)
-    return Teleport.To(root and root.CFrame)
+    local root = player and xDTaraZ.Util.Root(player)
+    return xDTaraZ.Teleport.To(root and root.CFrame)
 end
 
-function Teleport.ToLobby()
+function xDTaraZ.Teleport.ToLobby()
     local lobby = workspace:FindFirstChild(Config.LobbyName)
     local spawnPart = lobby and (lobby:FindFirstChild("Spawns", true) or lobby:FindFirstChildWhichIsA("SpawnLocation", true))
     local part = spawnPart and (spawnPart:IsA("BasePart") and spawnPart or spawnPart:FindFirstChildWhichIsA("BasePart"))
     if not part and lobby then
         part = lobby:FindFirstChildWhichIsA("BasePart", true)
     end
-    return Teleport.To(part and part.CFrame)
+    return xDTaraZ.Teleport.To(part and part.CFrame)
 end
 
-function Teleport.ToMap()
-    local map = Round.Map()
+function xDTaraZ.Teleport.ToMap()
+    local map = xDTaraZ.Round.Map()
     local spawns = map and map:FindFirstChild("Spawns")
     local part = spawns and spawns:FindFirstChildWhichIsA("BasePart") or (map and map.CoinContainer:FindFirstChildWhichIsA("BasePart"))
-    return Teleport.To(part and part.CFrame)
+    return xDTaraZ.Teleport.To(part and part.CFrame)
 end
 
-function Esp.Init()
-    Esp.Folder = Instance.new("Folder")
-    Esp.Folder.Name = HttpService:GenerateGUID(false)
-    Esp.Folder.Parent = gethui and gethui() or game:GetService("CoreGui")
+function xDTaraZ.Esp.Init()
+    xDTaraZ.Esp.Folder = Instance.new("Folder")
+    xDTaraZ.Esp.Folder.Name = HttpService:GenerateGUID(false)
+    xDTaraZ.Esp.Folder.Parent = gethui and gethui() or game:GetService("CoreGui")
 end
 
-function Esp.MakeHighlight(adornee, color)
+function xDTaraZ.Esp.MakeHighlight(adornee, color)
     local highlight = Instance.new("Highlight")
     highlight.FillColor = color
     highlight.OutlineColor = color
     highlight.FillTransparency = 0.65
     highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
     highlight.Adornee = adornee
-    highlight.Parent = Esp.Folder
+    highlight.Parent = xDTaraZ.Esp.Folder
     return highlight
 end
 
-function Esp.MakeLabel(adornee, color)
+function xDTaraZ.Esp.MakeLabel(adornee, color)
     local gui = Instance.new("BillboardGui")
     gui.Size = UDim2.fromOffset(180, 36)
     gui.StudsOffset = Vector3.new(0, 3.5, 0)
@@ -969,33 +965,33 @@ function Esp.MakeLabel(adornee, color)
     label.Font = Enum.Font.GothamBold
     label.TextSize = 13
     label.Parent = gui
-    gui.Parent = Esp.Folder
+    gui.Parent = xDTaraZ.Esp.Folder
     return gui, label
 end
 
-function Esp.DropEntry(entry)
+function xDTaraZ.Esp.DropEntry(entry)
     if entry then
         entry.Highlight:Destroy()
         entry.Gui:Destroy()
     end
 end
 
-function Esp.RefreshPlayers()
+function xDTaraZ.Esp.RefreshPlayers()
     local entries = State.Esp.Players
-    local myRoot = Util.Root()
+    local myRoot = xDTaraZ.Util.Root()
     for _, player in ipairs(Players:GetPlayers()) do
-        local character, root = player.Character, Util.Root(player)
+        local character, root = player.Character, xDTaraZ.Util.Root(player)
         local entry = entries[player]
-        local role = Round.RoleOf(player)
+        local role = xDTaraZ.Round.RoleOf(player)
         local visible = State.Opt.EspPlayers and player ~= LocalPlayer and character and root and role ~= "Dead"
         if not visible then
-            Esp.DropEntry(entry)
+            xDTaraZ.Esp.DropEntry(entry)
             entries[player] = nil
         else
             if not entry or entry.Character ~= character then
-                Esp.DropEntry(entry)
-                local gui, label = Esp.MakeLabel(root, Color3.new(1, 1, 1))
-                entry = { Character = character, Highlight = Esp.MakeHighlight(character, Color3.new(1, 1, 1)), Gui = gui, Label = label }
+                xDTaraZ.Esp.DropEntry(entry)
+                local gui, label = xDTaraZ.Esp.MakeLabel(root, Color3.new(1, 1, 1))
+                entry = { Character = character, Highlight = xDTaraZ.Esp.MakeHighlight(character, Color3.new(1, 1, 1)), Gui = gui, Label = label }
                 entries[player] = entry
             end
             local color = Config.Colors[role] or Config.Colors.Innocent
@@ -1006,36 +1002,36 @@ function Esp.RefreshPlayers()
     end
     for player, entry in pairs(entries) do
         if not player.Parent then
-            Esp.DropEntry(entry)
+            xDTaraZ.Esp.DropEntry(entry)
             entries[player] = nil
         end
     end
 end
 
-function Esp.RefreshGun()
-    local drop = State.Opt.EspGun and Round.GunDrop()
+function xDTaraZ.Esp.RefreshGun()
+    local drop = State.Opt.EspGun and xDTaraZ.Round.GunDrop()
     local entry = State.Esp.Gun
     if entry and entry.Adornee == drop then
         return
     end
-    Esp.DropEntry(entry)
+    xDTaraZ.Esp.DropEntry(entry)
     State.Esp.Gun = nil
     if drop then
-        local gui, label = Esp.MakeLabel(drop, Config.Colors.Gun)
+        local gui, label = xDTaraZ.Esp.MakeLabel(drop, Config.Colors.Gun)
         label.Text = "GUN DROP"
-        State.Esp.Gun = { Adornee = drop, Highlight = Esp.MakeHighlight(drop, Config.Colors.Gun), Gui = gui }
+        State.Esp.Gun = { Adornee = drop, Highlight = xDTaraZ.Esp.MakeHighlight(drop, Config.Colors.Gun), Gui = gui }
     end
 end
 
-function Esp.Destroy()
-    if Esp.Folder then
-        Esp.Folder:Destroy()
+function xDTaraZ.Esp.Destroy()
+    if xDTaraZ.Esp.Folder then
+        xDTaraZ.Esp.Folder:Destroy()
     end
     table.clear(State.Esp.Players)
     State.Esp.Gun = nil
 end
 
-function Visual.SetFullbright(enabled)
+function xDTaraZ.Visual.SetFullbright(enabled)
     if enabled and not State.LightingDefaults then
         State.LightingDefaults = { Ambient = Lighting.Ambient, Brightness = Lighting.Brightness, ClockTime = Lighting.ClockTime, FogEnd = Lighting.FogEnd, GlobalShadows = Lighting.GlobalShadows }
         Lighting.Ambient = Color3.new(1, 1, 1)
@@ -1051,16 +1047,16 @@ function Visual.SetFullbright(enabled)
     end
 end
 
-function Session.RedeemCode(code)
+function xDTaraZ.Session.RedeemCode(code)
     local ok, message = pcall(Remotes.Extras.RedeemCode.InvokeServer, Remotes.Extras.RedeemCode, code)
     return ok and tostring(message) or "Request failed"
 end
 
-function Session.Rejoin()
+function xDTaraZ.Session.Rejoin()
     TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
 end
 
-function Session.Hop()
+function xDTaraZ.Session.Hop()
     local url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100", game.PlaceId)
     local ok, body = pcall(game.HttpGet, game, url)
     if not ok then
@@ -1074,8 +1070,8 @@ function Session.Hop()
     end
 end
 
-function Session.InitAntiAfk()
-    Util.Connect(LocalPlayer.Idled, function()
+function xDTaraZ.Session.InitAntiAfk()
+    xDTaraZ.Util.Connect(LocalPlayer.Idled, function()
         if State.Opt.AntiAfk then
             VirtualUser:CaptureController()
             VirtualUser:ClickButton2(Vector2.new())
@@ -1083,79 +1079,79 @@ function Session.InitAntiAfk()
     end)
 end
 
-function Session.InitRoleNotify(notify)
-    Util.Connect(Remotes.Gameplay.RoundStart.OnClientEvent, function()
+function xDTaraZ.Session.InitRoleNotify(notify)
+    xDTaraZ.Util.Connect(Remotes.Gameplay.RoundStart.OnClientEvent, function()
         task.wait(2)
         State.LastRoleFetch = 0
-        Round.RefreshRoles()
+        xDTaraZ.Round.RefreshRoles()
         if not State.Opt.RoleNotify then
             return
         end
-        local murderer, sheriff = Round.FindByRole("Murderer"), Round.FindByRole("Sheriff")
-        notify(string.format("Murderer: %s | Sheriff: %s | You: %s", murderer and murderer.Name or "?", sheriff and sheriff.Name or "?", Round.RoleOf(LocalPlayer)))
+        local murderer, sheriff = xDTaraZ.Round.FindByRole("Murderer"), xDTaraZ.Round.FindByRole("Sheriff")
+        notify(string.format("Murderer: %s | Sheriff: %s | You: %s", murderer and murderer.Name or "?", sheriff and sheriff.Name or "?", xDTaraZ.Round.RoleOf(LocalPlayer)))
     end)
 end
 
-function Scheduler.Step()
-    Util.Try(Round.RefreshRoles)
-    Util.Try(Kaitun.Step)
-    Util.Try(Farm.Step)
-    Util.Try(Visual.XRayStep)
-    Util.Try(Skin.ApplyStep)
-    Util.Try(Movement.Apply)
-    Util.Try(Sheriff.AutoGrabStep)
-    Util.Try(Sheriff.AutoShootStep)
-    Util.Try(Murderer.AutoKillStep)
-    Util.Try(Esp.RefreshPlayers)
-    Util.Try(Esp.RefreshGun)
+function xDTaraZ.Scheduler.Step()
+    xDTaraZ.Util.Try(xDTaraZ.Round.RefreshRoles)
+    xDTaraZ.Util.Try(xDTaraZ.Kaitun.Step)
+    xDTaraZ.Util.Try(xDTaraZ.Farm.Step)
+    xDTaraZ.Util.Try(xDTaraZ.Visual.XRayStep)
+    xDTaraZ.Util.Try(xDTaraZ.Skin.ApplyStep)
+    xDTaraZ.Util.Try(xDTaraZ.Movement.Apply)
+    xDTaraZ.Util.Try(xDTaraZ.Sheriff.AutoGrabStep)
+    xDTaraZ.Util.Try(xDTaraZ.Sheriff.AutoShootStep)
+    xDTaraZ.Util.Try(xDTaraZ.Murderer.AutoKillStep)
+    xDTaraZ.Util.Try(xDTaraZ.Esp.RefreshPlayers)
+    xDTaraZ.Util.Try(xDTaraZ.Esp.RefreshGun)
 end
 
-function Scheduler.Boot(notify)
-    Esp.Init()
-    Farm.InitBagTracking()
-    Util.Connect(RunService.Stepped, function()
-        Util.Try(Movement.AntiFlingStep)
+function xDTaraZ.Scheduler.Boot(notify)
+    xDTaraZ.Esp.Init()
+    xDTaraZ.Farm.InitBagTracking()
+    xDTaraZ.Util.Connect(RunService.Stepped, function()
+        xDTaraZ.Util.Try(xDTaraZ.Movement.AntiFlingStep)
     end)
-    Movement.InitInfJump()
-    Session.InitAntiAfk()
-    Session.InitRoleNotify(notify)
-    Sheriff.InstallAimHook()
-    Util.Connect(RunService.RenderStepped, function(dt)
-        Util.Try(Aim.Step, dt)
+    xDTaraZ.Movement.InitInfJump()
+    xDTaraZ.Session.InitAntiAfk()
+    xDTaraZ.Session.InitRoleNotify(notify)
+    xDTaraZ.Sheriff.InstallAimHook()
+    xDTaraZ.Util.Connect(RunService.RenderStepped, function(dt)
+        xDTaraZ.Util.Try(xDTaraZ.Aim.Step, dt)
     end)
-    Util.Connect(RunService.Heartbeat, function()
-        Util.Try(Murderer.KillAuraStep)
-        Util.Try(Survive.DodgeStep)
-        Util.Try(Troll.StickStep)
+    xDTaraZ.Util.Connect(RunService.Heartbeat, function()
+        xDTaraZ.Util.Try(xDTaraZ.Murderer.KillAuraStep)
+        xDTaraZ.Util.Try(xDTaraZ.Survive.DodgeStep)
+        xDTaraZ.Util.Try(xDTaraZ.Troll.StickStep)
     end)
     task.spawn(function()
         while State.Alive do
-            Scheduler.Step()
+            xDTaraZ.Scheduler.Step()
             task.wait(Config.TickDelay)
         end
     end)
 end
 
-function Scheduler.Stop()
+function xDTaraZ.Scheduler.Stop()
     State.Alive = false
     State.StickTarget = nil
-    Movement.SetFly(false)
-    Movement.SetNoclip(false)
+    xDTaraZ.Movement.SetFly(false)
+    xDTaraZ.Movement.SetNoclip(false)
     for _, conn in ipairs(State.Conns) do
         conn:Disconnect()
     end
     table.clear(State.Conns)
     if State.Opt.SpeedOn then
-        Movement.RestoreSpeed()
+        xDTaraZ.Movement.RestoreSpeed()
     end
     if State.Opt.JumpOn then
-        Movement.RestoreJump()
+        xDTaraZ.Movement.RestoreJump()
     end
-    Troll.Spectate(nil)
-    Visual.SetFullbright(false)
-    Visual.ClearXRay()
-    Farm.DetachMover()
-    Esp.Destroy()
+    xDTaraZ.Troll.Spectate(nil)
+    xDTaraZ.Visual.SetFullbright(false)
+    xDTaraZ.Visual.ClearXRay()
+    xDTaraZ.Farm.DetachMover()
+    xDTaraZ.Esp.Destroy()
 end
 
 local function BuildInterface()
@@ -1191,7 +1187,7 @@ local function BuildInterface()
             Callback = Bind("AutoShoot"),
         })
         gunBox:AddButton({ Text = T("Shoot Murderer Now", "ยิงฆาตกรเดี๋ยวนี้"), Style = "Primary", Func = function()
-            local ok, detail = Sheriff.ShootMurderer()
+            local ok, detail = xDTaraZ.Sheriff.ShootMurderer()
             Notify(ok and ("Shot " .. tostring(detail)) or tostring(detail or "You need the gun"))
         end })
         gunBox:AddToggle("AutoGrabGun", {
@@ -1201,7 +1197,7 @@ local function BuildInterface()
             Callback = Bind("AutoGrabGun"),
         })
         gunBox:AddButton({ Text = T("Grab Gun Now", "เก็บปืนเดี๋ยวนี้"), Func = function()
-            Notify(Sheriff.GrabGun() and "Gun grabbed" or "No gun on the ground")
+            Notify(xDTaraZ.Sheriff.GrabGun() and "Gun grabbed" or "No gun on the ground")
         end })
 
         local knifeBox = tab:AddRightGroupbox(T("Murderer", "ฆาตกร"))
@@ -1214,7 +1210,7 @@ local function BuildInterface()
         })
         knifeBox:AddButton({ Text = T("Kill All Now", "ฆ่าทุกคนเดี๋ยวนี้"), Style = "Primary", Func = function()
             task.spawn(function()
-                Notify(string.format("Killed %d players", Murderer.KillAll()))
+                Notify(string.format("Killed %d players", xDTaraZ.Murderer.KillAll()))
             end)
         end })
         knifeBox:AddToggle("KillAura", {
@@ -1285,26 +1281,26 @@ local function BuildInterface()
         local tab = window:AddTab(T("Teleport", "วาร์ป"), "globe", T("Map, lobby and players", "แมพ ล็อบบี้ และผู้เล่น"))
 
         local placeBox = tab:AddLeftGroupbox(T("Places", "สถานที่"))
-        placeBox:AddButton({ Text = T("Lobby", "ล็อบบี้"), Func = Teleport.ToLobby }):AddButton({ Text = T("Map", "แมพ"), Func = Teleport.ToMap })
+        placeBox:AddButton({ Text = T("Lobby", "ล็อบบี้"), Func = xDTaraZ.Teleport.ToLobby }):AddButton({ Text = T("Map", "แมพ"), Func = xDTaraZ.Teleport.ToMap })
         placeBox:AddButton({ Text = T("To Murderer", "ไปหาฆาตกร"), Func = function()
-            local target = Round.FindByRole("Murderer")
-            Teleport.ToPlayer(target and target.Name)
+            local target = xDTaraZ.Round.FindByRole("Murderer")
+            xDTaraZ.Teleport.ToPlayer(target and target.Name)
         end }):AddButton({ Text = T("To Sheriff", "ไปหานายอำเภอ"), Func = function()
-            local target = Round.FindByRole("Sheriff")
-            Teleport.ToPlayer(target and target.Name)
+            local target = xDTaraZ.Round.FindByRole("Sheriff")
+            xDTaraZ.Teleport.ToPlayer(target and target.Name)
         end })
 
         local playerBox = tab:AddRightGroupbox(T("Players", "ผู้เล่น"))
         local playerDropdown = playerBox:AddDropdown("TeleportTarget", {
             Text = T("Player", "ผู้เล่น"),
-            Values = Util.PlayerNames(),
+            Values = xDTaraZ.Util.PlayerNames(),
             Searchable = true,
             Callback = Bind("TeleportTarget"),
         })
         playerBox:AddButton({ Text = T("Teleport", "วาร์ป"), Style = "Primary", Func = function()
-            Teleport.ToPlayer(opt.TeleportTarget)
+            xDTaraZ.Teleport.ToPlayer(opt.TeleportTarget)
         end }):AddButton({ Text = T("Refresh", "รีเฟรช"), Func = function()
-            playerDropdown:SetValues(Util.PlayerNames())
+            playerDropdown:SetValues(xDTaraZ.Util.PlayerNames())
         end })
     end
 
@@ -1314,29 +1310,29 @@ local function BuildInterface()
         local box = tab:AddLeftGroupbox(T("Target", "เป้าหมาย"))
         local trollDropdown = box:AddDropdown("TrollTarget", {
             Text = T("Player", "ผู้เล่น"),
-            Values = Util.PlayerNames(),
+            Values = xDTaraZ.Util.PlayerNames(),
             Searchable = true,
             Callback = Bind("TrollTarget"),
         })
         box:AddButton({ Text = T("Refresh Players", "รีเฟรชรายชื่อ"), Func = function()
-            trollDropdown:SetValues(Util.PlayerNames())
+            trollDropdown:SetValues(xDTaraZ.Util.PlayerNames())
         end })
         box:AddButton({ Text = T("Fling", "ดีดกระเด็น"), Style = "Primary", Func = function()
-            local target = Troll.Target()
+            local target = xDTaraZ.Troll.Target()
             if target then
-                task.spawn(Troll.Fling, target)
+                task.spawn(xDTaraZ.Troll.Fling, target)
             end
         end }):AddButton({ Text = T("Fling Murderer", "ดีดฆาตกร"), Func = function()
-            local target = Round.FindByRole("Murderer")
+            local target = xDTaraZ.Round.FindByRole("Murderer")
             if target then
-                task.spawn(Troll.Fling, target)
+                task.spawn(xDTaraZ.Troll.Fling, target)
             end
         end })
         box:AddButton({ Text = T("Fling Everyone", "ดีดทุกคน"), Func = function()
             task.spawn(function()
                 for _, player in ipairs(Players:GetPlayers()) do
-                    if player ~= LocalPlayer and Util.Root(player) then
-                        Troll.Fling(player)
+                    if player ~= LocalPlayer and xDTaraZ.Util.Root(player) then
+                        xDTaraZ.Troll.Fling(player)
                     end
                 end
             end)
@@ -1355,7 +1351,7 @@ local function BuildInterface()
             Text = T("Spectate", "ส่องผู้เล่น"),
             Default = false,
             Callback = function(value)
-                Troll.Spectate(value and Troll.Target() or nil)
+                xDTaraZ.Troll.Spectate(value and xDTaraZ.Troll.Target() or nil)
             end,
         })
     end
@@ -1370,7 +1366,7 @@ local function BuildInterface()
             Callback = function(value)
                 opt.SpeedOn = value
                 if not value then
-                    Movement.RestoreSpeed()
+                    xDTaraZ.Movement.RestoreSpeed()
                 end
             end,
         })
@@ -1386,7 +1382,7 @@ local function BuildInterface()
             Callback = function(value)
                 opt.JumpOn = value
                 if not value then
-                    Movement.RestoreJump()
+                    xDTaraZ.Movement.RestoreJump()
                 end
             end,
         })
@@ -1410,7 +1406,7 @@ local function BuildInterface()
             Default = false,
             Callback = function(value)
                 opt.Noclip = value
-                Movement.RefreshNoclip()
+                xDTaraZ.Movement.RefreshNoclip()
             end,
         })
         extraBox:AddToggle("Fly", {
@@ -1419,7 +1415,7 @@ local function BuildInterface()
             Default = false,
             Callback = function(value)
                 opt.Fly = value
-                Movement.SetFly(value)
+                xDTaraZ.Movement.SetFly(value)
             end,
         })
     end
@@ -1458,24 +1454,24 @@ local function BuildInterface()
             Default = false,
             Callback = function(value)
                 opt.Fullbright = value
-                Visual.SetFullbright(value)
+                xDTaraZ.Visual.SetFullbright(value)
             end,
         })
 
         local skinBox = tab:AddRightGroupbox(T("Skins", "สกิน"))
         local skinDropdown = skinBox:AddDropdown("SkinSource", {
             Text = T("Copy From", "ก๊อปจาก"),
-            Values = Util.PlayerNames(),
+            Values = xDTaraZ.Util.PlayerNames(),
             Searchable = true,
             Callback = Bind("SkinSource"),
         })
         skinBox:AddButton({ Text = T("Copy Knife", "ก๊อปมีด"), Style = "Primary", Func = function()
-            Notify(Skin.Copy(opt.SkinSource, "Knife") and "Knife skin applied" or "That player has no knife loaded")
+            Notify(xDTaraZ.Skin.Copy(opt.SkinSource, "Knife") and "Knife skin applied" or "That player has no knife loaded")
         end }):AddButton({ Text = T("Copy Gun", "ก๊อปปืน"), Func = function()
-            Notify(Skin.Copy(opt.SkinSource, "Gun") and "Gun skin applied" or "That player has no gun loaded")
+            Notify(xDTaraZ.Skin.Copy(opt.SkinSource, "Gun") and "Gun skin applied" or "That player has no gun loaded")
         end })
         skinBox:AddButton({ Text = T("Refresh Players", "รีเฟรชรายชื่อ"), Func = function()
-            skinDropdown:SetValues(Util.PlayerNames())
+            skinDropdown:SetValues(xDTaraZ.Util.PlayerNames())
         end }):AddButton({ Text = T("Reset Skins", "รีเซ็ตสกิน"), Func = function()
             table.clear(State.Skins)
         end })
@@ -1527,8 +1523,8 @@ local function BuildInterface()
             Default = false,
             Callback = Bind("AntiAfk"),
         })
-        box:AddButton({ Text = T("Rejoin", "เข้าเซิร์ฟเดิมใหม่"), DoubleClick = true, Func = Session.Rejoin })
-            :AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), DoubleClick = true, Func = Session.Hop })
+        box:AddButton({ Text = T("Rejoin", "เข้าเซิร์ฟเดิมใหม่"), DoubleClick = true, Func = xDTaraZ.Session.Rejoin })
+            :AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), DoubleClick = true, Func = xDTaraZ.Session.Hop })
 
         local codeBox = tab:AddRightGroupbox(T("Codes", "โค้ด"))
         local codeText = ""
@@ -1542,7 +1538,7 @@ local function BuildInterface()
         })
         codeBox:AddButton({ Text = T("Redeem", "ใช้โค้ด"), Style = "Primary", Func = function()
             if codeText ~= "" then
-                Notify(Session.RedeemCode(codeText))
+                Notify(xDTaraZ.Session.RedeemCode(codeText))
             end
         end })
     end
@@ -1561,7 +1557,7 @@ local function BuildInterface()
         window:AddSettingsTab()
     end
 
-    Library:OnUnload(Scheduler.Stop)
+    Library:OnUnload(xDTaraZ.Scheduler.Stop)
     getgenv().MurderMystery2Unload = function()
         Library:Unload()
     end
@@ -1575,7 +1571,7 @@ local function BuildInterface()
         Theme = "Overworld",
         OnUnlocked = function()
             BuildTabs()
-            Scheduler.Boot(Notify)
+            xDTaraZ.Scheduler.Boot(Notify)
             Notify("Loaded")
             Library:LoadAutoloadConfig()
         end,

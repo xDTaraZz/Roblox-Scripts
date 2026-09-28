@@ -99,25 +99,22 @@ local GameLib = xDTaraZ.GameLib
 for _, name in ipairs({ "Util", "Data", "Loot", "Sell", "Progress", "Claim", "Hatch", "Movement", "Scheduler" }) do
     xDTaraZ[name] = {}
 end
-local Util, Data, Loot, Sell = xDTaraZ.Util, xDTaraZ.Data, xDTaraZ.Loot, xDTaraZ.Sell
-local Progress, Claim, Hatch = xDTaraZ.Progress, xDTaraZ.Claim, xDTaraZ.Hatch
-local Movement, Scheduler = xDTaraZ.Movement, xDTaraZ.Scheduler
 
 local services = {}
 local SUFFIXES = { "", "K", "M", "B", "T", "Qa", "Qi" }
 
-function Util.Try(fn, ...)
+function xDTaraZ.Util.Try(fn, ...)
     local ok, err = pcall(fn, ...)
     if not ok then warn("[OpenSea]", err) end
     return ok, err
 end
 
-function Util.Service(name)
+function xDTaraZ.Util.Service(name)
     services[name] = services[name] or Knit.GetService(name)
     return services[name]
 end
 
-function Util.Abbreviate(number)
+function xDTaraZ.Util.Abbreviate(number)
     local tier = 1
     while math.abs(number) >= 1000 and tier < #SUFFIXES do
         number, tier = number / 1000, tier + 1
@@ -125,25 +122,25 @@ function Util.Abbreviate(number)
     return tier == 1 and ("%d"):format(number) or ("%.2f%s"):format(number, SUFFIXES[tier])
 end
 
-function Util.Count(tbl)
+function xDTaraZ.Util.Count(tbl)
     local n = 0
     for _ in pairs(tbl) do n += 1 end
     return n
 end
 
-function Util.Notify(text)
+function xDTaraZ.Util.Notify(text)
     State.Messages[#State.Messages + 1] = text
 end
 
 ---@return string[]  lowest rarity first
-function Util.RarityNames()
+function xDTaraZ.Util.RarityNames()
     local names = {}
     for name in pairs(GameLib.Rarities) do names[#names + 1] = name end
     table.sort(names, function(a, b) return GameLib.Rarities[a] < GameLib.Rarities[b] end)
     return names
 end
 
-function Util.MutationNames()
+function xDTaraZ.Util.MutationNames()
     local names = {}
     for id, info in pairs(GameLib.Mutations) do
         if type(info) == "table" then names[#names + 1] = info.name or id end
@@ -152,20 +149,20 @@ function Util.MutationNames()
     return names
 end
 
-function Data.Get()
+function xDTaraZ.Data.Get()
     return Knit.GetController("ReplicaController"):GetPlayerData()
 end
 
-function Data.Cash()
-    return Data.Get().Currencies.Cash
+function xDTaraZ.Data.Cash()
+    return xDTaraZ.Data.Get().Currencies.Cash
 end
 
-function Data.MaxPickup()
-    return math.max(1, Data.Get().Upgrades.Carry or 1)
+function xDTaraZ.Data.MaxPickup()
+    return math.max(1, xDTaraZ.Data.Get().Upgrades.Carry or 1)
 end
 
 ---@return string, string, table?, table?  rarity, mutation, size, config
-function Data.Describe(entity)
+function xDTaraZ.Data.Describe(entity)
     local info = entity.eggType and GameLib.Eggs.EGGS[entity.eggType]
         or entity.brainrotType and GameLib.Brainrots.CONFIG[entity.brainrotType]
     local mutation = entity.mutation and GameLib.Mutations[entity.mutation]
@@ -173,8 +170,8 @@ function Data.Describe(entity)
     return info and info.rarity or "Common", mutation and mutation.name or "Normal", size, info
 end
 
-function Data.Score(entity)
-    local rarity, _, size, info = Data.Describe(entity)
+function xDTaraZ.Data.Score(entity)
+    local rarity, _, size, info = xDTaraZ.Data.Describe(entity)
     local mutation = entity.mutation and GameLib.Mutations[entity.mutation]
     local rank = GameLib.Rarities[rarity] or 1
     local mutationMulti = mutation and mutation.cashMulti or 1
@@ -183,20 +180,20 @@ function Data.Score(entity)
     return rank * 1000 * mutationMulti * sizeMulti * bossBonus + (info and info.tier or 1)
 end
 
-function Loot.Wanted(entity)
+function xDTaraZ.Loot.Wanted(entity)
     local keep = State.Opt.LootKeep
     if next(keep) == nil then return true end
-    local rarity, mutation = Data.Describe(entity)
+    local rarity, mutation = xDTaraZ.Data.Describe(entity)
     return keep[rarity] or keep[mutation] or false
 end
 
 ---@return string[]  item ids, best first
-function Loot.PickBest(spawns, limit)
+function xDTaraZ.Loot.PickBest(spawns, limit)
     local ranked = {}
     for id, spawn in pairs(spawns) do
         local entity = spawn.entity
         entity.isBossItem = spawn.isBossItem
-        if Loot.Wanted(entity) then ranked[#ranked + 1] = { id, Data.Score(entity) } end
+        if xDTaraZ.Loot.Wanted(entity) then ranked[#ranked + 1] = { id, xDTaraZ.Data.Score(entity) } end
     end
     table.sort(ranked, function(a, b) return a[2] > b[2] end)
 
@@ -206,44 +203,44 @@ function Loot.PickBest(spawns, limit)
 end
 
 ---@return number  items taken this wave
-function Loot.RunOnce()
-    local waves = Util.Service("WaveService")
+function xDTaraZ.Loot.RunOnce()
+    local waves = xDTaraZ.Util.Service("WaveService")
     local wave = waves:Start(Config.WaveExtension)
     if type(wave) ~= "table" or not wave.spawns then return 0 end
 
-    local picked = Loot.PickBest(wave.spawns, Data.MaxPickup())
-    if #picked == 0 then picked = Loot.PickBest(wave.spawns, 0) end
+    local picked = xDTaraZ.Loot.PickBest(wave.spawns, xDTaraZ.Data.MaxPickup())
+    if #picked == 0 then picked = xDTaraZ.Loot.PickBest(wave.spawns, 0) end
 
     waves:Finished(picked)
     State.Looted += #picked
     return #picked
 end
 
-function Loot.Worker()
+function xDTaraZ.Loot.Worker()
     while State.Alive and State.Opt.AutoLoot do
-        if not Util.Try(Loot.RunOnce) then task.wait(1) end
+        if not xDTaraZ.Util.Try(xDTaraZ.Loot.RunOnce) then task.wait(1) end
         task.wait()
     end
 end
 
-function Loot.SetEnabled(enabled)
+function xDTaraZ.Loot.SetEnabled(enabled)
     State.Opt.AutoLoot = enabled
     if not enabled then return end
-    for _ = 1, Config.LootWorkers do task.spawn(Loot.Worker) end
+    for _ = 1, Config.LootWorkers do task.spawn(xDTaraZ.Loot.Worker) end
 end
 
-function Hatch.MyPlot()
-    local plotId = tostring(Util.Service("PlotService"):GetPlayerPlot())
+function xDTaraZ.Hatch.MyPlot()
+    local plotId = tostring(xDTaraZ.Util.Service("PlotService"):GetPlayerPlot())
     local plots = Workspace:FindFirstChild("Plots")
     local holder = plots and plots:FindFirstChild(plotId)
     return holder and holder:FindFirstChild(plotId)
 end
 
 ---@return number  eggs hatched
-function Hatch.HatchReady()
-    local eggs = Util.Service("EggService")
+function xDTaraZ.Hatch.HatchReady()
+    local eggs = xDTaraZ.Util.Service("EggService")
     local now, hatched = Workspace:GetServerTimeNow(), 0
-    for key, egg in pairs(Data.Get().PlacedEggs) do
+    for key, egg in pairs(xDTaraZ.Data.Get().PlacedEggs) do
         if egg.startTime and egg.startTime + (egg.duration or 0) <= now and eggs:HatchEgg(key) then
             hatched += 1
         end
@@ -252,12 +249,12 @@ function Hatch.HatchReady()
 end
 
 ---@return table[]  inventory eggs, most valuable first
-function Hatch.RankedEggs()
+function xDTaraZ.Hatch.RankedEggs()
     local ranked = {}
-    for id, entry in pairs(Data.Get().Inventory) do
+    for id, entry in pairs(xDTaraZ.Data.Get().Inventory) do
         local inner = entry.innerEntity
         if entry.itemType == "Egg" and inner and inner.eggType then
-            ranked[#ranked + 1] = { id = id, score = GameLib.Eggs.GetSellPrice(inner.eggType) * Data.Score(inner) }
+            ranked[#ranked + 1] = { id = id, score = GameLib.Eggs.GetSellPrice(inner.eggType) * xDTaraZ.Data.Score(inner) }
         end
     end
     table.sort(ranked, function(a, b) return a.score > b.score end)
@@ -265,14 +262,14 @@ function Hatch.RankedEggs()
 end
 
 ---@return number  eggs placed
-function Hatch.PlaceBest()
-    local plot = Hatch.MyPlot()
+function xDTaraZ.Hatch.PlaceBest()
+    local plot = xDTaraZ.Hatch.MyPlot()
     local surface = plot and plot:FindFirstChild("PlotSurface")
     local part = surface and (surface:IsA("BasePart") and surface or surface:FindFirstChildWhichIsA("BasePart", true))
     if not part then return 0 end
 
-    local eggs, placed = Util.Service("EggService"), 0
-    for i, egg in ipairs(Hatch.RankedEggs()) do
+    local eggs, placed = xDTaraZ.Util.Service("EggService"), 0
+    for i, egg in ipairs(xDTaraZ.Hatch.RankedEggs()) do
         if i > Config.PlaceEggTries then break end
         local offset = Vector3.new((math.random() - 0.5) * part.Size.X * 0.8, part.Size.Y / 2 + 1, (math.random() - 0.5) * part.Size.Z * 0.8)
         if not eggs:PlaceEgg(egg.id, CFrame.new(part.Position + offset)) then break end
@@ -281,18 +278,18 @@ function Hatch.PlaceBest()
     return placed
 end
 
-function Hatch.Step()
-    Hatch.HatchReady()
-    Hatch.PlaceBest()
-    Progress.EquipBest()
+function xDTaraZ.Hatch.Step()
+    xDTaraZ.Hatch.HatchReady()
+    xDTaraZ.Hatch.PlaceBest()
+    xDTaraZ.Progress.EquipBest()
 end
 
 ---@return number  eggs sold
-function Sell.EggsNow()
-    local inventory, keep, sold = Util.Service("InventoryService"), State.Opt.SellKeep, 0
-    for id, entry in pairs(Data.Get().Inventory) do
+function xDTaraZ.Sell.EggsNow()
+    local inventory, keep, sold = xDTaraZ.Util.Service("InventoryService"), State.Opt.SellKeep, 0
+    for id, entry in pairs(xDTaraZ.Data.Get().Inventory) do
         if entry.itemType == "Egg" then
-            local rarity, mutation = Data.Describe(entry.innerEntity or {})
+            local rarity, mutation = xDTaraZ.Data.Describe(entry.innerEntity or {})
             if not keep[rarity] and not keep[mutation] then
                 inventory:SellEgg(id)
                 sold += 1
@@ -302,17 +299,17 @@ function Sell.EggsNow()
     return sold
 end
 
-function Sell.BrainrotsNow()
-    Util.Service("InventoryService"):SellAllBrainrots()
+function xDTaraZ.Sell.BrainrotsNow()
+    xDTaraZ.Util.Service("InventoryService"):SellAllBrainrots()
 end
 
 ---@return number  upgrades bought
-function Progress.UpgradeNow()
-    local upgrades, bought = Util.Service("UpgradesService"), 0
+function xDTaraZ.Progress.UpgradeNow()
+    local upgrades, bought = xDTaraZ.Util.Service("UpgradesService"), 0
     for _, name in ipairs(Config.UpgradeNames) do
         if State.Opt.UpgradePick[name] then
-            local ok, price = pcall(GameLib.Upgrades.GetPrice, name, Data.Get().Upgrades[name])
-            if ok and price and Data.Cash() - price >= State.Opt.CashReserve then
+            local ok, price = pcall(GameLib.Upgrades.GetPrice, name, xDTaraZ.Data.Get().Upgrades[name])
+            if ok and price and xDTaraZ.Data.Cash() - price >= State.Opt.CashReserve then
                 upgrades:Upgrade(name, 1)
                 bought += 1
             end
@@ -321,13 +318,13 @@ function Progress.UpgradeNow()
     return bought
 end
 
-function Progress.StartTraining()
-    Util.Service("TrainingService"):StartTraining()
+function xDTaraZ.Progress.StartTraining()
+    xDTaraZ.Util.Service("TrainingService"):StartTraining()
 end
 
 ---@return string?  strongest dumbbell within budget
-function Progress.BestAffordableTool()
-    local profile = Data.Get()
+function xDTaraZ.Progress.BestAffordableTool()
+    local profile = xDTaraZ.Data.Get()
     local budget = profile.Currencies.Cash - State.Opt.CashReserve
     local current = GameLib.TrainTools[profile.EquippedTrainTool]
     local bestName, bestGain = nil, current and current.gainPerTrain or 0
@@ -340,49 +337,49 @@ function Progress.BestAffordableTool()
 end
 
 ---@return string?  dumbbell bought
-function Progress.BuyBestTool()
-    local name = Progress.BestAffordableTool()
+function xDTaraZ.Progress.BuyBestTool()
+    local name = xDTaraZ.Progress.BestAffordableTool()
     if not name then return nil end
 
-    local training = Util.Service("TrainingService")
+    local training = xDTaraZ.Util.Service("TrainingService")
     training:BuyTrainTool(name)
     training:EquipTrainTool(name)
-    Progress.StartTraining()
+    xDTaraZ.Progress.StartTraining()
     return name
 end
 
-function Progress.RebirthNow()
-    return Util.Service("RebirthService"):Rebirth()
+function xDTaraZ.Progress.RebirthNow()
+    return xDTaraZ.Util.Service("RebirthService"):Rebirth()
 end
 
-function Progress.EquipBest()
-    Util.Service("AnimalService"):EquipBest()
+function xDTaraZ.Progress.EquipBest()
+    xDTaraZ.Util.Service("AnimalService"):EquipBest()
 end
 
-function Claim.Daily()
-    local daily = Data.Get().DailyReward
-    Util.Service("DailyRewardService"):ClaimReward((daily.LastClaimedDay or 0) + 1)
+function xDTaraZ.Claim.Daily()
+    local daily = xDTaraZ.Data.Get().DailyReward
+    xDTaraZ.Util.Service("DailyRewardService"):ClaimReward((daily.LastClaimedDay or 0) + 1)
 end
 
-function Claim.Playtime()
-    local playtime = Util.Service("PlaytimeRewardService")
+function xDTaraZ.Claim.Playtime()
+    local playtime = xDTaraZ.Util.Service("PlaytimeRewardService")
     for slot = 1, Config.PlaytimeSlots do playtime:ClaimGift(slot) end
 end
 
-function Claim.All()
-    Util.Try(Claim.Daily)
-    Util.Try(Claim.Playtime)
-    Util.Try(function() Util.Service("SpinWheelService"):SpinAll() end)
-    Util.Try(function() Util.Service("FreeShopService"):Claim() end)
-    Util.Try(function() Util.Service("ForeverPackService"):ClaimForeverPack() end)
-    Util.Try(function() Util.Service("RewardService"):GroupReward() end)
-    Util.Try(function() Util.Service("DiscService"):GetReward() end)
-    Util.Try(function() Util.Service("AnimalService"):CollectOfflineCash() end)
+function xDTaraZ.Claim.All()
+    xDTaraZ.Util.Try(xDTaraZ.Claim.Daily)
+    xDTaraZ.Util.Try(xDTaraZ.Claim.Playtime)
+    xDTaraZ.Util.Try(function() xDTaraZ.Util.Service("SpinWheelService"):SpinAll() end)
+    xDTaraZ.Util.Try(function() xDTaraZ.Util.Service("FreeShopService"):Claim() end)
+    xDTaraZ.Util.Try(function() xDTaraZ.Util.Service("ForeverPackService"):ClaimForeverPack() end)
+    xDTaraZ.Util.Try(function() xDTaraZ.Util.Service("RewardService"):GroupReward() end)
+    xDTaraZ.Util.Try(function() xDTaraZ.Util.Service("DiscService"):GetReward() end)
+    xDTaraZ.Util.Try(function() xDTaraZ.Util.Service("AnimalService"):CollectOfflineCash() end)
 end
 
 ---@return number  codes redeemed
-function Claim.RedeemCodes(codes)
-    local svc, redeemed = Util.Service("CodesService"), 0
+function xDTaraZ.Claim.RedeemCodes(codes)
+    local svc, redeemed = xDTaraZ.Util.Service("CodesService"), 0
     for _, code in ipairs(codes) do
         local ok, reply = pcall(svc.RedeemCode, svc, code)
         if ok and reply then redeemed += 1 end
@@ -390,13 +387,13 @@ function Claim.RedeemCodes(codes)
     return redeemed
 end
 
-function Movement.Humanoid()
+function xDTaraZ.Movement.Humanoid()
     local char = LocalPlayer.Character
     return char and char:FindFirstChildOfClass("Humanoid")
 end
 
-function Movement.Step()
-    local hum = Movement.Humanoid()
+function xDTaraZ.Movement.Step()
+    local hum = xDTaraZ.Movement.Humanoid()
     if not hum then return end
     if State.Opt.Speed then hum.WalkSpeed = State.Opt.SpeedValue end
     if not State.Opt.Noclip then return end
@@ -406,7 +403,7 @@ function Movement.Step()
     end
 end
 
-function Movement.RestoreCollision()
+function xDTaraZ.Movement.RestoreCollision()
     local char = LocalPlayer.Character
     if not char then return end
     for _, name in ipairs(Config.NoclipParts) do
@@ -415,10 +412,10 @@ function Movement.RestoreCollision()
     end
 end
 
-function Movement.Bind()
-    table.insert(State.Conns, RunService.Stepped:Connect(Movement.Step))
+function xDTaraZ.Movement.Bind()
+    table.insert(State.Conns, RunService.Stepped:Connect(xDTaraZ.Movement.Step))
     table.insert(State.Conns, UserInputService.JumpRequest:Connect(function()
-        local hum = Movement.Humanoid()
+        local hum = xDTaraZ.Movement.Humanoid()
         if State.Opt.InfJump and hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
     end))
     table.insert(State.Conns, LocalPlayer.Idled:Connect(function()
@@ -428,106 +425,106 @@ function Movement.Bind()
     end))
 end
 
-function Movement.ResetSpeed()
-    local hum = Movement.Humanoid()
-    if hum then hum.WalkSpeed = Data.Get().Upgrades.MovementSpeed or 16 end
+function xDTaraZ.Movement.ResetSpeed()
+    local hum = xDTaraZ.Movement.Humanoid()
+    if hum then hum.WalkSpeed = xDTaraZ.Data.Get().Upgrades.MovementSpeed or 16 end
 end
 
-Scheduler.Requests = {
+xDTaraZ.Scheduler.Requests = {
     LootOnce = function()
-        local ok, count = Util.Try(Loot.RunOnce)
-        Util.Notify(ok and ("Collected %d item(s)"):format(count) or "Wave not ready")
+        local ok, count = xDTaraZ.Util.Try(xDTaraZ.Loot.RunOnce)
+        xDTaraZ.Util.Notify(ok and ("Collected %d item(s)"):format(count) or "Wave not ready")
     end,
     SellEggs = function()
-        local ok, sold = Util.Try(Sell.EggsNow)
-        Util.Notify(ok and ("Sold %d egg(s)"):format(sold) or "Sell failed")
+        local ok, sold = xDTaraZ.Util.Try(xDTaraZ.Sell.EggsNow)
+        xDTaraZ.Util.Notify(ok and ("Sold %d egg(s)"):format(sold) or "Sell failed")
     end,
     SellBrainrots = function()
-        Util.Try(Sell.BrainrotsNow)
-        Util.Notify("Brainrots sold")
+        xDTaraZ.Util.Try(xDTaraZ.Sell.BrainrotsNow)
+        xDTaraZ.Util.Notify("Brainrots sold")
     end,
     HatchNow = function()
-        local ok, hatched = Util.Try(Hatch.HatchReady)
-        local _, placed = Util.Try(Hatch.PlaceBest)
-        Util.Notify(("Hatched %d, placed %d egg(s)"):format(ok and hatched or 0, tonumber(placed) or 0))
+        local ok, hatched = xDTaraZ.Util.Try(xDTaraZ.Hatch.HatchReady)
+        local _, placed = xDTaraZ.Util.Try(xDTaraZ.Hatch.PlaceBest)
+        xDTaraZ.Util.Notify(("Hatched %d, placed %d egg(s)"):format(ok and hatched or 0, tonumber(placed) or 0))
     end,
     UpgradeNow = function()
-        local ok, bought = Util.Try(Progress.UpgradeNow)
-        Util.Notify(ok and ("Bought %d upgrade(s)"):format(bought) or "Upgrade failed")
+        local ok, bought = xDTaraZ.Util.Try(xDTaraZ.Progress.UpgradeNow)
+        xDTaraZ.Util.Notify(ok and ("Bought %d upgrade(s)"):format(bought) or "Upgrade failed")
     end,
     ToolNow = function()
-        local ok, name = Util.Try(Progress.BuyBestTool)
-        Util.Notify(ok and name and ("Equipped " .. name) or "Nothing better to buy")
+        local ok, name = xDTaraZ.Util.Try(xDTaraZ.Progress.BuyBestTool)
+        xDTaraZ.Util.Notify(ok and name and ("Equipped " .. name) or "Nothing better to buy")
     end,
     RebirthNow = function()
-        local ok, reply = Util.Try(Progress.RebirthNow)
-        Util.Notify(ok and reply and "Rebirthed" or "Requirement not met")
+        local ok, reply = xDTaraZ.Util.Try(xDTaraZ.Progress.RebirthNow)
+        xDTaraZ.Util.Notify(ok and reply and "Rebirthed" or "Requirement not met")
     end,
     ClaimNow = function()
-        Claim.All()
-        Util.Notify("Rewards claimed")
+        xDTaraZ.Claim.All()
+        xDTaraZ.Util.Notify("Rewards claimed")
     end,
     RedeemAll = function()
-        Util.Notify(("Redeemed %d/%d code(s)"):format(Claim.RedeemCodes(Config.Codes), #Config.Codes))
+        xDTaraZ.Util.Notify(("Redeemed %d/%d code(s)"):format(xDTaraZ.Claim.RedeemCodes(Config.Codes), #Config.Codes))
     end,
     RedeemInput = function()
         local codes = {}
         for code in State.Opt.CodeInput:gmatch("[^,%s]+") do codes[#codes + 1] = code end
-        Util.Notify(("Redeemed %d/%d code(s)"):format(Claim.RedeemCodes(codes), #codes))
+        xDTaraZ.Util.Notify(("Redeemed %d/%d code(s)"):format(xDTaraZ.Claim.RedeemCodes(codes), #codes))
     end,
-    ResetSpeed = function() Util.Try(Movement.ResetSpeed) end,
+    ResetSpeed = function() xDTaraZ.Util.Try(xDTaraZ.Movement.ResetSpeed) end,
 }
 
-function Scheduler.Summarize()
-    local profile = Data.Get()
+function xDTaraZ.Scheduler.Summarize()
+    local profile = xDTaraZ.Data.Get()
     local cash = profile.Currencies.Cash
     State.StartCash = State.StartCash or cash
     State.Summary = ("Cash %s (+%s)\nItems looted %d · Carry %d · Rebirth %d\nInventory %d"):format(
-        Util.Abbreviate(cash), Util.Abbreviate(cash - State.StartCash),
+        xDTaraZ.Util.Abbreviate(cash), xDTaraZ.Util.Abbreviate(cash - State.StartCash),
         State.Looted, profile.Upgrades.Carry or 1, profile.Rebirth or 0,
-        Util.Count(profile.Inventory))
+        xDTaraZ.Util.Count(profile.Inventory))
 end
 
-function Scheduler.Step()
+function xDTaraZ.Scheduler.Step()
     local opt, now = State.Opt, os.clock()
-    Util.Try(Scheduler.Summarize)
+    xDTaraZ.Util.Try(xDTaraZ.Scheduler.Summarize)
 
-    for name, handler in pairs(Scheduler.Requests) do
+    for name, handler in pairs(xDTaraZ.Scheduler.Requests) do
         if State.Requests[name] then
             State.Requests[name] = nil
-            Util.Try(handler)
+            xDTaraZ.Util.Try(handler)
         end
     end
 
     if now - State.LastSell >= Config.SellInterval then
         State.LastSell = now
-        if opt.AutoHatch then Util.Try(Hatch.Step) end
-        if opt.AutoSellEggs then Sell.EggsNow() end
-        if opt.AutoSellBrainrots then Sell.BrainrotsNow() end
-        if opt.AutoEquipBest then Progress.EquipBest() end
+        if opt.AutoHatch then xDTaraZ.Util.Try(xDTaraZ.Hatch.Step) end
+        if opt.AutoSellEggs then xDTaraZ.Sell.EggsNow() end
+        if opt.AutoSellBrainrots then xDTaraZ.Sell.BrainrotsNow() end
+        if opt.AutoEquipBest then xDTaraZ.Progress.EquipBest() end
     end
 
     if now - State.LastUpgrade >= Config.UpgradeInterval then
         State.LastUpgrade = now
-        if opt.AutoUpgrade then Progress.UpgradeNow() end
-        if opt.AutoRebirth then Progress.RebirthNow() end
-        if opt.AutoBuyTool then Progress.BuyBestTool() end
-        if opt.AutoTrain then Progress.StartTraining() end
+        if opt.AutoUpgrade then xDTaraZ.Progress.UpgradeNow() end
+        if opt.AutoRebirth then xDTaraZ.Progress.RebirthNow() end
+        if opt.AutoBuyTool then xDTaraZ.Progress.BuyBestTool() end
+        if opt.AutoTrain then xDTaraZ.Progress.StartTraining() end
     end
 
     if opt.AutoClaim and now - State.LastClaim >= Config.ClaimInterval then
         State.LastClaim = now
-        Claim.All()
+        xDTaraZ.Claim.All()
     end
 end
 
-function Scheduler.Boot()
-    Movement.Bind()
+function xDTaraZ.Scheduler.Boot()
+    xDTaraZ.Movement.Bind()
     task.spawn(function()
         while State.Alive do
             if not State.Busy then
                 State.Busy = true
-                Util.Try(Scheduler.Step)
+                xDTaraZ.Util.Try(xDTaraZ.Scheduler.Step)
                 State.Busy = false
             end
             task.wait(Config.TickDelay)
@@ -535,13 +532,13 @@ function Scheduler.Boot()
     end)
 end
 
-function Scheduler.Stop()
+function xDTaraZ.Scheduler.Stop()
     State.Alive = false
     State.Opt.AutoLoot = false
     for _, conn in ipairs(State.Conns) do conn:Disconnect() end
     table.clear(State.Conns)
-    if State.Opt.Noclip then Movement.RestoreCollision() end
-    if State.Opt.Speed then Util.Try(Movement.ResetSpeed) end
+    if State.Opt.Noclip then xDTaraZ.Movement.RestoreCollision() end
+    if State.Opt.Speed then xDTaraZ.Util.Try(xDTaraZ.Movement.ResetSpeed) end
 end
 
 local function BuildInterface()
@@ -550,9 +547,9 @@ local function BuildInterface()
     local T = function(en, th) return Library:T(en, th) end
     local opt = State.Opt
 
-    local rarityNames = Util.RarityNames()
+    local rarityNames = xDTaraZ.Util.RarityNames()
     local keepValues = table.clone(rarityNames)
-    for _, name in ipairs(Util.MutationNames()) do keepValues[#keepValues + 1] = name end
+    for _, name in ipairs(xDTaraZ.Util.MutationNames()) do keepValues[#keepValues + 1] = name end
 
     local function Notify(text)
         Library:Notify("Open Sea For Animals", text, 4)
@@ -602,7 +599,7 @@ local function BuildInterface()
         local lootBox = mainTab:AddLeftGroupbox(T("Sea Loot", "เก็บของในทะเล"))
         Toggle(lootBox, "AutoLoot", T("Auto Loot", "เก็บของอัตโนมัติ"),
             T("Collects the best eggs and brainrots from every wave without leaving your base", "เก็บไข่และ brainrot ที่ดีที่สุดทุกคลื่น โดยไม่ต้องออกจากฐาน"),
-            Loot.SetEnabled)
+            xDTaraZ.Loot.SetEnabled)
         lootBox:AddButton({ Text = T("Loot Once", "เก็บหนึ่งรอบ"), Style = "Primary", Func = Request("LootOnce") })
         MultiSelect(lootBox, "LootKeep", T("Only Collect", "เก็บเฉพาะ"),
             T("Leave empty to always take the best item. Otherwise only these rarities or mutations are collected", "เว้นว่าง = เอาชิ้นดีสุดเสมอ ถ้าเลือกไว้จะเก็บเฉพาะ rarity หรือ mutation ที่เลือก"),
@@ -692,7 +689,7 @@ local function BuildInterface()
         })
         Toggle(moveBox, "InfJump", T("Infinite Jump", "กระโดดไม่จำกัด"))
         Toggle(moveBox, "Noclip", T("Noclip", "ทะลุวัตถุ"), nil, function(value)
-            if not value then Movement.RestoreCollision() end
+            if not value then xDTaraZ.Movement.RestoreCollision() end
         end)
 
         local settingsTab = window:AddSettingsTab()
@@ -708,7 +705,7 @@ local function BuildInterface()
         end)
     end
 
-    Library:OnUnload(Scheduler.Stop)
+    Library:OnUnload(xDTaraZ.Scheduler.Stop)
     getgenv().OpenSeaUnload = function()
         Library:Unload()
     end
@@ -722,7 +719,7 @@ local function BuildInterface()
         Theme = "Overworld",
         OnUnlocked = function()
             BuildTabs()
-            Scheduler.Boot()
+            xDTaraZ.Scheduler.Boot()
             Notify("Loaded")
             Library:LoadAutoloadConfig()
         end,

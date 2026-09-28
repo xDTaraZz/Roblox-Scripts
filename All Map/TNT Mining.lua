@@ -187,10 +187,9 @@ function xDTaraZ:AreaModel(areaName)
 end
 
 xDTaraZ.Mine = {}
-local Mine = xDTaraZ.Mine
 
 ---@return string  best owned area for current damage
-function Mine.PickArea(session)
+function xDTaraZ.Mine.PickArea(session)
     local picked = State.Opt.MineArea
     if picked ~= "Best" and session.OwnedAreas[picked] then return picked end
 
@@ -204,7 +203,7 @@ function Mine.PickArea(session)
 end
 
 ---@return boolean  mine loaded
-function Mine.Enter(areaName)
+function xDTaraZ.Mine.Enter(areaName)
     local area = xDTaraZ:AreaModel(areaName)
     if not area then
         GameLib.AreaRenderer.RenderArea(areaName)
@@ -227,7 +226,7 @@ function Mine.Enter(areaName)
     return false
 end
 
-function Mine.BlockValue(block, shardValue)
+function xDTaraZ.Mine.BlockValue(block, shardValue)
     if block.BlockType == "EggShard" then return shardValue end
     local info = GameLib.Blocks[block.BlockType]
     return info and info.SellValue or 0
@@ -235,7 +234,7 @@ end
 
 ---@param count number  max spots
 ---@return Vector3[]    best first, no overlap
-function Mine.FindBatch(session, count)
+function xDTaraZ.Mine.FindBatch(session, count)
     local mineState = GameLib.MineState
     local damage = session.Damage
     local radius = session:GetBombExplosionRadius(session.EquippedBomb, session.EnchantedBombs > 0)
@@ -263,7 +262,7 @@ function Mine.FindBatch(session, count)
     for _, block in pairs(mineState.GetBlocks()) do
         if not block.Alive then continue end
 
-        local worth = Mine.BlockValue(block, shardValue) * mathMin(1, damage / mathMax(block.Health, 1))
+        local worth = xDTaraZ.Mine.BlockValue(block, shardValue) * mathMin(1, damage / mathMax(block.Health, 1))
         if worth > 0 then
             local gx, gy, gz = block.GridX, block.GridY, block.GridZ
             for i = 1, #offsets do
@@ -305,7 +304,7 @@ function Mine.FindBatch(session, count)
 end
 
 ---@return string?  nil if rejected
-function Mine.WaitServerId(bomb)
+function xDTaraZ.Mine.WaitServerId(bomb)
     local giveUp = os.clock() + Config.IdConfirmTimeout
     while os.clock() < giveUp and not bomb.IsDestroyed do
         if not tostring(bomb.Id):match("^P") then return bomb.Id end
@@ -314,7 +313,7 @@ function Mine.WaitServerId(bomb)
 end
 
 ---@return number  drops collected
-function Mine.Collect(session)
+function xDTaraZ.Mine.Collect(session)
     local folder = Workspace:FindFirstChild("ClientCollectibleBlocks")
     if not folder then return 0 end
 
@@ -332,7 +331,7 @@ function Mine.Collect(session)
     return got
 end
 
-function Mine.Sell(session)
+function xDTaraZ.Mine.Sell(session)
     local before = session.Money
     session:SellBlocks(nil)
 
@@ -342,7 +341,7 @@ function Mine.Sell(session)
 end
 
 ---@return number  money per minute
-function Mine.EarnRate()
+function xDTaraZ.Mine.EarnRate()
     local log, cutoff = State.EarnLog, os.clock() - Config.RateWindow
     while log[1] and log[1][1] < cutoff do
         table.remove(log, 1)
@@ -353,7 +352,7 @@ function Mine.EarnRate()
     return total * 60 / Config.RateWindow
 end
 
-function Mine.ScanSecrets()
+function xDTaraZ.Mine.ScanSecrets()
     for _, block in pairs(GameLib.MineState.GetBlocks()) do
         local info = GameLib.Blocks[block.BlockType]
         local id = block.CollectibleId
@@ -364,13 +363,13 @@ function Mine.ScanSecrets()
     end
 end
 
-function Mine.Cycle()
+function xDTaraZ.Mine.Cycle()
     local session = xDTaraZ:Session()
-    local areaName = Mine.PickArea(session)
+    local areaName = xDTaraZ.Mine.PickArea(session)
 
     if session:GetMineAreaName() ~= areaName or GameLib.MineState.GetAreaName() ~= areaName then
         State.Status = "Entering " .. areaName
-        if not Mine.Enter(areaName) then
+        if not xDTaraZ.Mine.Enter(areaName) then
             State.Status = "Could not enter " .. areaName
             return
         end
@@ -378,7 +377,7 @@ function Mine.Cycle()
 
     if State.NeedRefill or session.HeldBombs < session.MaxActiveBombs then
         State.NeedRefill = false
-        Mine.Collect(session)
+        xDTaraZ.Mine.Collect(session)
         session:LeaveMine()
     end
 
@@ -387,7 +386,7 @@ function Mine.Cycle()
     end
 
     State.Status = "Bombing " .. areaName
-    local placed = Mine.PlaceBatch(session)
+    local placed = xDTaraZ.Mine.PlaceBatch(session)
     if #placed == 0 then
         State.Status = "Resetting mine run"
         session:LeaveMine()
@@ -396,7 +395,7 @@ function Mine.Cycle()
     end
 
     for _, bomb in ipairs(placed) do
-        local serverId = Mine.WaitServerId(bomb)
+        local serverId = xDTaraZ.Mine.WaitServerId(bomb)
         if serverId then
             session:IgniteBomb(serverId)
             State.Bombs += 1
@@ -405,15 +404,15 @@ function Mine.Cycle()
         end
     end
 
-    Mine.WaitExploded(placed)
-    Mine.Collect(session)
-    if State.Opt.AutoSell then Mine.Sell(session) end
+    xDTaraZ.Mine.WaitExploded(placed)
+    xDTaraZ.Mine.Collect(session)
+    if State.Opt.AutoSell then xDTaraZ.Mine.Sell(session) end
 end
 
 ---@return table[]  placed bombs
-function Mine.PlaceBatch(session)
+function xDTaraZ.Mine.PlaceBatch(session)
     local placed = {}
-    for _, pos in ipairs(Mine.FindBatch(session, mathMin(session.HeldBombs, session.MaxActiveBombs))) do
+    for _, pos in ipairs(xDTaraZ.Mine.FindBatch(session, mathMin(session.HeldBombs, session.MaxActiveBombs))) do
         local reply = session:PlaceBomb(cframeNew(pos))
         local bomb = reply and reply.Success and session.ActiveBombs[reply.Id]
         if not bomb then break end
@@ -422,7 +421,7 @@ function Mine.PlaceBatch(session)
     return placed
 end
 
-function Mine.WaitExploded(bombs)
+function xDTaraZ.Mine.WaitExploded(bombs)
     local giveUp = os.clock() + Config.ExplodeTimeout
     local function anyLeft()
         for _, bomb in ipairs(bombs) do
@@ -438,18 +437,17 @@ function Mine.WaitExploded(bombs)
 end
 
 xDTaraZ.Progress = {}
-local Progress = xDTaraZ.Progress
 
-function Progress.Click()
+function xDTaraZ.Progress.Click()
     local reply = xDTaraZ:Invoke("ApplyClicks", { Config.ClicksPerBatch })
     if not (reply and reply.Success) then return end
     xDTaraZ:Session():ApplyDataUpdate({ Damage = reply.Damage, Level = reply.Level })
 end
 
-function Progress.StartClicking()
+function xDTaraZ.Progress.StartClicking()
     task.spawn(function()
         while State.Alive and State.Opt.AutoClick do
-            local ok, err = pcall(Progress.Click)
+            local ok, err = pcall(xDTaraZ.Progress.Click)
             if not ok then warn("[TNTMining] click:", err) end
             task.wait(Config.ClickInterval)
         end
@@ -457,14 +455,14 @@ function Progress.StartClicking()
 end
 
 ---@return boolean  rebirth sent
-function Progress.Rebirth()
+function xDTaraZ.Progress.Rebirth()
     local session = xDTaraZ:Session()
     if session.Level < GameLib.Rebirth.GetRebirthLevelRequirement(session.Rebirths) then return false end
     session:PerformRebirth()
     return true
 end
 
-function Progress.BuyBestBomb()
+function xDTaraZ.Progress.BuyBestBomb()
     local session = xDTaraZ:Session()
     local target
     for _, name in ipairs(xDTaraZ.BombOrder) do
@@ -481,19 +479,19 @@ function Progress.BuyBestBomb()
     end
 end
 
-function Progress.BuyUpgrades()
+function xDTaraZ.Progress.BuyUpgrades()
     local session = xDTaraZ:Session()
     for _, name in ipairs(xDTaraZ.UpgradeNames) do
         if State.Opt.Upgrades[name] then session:BuyUpgrade(name) end
     end
 end
 
-function Progress.BuyLuck()
+function xDTaraZ.Progress.BuyLuck()
     local session = xDTaraZ:Session()
-    session:BuyUpgrade("MineLuck", Mine.PickArea(session))
+    session:BuyUpgrade("MineLuck", xDTaraZ.Mine.PickArea(session))
 end
 
-function Progress.BuyNextArea()
+function xDTaraZ.Progress.BuyNextArea()
     local session = xDTaraZ:Session()
     for _, name in ipairs(xDTaraZ.AreaOrder) do
         if not session.OwnedAreas[name] then
@@ -504,9 +502,8 @@ function Progress.BuyNextArea()
 end
 
 xDTaraZ.Pets = {}
-local Pets = xDTaraZ.Pets
 
-function Pets.Hatch()
+function xDTaraZ.Pets.Hatch()
     local session = xDTaraZ:Session()
     local egg
     for _, name in ipairs(xDTaraZ.AreaOrder) do
@@ -517,7 +514,7 @@ function Pets.Hatch()
 end
 
 ---@return number  pets sold
-function Pets.SellExtras()
+function xDTaraZ.Pets.SellExtras()
     local session = xDTaraZ:Session()
     local keepRarity = State.Opt.KeepPetRarities
 
@@ -594,98 +591,97 @@ function xDTaraZ.Movement.Bind()
 end
 
 xDTaraZ.Scheduler = {}
-local Scheduler = xDTaraZ.Scheduler
 
-Scheduler.RequestHandlers = {
+xDTaraZ.Scheduler.RequestHandlers = {
     Speed = xDTaraZ.Movement.Apply,
-    BombNow = Progress.BuyBestBomb,
-    UpgradeNow = Progress.BuyUpgrades,
-    AreaNow = Progress.BuyNextArea,
-    LuckNow = Progress.BuyLuck,
-    HatchNow = Pets.Hatch,
+    BombNow = xDTaraZ.Progress.BuyBestBomb,
+    UpgradeNow = xDTaraZ.Progress.BuyUpgrades,
+    AreaNow = xDTaraZ.Progress.BuyNextArea,
+    LuckNow = xDTaraZ.Progress.BuyLuck,
+    HatchNow = xDTaraZ.Pets.Hatch,
     ClaimNow = xDTaraZ.Claim.All,
 
     SellNow = function()
         local session = xDTaraZ:Session()
-        Mine.Collect(session)
-        Mine.Sell(session)
+        xDTaraZ.Mine.Collect(session)
+        xDTaraZ.Mine.Sell(session)
         xDTaraZ:Notify("Sold all blocks")
     end,
     RebirthNow = function()
-        xDTaraZ:Notify(Progress.Rebirth() and "Rebirthed" or "Level too low to rebirth")
+        xDTaraZ:Notify(xDTaraZ.Progress.Rebirth() and "Rebirthed" or "Level too low to rebirth")
     end,
     EquipPetsNow = function()
         xDTaraZ:Session():EquipBestPets()
     end,
     SellPetsNow = function()
-        xDTaraZ:Notify(("Sold %d pets"):format(Pets.SellExtras()))
+        xDTaraZ:Notify(("Sold %d pets"):format(xDTaraZ.Pets.SellExtras()))
     end,
     CollectNow = function()
-        xDTaraZ:Notify(("Collected %d drops"):format(Mine.Collect(xDTaraZ:Session())))
+        xDTaraZ:Notify(("Collected %d drops"):format(xDTaraZ.Mine.Collect(xDTaraZ:Session())))
     end,
 }
 
-function Scheduler.Run(fn)
+function xDTaraZ.Scheduler.Run(fn)
     local ok, err = pcall(fn)
     if not ok then warn("[TNTMining]", err) end
 end
 
 ---@param key string  State field holding last run time
-function Scheduler.Every(key, interval, fn)
+function xDTaraZ.Scheduler.Every(key, interval, fn)
     local now = os.clock()
     if now - State[key] < interval then return end
     State[key] = now
-    Scheduler.Run(fn)
+    xDTaraZ.Scheduler.Run(fn)
 end
 
-function Scheduler.Summarize()
+function xDTaraZ.Scheduler.Summarize()
     local session = xDTaraZ:Session()
     local fmt = xDTaraZ.Format
     State.Summary = ("Level %d · Rebirth %d · Damage %s\nMoney %s · Shards %d\nMoney/min %s"):format(
         session.Level, session.Rebirths, fmt(session.Damage),
         fmt(session.Money), session.EggShards,
-        fmt(Mine.EarnRate()))
+        fmt(xDTaraZ.Mine.EarnRate()))
 end
 
-function Scheduler.Purchases()
+function xDTaraZ.Scheduler.Purchases()
     local opt = State.Opt
-    if opt.AutoBomb then Progress.BuyBestBomb() end
-    if opt.AutoUpgrade then Progress.BuyUpgrades() end
-    if opt.AutoArea then Progress.BuyNextArea() end
-    if opt.AutoLuck then Progress.BuyLuck() end
+    if opt.AutoBomb then xDTaraZ.Progress.BuyBestBomb() end
+    if opt.AutoUpgrade then xDTaraZ.Progress.BuyUpgrades() end
+    if opt.AutoArea then xDTaraZ.Progress.BuyNextArea() end
+    if opt.AutoLuck then xDTaraZ.Progress.BuyLuck() end
     if opt.AutoEquipPets then xDTaraZ:Session():EquipBestPets() end
-    if opt.AutoSellPets then Pets.SellExtras() end
-    if opt.SecretAlert and GameLib.MineState.IsLoaded() then Mine.ScanSecrets() end
+    if opt.AutoSellPets then xDTaraZ.Pets.SellExtras() end
+    if opt.SecretAlert and GameLib.MineState.IsLoaded() then xDTaraZ.Mine.ScanSecrets() end
 end
 
-function Scheduler.Step()
+function xDTaraZ.Scheduler.Step()
     local opt = State.Opt
-    Scheduler.Run(Scheduler.Summarize)
+    xDTaraZ.Scheduler.Run(xDTaraZ.Scheduler.Summarize)
 
-    for name, handler in pairs(Scheduler.RequestHandlers) do
+    for name, handler in pairs(xDTaraZ.Scheduler.RequestHandlers) do
         if State.Requests[name] then
             State.Requests[name] = nil
-            Scheduler.Run(handler)
+            xDTaraZ.Scheduler.Run(handler)
         end
     end
 
-    if opt.AutoRebirth then Scheduler.Run(Progress.Rebirth) end
-    Scheduler.Every("LastPurchase", Config.PurchaseInterval, Scheduler.Purchases)
-    if opt.AutoHatch then Scheduler.Every("LastHatch", Config.HatchInterval, Pets.Hatch) end
-    if opt.AutoClaim then Scheduler.Every("LastClaim", Config.ClaimInterval, xDTaraZ.Claim.All) end
+    if opt.AutoRebirth then xDTaraZ.Scheduler.Run(xDTaraZ.Progress.Rebirth) end
+    xDTaraZ.Scheduler.Every("LastPurchase", Config.PurchaseInterval, xDTaraZ.Scheduler.Purchases)
+    if opt.AutoHatch then xDTaraZ.Scheduler.Every("LastHatch", Config.HatchInterval, xDTaraZ.Pets.Hatch) end
+    if opt.AutoClaim then xDTaraZ.Scheduler.Every("LastClaim", Config.ClaimInterval, xDTaraZ.Claim.All) end
 
     if opt.AutoMine then
-        Scheduler.Run(Mine.Cycle)
+        xDTaraZ.Scheduler.Run(xDTaraZ.Mine.Cycle)
         return
     end
 
     State.Status = "Idle"
     if opt.AutoCollect then
-        Scheduler.Run(function() Mine.Collect(xDTaraZ:Session()) end)
+        xDTaraZ.Scheduler.Run(function() xDTaraZ.Mine.Collect(xDTaraZ:Session()) end)
     end
 end
 
-function Scheduler.Boot()
+function xDTaraZ.Scheduler.Boot()
     xDTaraZ.Movement.Bind()
     xDTaraZ.Client.Bind()
 
@@ -693,7 +689,7 @@ function Scheduler.Boot()
         while State.Alive do
             if not State.Busy then
                 State.Busy = true
-                Scheduler.Step()
+                xDTaraZ.Scheduler.Step()
                 State.Busy = false
             end
             task.wait(Config.TickDelay)
@@ -701,7 +697,7 @@ function Scheduler.Boot()
     end)
 end
 
-function Scheduler.Stop()
+function xDTaraZ.Scheduler.Stop()
     State.Alive = false
     State.Opt.AutoClick = false
 

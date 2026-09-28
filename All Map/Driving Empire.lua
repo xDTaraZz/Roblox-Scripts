@@ -128,11 +128,8 @@ local State = xDTaraZ.State
 for _, name in ipairs({ "Util", "Player", "Vehicle", "Jobs", "Atm", "Drive", "Rewards", "Teleport", "Esp", "Movement", "Session", "Scheduler" }) do
     xDTaraZ[name] = {}
 end
-local Util, Player, Vehicle, Jobs = xDTaraZ.Util, xDTaraZ.Player, xDTaraZ.Vehicle, xDTaraZ.Jobs
-local Atm, Drive, Rewards, Teleport = xDTaraZ.Atm, xDTaraZ.Drive, xDTaraZ.Rewards, xDTaraZ.Teleport
-local Esp, Movement, Session, Scheduler = xDTaraZ.Esp, xDTaraZ.Movement, xDTaraZ.Session, xDTaraZ.Scheduler
 
-function Util.Try(fn, ...)
+function xDTaraZ.Util.Try(fn, ...)
     local ok, err = pcall(fn, ...)
     if not ok then
         warn("[Driving Empire]", err)
@@ -140,7 +137,7 @@ function Util.Try(fn, ...)
     return ok, err
 end
 
-function Util.HttpGet(url)
+function xDTaraZ.Util.HttpGet(url)
     local ok, body = pcall(game.HttpGet, game, url)
     if ok and type(body) == "string" then
         return body
@@ -156,26 +153,26 @@ function Util.HttpGet(url)
     return response.Body
 end
 
-function Util.GuiRoot()
+function xDTaraZ.Util.GuiRoot()
     if gethui then
         return gethui()
     end
     return game:GetService("CoreGui")
 end
 
-function Util.Stats()
+function xDTaraZ.Util.Stats()
     if not State.Stats or not State.Stats.Parent then
         State.Stats = Data.GetLoadedStatsFolder(LocalPlayer)
     end
     return State.Stats
 end
 
-function Util.Cash()
-    local stats = Util.Stats()
+function xDTaraZ.Util.Cash()
+    local stats = xDTaraZ.Util.Stats()
     return stats and stats.Cash.Value or 0
 end
 
-function Util.Commas(number)
+function xDTaraZ.Util.Commas(number)
     local text = tostring(math.floor(number))
     repeat
         local count
@@ -184,30 +181,30 @@ function Util.Commas(number)
     return text
 end
 
-function Player.Character()
+function xDTaraZ.Player.Character()
     local character = LocalPlayer.Character
     if character and character.Parent and character:FindFirstChild("HumanoidRootPart") then
         return character
     end
 end
 
-function Player.Humanoid()
-    local character = Player.Character()
+function xDTaraZ.Player.Humanoid()
+    local character = xDTaraZ.Player.Character()
     return character and character:FindFirstChildOfClass("Humanoid")
 end
 
-function Player.Root()
-    local character = Player.Character()
+function xDTaraZ.Player.Root()
+    local character = xDTaraZ.Player.Character()
     return character and character.HumanoidRootPart
 end
 
-function Player.TeleportTo(cframe)
-    local root = Player.Root()
+function xDTaraZ.Player.TeleportTo(cframe)
+    local root = xDTaraZ.Player.Root()
     if not root then
         return false
     end
-    if Vehicle.IsSeated() then
-        Vehicle.Despawn()
+    if xDTaraZ.Vehicle.IsSeated() then
+        xDTaraZ.Vehicle.Despawn()
         task.wait(1)
     end
     root.CFrame = cframe
@@ -215,19 +212,19 @@ function Player.TeleportTo(cframe)
     return true
 end
 
-function Vehicle.Current()
+function xDTaraZ.Vehicle.Current()
     local vehicle = VehicleController.getVehicle()
     return vehicle and vehicle.Object
 end
 
-function Vehicle.IsSeated()
-    local humanoid = Player.Humanoid()
+function xDTaraZ.Vehicle.IsSeated()
+    local humanoid = xDTaraZ.Player.Humanoid()
     return humanoid ~= nil and humanoid.SeatPart ~= nil
 end
 
-function Vehicle.Owned()
+function xDTaraZ.Vehicle.Owned()
     local owned = {}
-    local stats = Util.Stats()
+    local stats = xDTaraZ.Util.Stats()
     if not stats then
         return owned
     end
@@ -240,7 +237,7 @@ function Vehicle.Owned()
     return owned
 end
 
-function Vehicle.Spawn(vehicleId)
+function xDTaraZ.Vehicle.Spawn(vehicleId)
     if not vehicleId then
         return nil
     end
@@ -248,19 +245,19 @@ function Vehicle.Spawn(vehicleId)
     local deadline = os.clock() + 8
     repeat
         task.wait(0.25)
-    until Vehicle.Current() or os.clock() > deadline
-    return Vehicle.Current()
+    until xDTaraZ.Vehicle.Current() or os.clock() > deadline
+    return xDTaraZ.Vehicle.Current()
 end
 
-function Vehicle.Despawn()
+function xDTaraZ.Vehicle.Despawn()
     RemoteFolder.VehicleEvent:FireServer("Despawn")
 end
 
 ---@return boolean  moved the car, or the character when on foot
-function Vehicle.TeleportTo(cframe)
-    local car = Vehicle.Current()
-    if not car or not Vehicle.IsSeated() then
-        local root = Player.Root()
+function xDTaraZ.Vehicle.TeleportTo(cframe)
+    local car = xDTaraZ.Vehicle.Current()
+    if not car or not xDTaraZ.Vehicle.IsSeated() then
+        local root = xDTaraZ.Player.Root()
         if root then
             root.CFrame = cframe
         end
@@ -274,10 +271,10 @@ function Vehicle.TeleportTo(cframe)
     return true
 end
 
-function Vehicle.ApplySpeed()
-    local car = Vehicle.Current()
+function xDTaraZ.Vehicle.ApplySpeed()
+    local car = xDTaraZ.Vehicle.Current()
     local boost = State.Opt.CarSpeed
-    if not car or not car.PrimaryPart or boost <= 0 or not Vehicle.IsSeated() then
+    if not car or not car.PrimaryPart or boost <= 0 or not xDTaraZ.Vehicle.IsSeated() then
         return
     end
     if not UserInputService:IsKeyDown(Enum.KeyCode.W) then
@@ -294,29 +291,29 @@ function Vehicle.ApplySpeed()
     root.AssemblyLinearVelocity = flat.Unit * target + Vector3.new(0, velocity.Y, 0)
 end
 
-function Jobs.Current()
+function xDTaraZ.Jobs.Current()
     return LocalPlayer:GetAttribute("JobId")
 end
 
-function Jobs.Start(jobId)
-    if Jobs.Current() == jobId then
+function xDTaraZ.Jobs.Start(jobId)
+    if xDTaraZ.Jobs.Current() == jobId then
         return true
     end
     JobsController.RequestStartJobSession(jobId, "jobPad")
     local deadline = os.clock() + 4
     repeat
         task.wait(0.2)
-    until Jobs.Current() == jobId or os.clock() > deadline
-    return Jobs.Current() == jobId
+    until xDTaraZ.Jobs.Current() == jobId or os.clock() > deadline
+    return xDTaraZ.Jobs.Current() == jobId
 end
 
-function Jobs.Leave()
-    if Jobs.Current() then
+function xDTaraZ.Jobs.Leave()
+    if xDTaraZ.Jobs.Current() then
         JobsController.RequestEndJobSession("jobPad")
     end
 end
 
-function Atm.LoadCache()
+function xDTaraZ.Atm.LoadCache()
     if not (isfile and readfile) or not isfile(Config.SpawnerCacheFile) then
         return
     end
@@ -329,7 +326,7 @@ function Atm.LoadCache()
     end
 end
 
-function Atm.SaveCache()
+function xDTaraZ.Atm.SaveCache()
     local encoded = {}
     for id, position in pairs(State.Spawners) do
         encoded[id] = { position.X, position.Y, position.Z }
@@ -343,7 +340,7 @@ function Atm.SaveCache()
     writefile(Config.SpawnerCacheFile, HttpService:JSONEncode(encoded))
 end
 
-function Atm.SpawnerCount()
+function xDTaraZ.Atm.SpawnerCount()
     local count = 0
     for _ in pairs(State.Spawners) do
         count += 1
@@ -360,19 +357,19 @@ local function RecordStreamedSpawners()
     end
 end
 
-function Atm.Sweep()
-    local root = Player.Root()
+function xDTaraZ.Atm.Sweep()
+    local root = xDTaraZ.Player.Root()
     if not root then
         return 0
     end
-    if Vehicle.IsSeated() then
-        Vehicle.Despawn()
+    if xDTaraZ.Vehicle.IsSeated() then
+        xDTaraZ.Vehicle.Despawn()
         task.wait(1)
     end
     for x = Config.SweepMin.X, Config.SweepMax.X, Config.SweepStep do
         for z = Config.SweepMin.Z, Config.SweepMax.Z, Config.SweepStep do
             if not State.Alive then
-                return Atm.SpawnerCount()
+                return xDTaraZ.Atm.SpawnerCount()
             end
             root.CFrame = CFrame.new(x, Config.SweepHeight, z)
             root.AssemblyLinearVelocity = Vector3.zero
@@ -380,8 +377,8 @@ function Atm.Sweep()
             RecordStreamedSpawners()
         end
     end
-    Atm.SaveCache()
-    return Atm.SpawnerCount()
+    xDTaraZ.Atm.SaveCache()
+    return xDTaraZ.Atm.SpawnerCount()
 end
 
 local function FindAtm(spawnerId)
@@ -392,7 +389,7 @@ local function FindAtm(spawnerId)
     end
 end
 
-function Atm.IsAvailable(atm)
+function xDTaraZ.Atm.IsAvailable(atm)
     if not atm or atm:GetAttribute("State") ~= "Normal" then
         return false
     end
@@ -400,7 +397,7 @@ function Atm.IsAvailable(atm)
     return engaging == nil or engaging == LocalPlayer.UserId
 end
 
-function Atm.CopNearby(position)
+function xDTaraZ.Atm.CopNearby(position)
     for _, other in ipairs(Players:GetPlayers()) do
         local character = other ~= LocalPlayer and other.Character
         if character and other:GetAttribute("JobId") == "Security" then
@@ -421,14 +418,14 @@ local function WaitForDebounce(character)
 end
 
 ---@return boolean, string?  robbed, else the server's reason
-function Atm.Bust(atm)
-    local character = Player.Character()
-    if not character or not Atm.IsAvailable(atm) then
+function xDTaraZ.Atm.Bust(atm)
+    local character = xDTaraZ.Player.Character()
+    if not character or not xDTaraZ.Atm.IsAvailable(atm) then
         return false, "Unavailable"
     end
     local attachment = atm:FindFirstChild("PromptAttachment")
     local target = attachment and attachment.WorldPosition or atm:GetPivot().Position
-    if State.Opt.AvoidCops and Atm.CopNearby(target) then
+    if State.Opt.AvoidCops and xDTaraZ.Atm.CopNearby(target) then
         return false, "CopNearby"
     end
     WaitForDebounce(character)
@@ -452,7 +449,7 @@ function Atm.Bust(atm)
     return true
 end
 
-function Atm.DropOffPositions()
+function xDTaraZ.Atm.DropOffPositions()
     local positions = {}
     for _, point in ipairs(CollectionService:GetTagged("CriminalDropOffPoint")) do
         table.insert(positions, point:GetPivot().Position)
@@ -463,10 +460,10 @@ function Atm.DropOffPositions()
     return positions
 end
 
-function Atm.NearestDropOff()
-    local root = Player.Root()
+function xDTaraZ.Atm.NearestDropOff()
+    local root = xDTaraZ.Player.Root()
     local best, bestDistance = nil, math.huge
-    for _, position in ipairs(Atm.DropOffPositions()) do
+    for _, position in ipairs(xDTaraZ.Atm.DropOffPositions()) do
         local distance = root and (position - root.Position).Magnitude or 0
         if distance < bestDistance then
             best, bestDistance = position, distance
@@ -475,46 +472,46 @@ function Atm.NearestDropOff()
     return best
 end
 
-function Atm.Crimes()
-    local character = Player.Character()
+function xDTaraZ.Atm.Crimes()
+    local character = xDTaraZ.Player.Character()
     return character and character:GetAttribute("CrimesCommitted") or 0
 end
 
-function Atm.CashOut()
-    if Atm.Crimes() < Config.CashOutCrimes then
+function xDTaraZ.Atm.CashOut()
+    if xDTaraZ.Atm.Crimes() < Config.CashOutCrimes then
         return false
     end
-    local target = Atm.NearestDropOff()
+    local target = xDTaraZ.Atm.NearestDropOff()
     if not target then
         return false
     end
-    local cashBefore = Util.Cash()
-    Player.TeleportTo(CFrame.new(target + Vector3.new(0, 4, Config.DropOffApproach)))
+    local cashBefore = xDTaraZ.Util.Cash()
+    xDTaraZ.Player.TeleportTo(CFrame.new(target + Vector3.new(0, 4, Config.DropOffApproach)))
     task.wait(1)
-    target = Atm.NearestDropOff()
-    Player.TeleportTo(CFrame.new(target + Vector3.new(0, 3, 0)))
+    target = xDTaraZ.Atm.NearestDropOff()
+    xDTaraZ.Player.TeleportTo(CFrame.new(target + Vector3.new(0, 3, 0)))
     local deadline = os.clock() + Config.CashOutWait
     repeat
         task.wait(0.25)
-    until Util.Cash() > cashBefore or os.clock() > deadline
-    local gained = Util.Cash() - cashBefore
+    until xDTaraZ.Util.Cash() > cashBefore or os.clock() > deadline
+    local gained = xDTaraZ.Util.Cash() - cashBefore
     State.AtmSession.CashedOut += math.max(0, gained)
     return gained > 0, gained
 end
 
-function Atm.RunPass()
-    if not Jobs.Start("Criminal") then
+function xDTaraZ.Atm.RunPass()
+    if not xDTaraZ.Jobs.Start("Criminal") then
         return 0
     end
-    if Atm.SpawnerCount() == 0 then
-        Atm.Sweep()
+    if xDTaraZ.Atm.SpawnerCount() == 0 then
+        xDTaraZ.Atm.Sweep()
     end
     local busted = 0
     for id, position in pairs(State.Spawners) do
         if not State.Opt.AtmFarm or not State.Alive then
             break
         end
-        Player.TeleportTo(CFrame.new(position + Vector3.new(0, 6, 0)))
+        xDTaraZ.Player.TeleportTo(CFrame.new(position + Vector3.new(0, 6, 0)))
         local atm
         local deadline = os.clock() + Config.StreamWait
         repeat
@@ -522,42 +519,42 @@ function Atm.RunPass()
             atm = FindAtm(id)
         until atm or os.clock() > deadline
         RecordStreamedSpawners()
-        if Atm.IsAvailable(atm) and Atm.Bust(atm) then
+        if xDTaraZ.Atm.IsAvailable(atm) and xDTaraZ.Atm.Bust(atm) then
             busted += 1
         end
-        local crimes = Atm.Crimes()
-        if crimes >= State.Opt.CashOutCrimes or (crimes >= Config.CashOutCrimes and Atm.WantedLeft() < Config.WantedSafety) then
-            Atm.CashOut()
+        local crimes = xDTaraZ.Atm.Crimes()
+        if crimes >= State.Opt.CashOutCrimes or (crimes >= Config.CashOutCrimes and xDTaraZ.Atm.WantedLeft() < Config.WantedSafety) then
+            xDTaraZ.Atm.CashOut()
         end
     end
     return busted
 end
 
-function Atm.WantedLeft()
-    local character = Player.Character()
+function xDTaraZ.Atm.WantedLeft()
+    local character = xDTaraZ.Player.Character()
     local expire = character and character:GetAttribute("CriminalExpireEpoch")
     return expire and expire - workspace:GetServerTimeNow() or math.huge
 end
 
-function Atm.FarmStep()
-    local busted = Atm.RunPass()
+function xDTaraZ.Atm.FarmStep()
+    local busted = xDTaraZ.Atm.RunPass()
     if not State.Opt.AtmFarm then
         return
     end
-    if Atm.Crimes() >= State.Opt.CashOutCrimes then
-        Atm.CashOut()
+    if xDTaraZ.Atm.Crimes() >= State.Opt.CashOutCrimes then
+        xDTaraZ.Atm.CashOut()
     end
-    if busted == 0 and State.Opt.HopWhenEmpty and Atm.Crimes() == 0 then
-        Session.Hop()
+    if busted == 0 and State.Opt.HopWhenEmpty and xDTaraZ.Atm.Crimes() == 0 then
+        xDTaraZ.Session.Hop()
     end
 end
 
-function Atm.NearestAvailable()
-    local root = Player.Root()
+function xDTaraZ.Atm.NearestAvailable()
+    local root = xDTaraZ.Player.Root()
     local best, bestDistance
     for _, spawner in ipairs(workspace.Game.Jobs.CriminalATMSpawners:GetChildren()) do
         local atm = spawner:FindFirstChild("CriminalATM")
-        if Atm.IsAvailable(atm) then
+        if xDTaraZ.Atm.IsAvailable(atm) then
             local distance = (spawner.Position - root.Position).Magnitude
             if not bestDistance or distance < bestDistance then
                 best, bestDistance = atm, distance
@@ -567,23 +564,23 @@ function Atm.NearestAvailable()
     return best
 end
 
-function Drive.Start()
+function xDTaraZ.Drive.Start()
     if State.DriveConn then
         return
     end
-    Jobs.Leave()
-    local car = Vehicle.Current()
-    if not car or not Vehicle.IsSeated() then
-        car = Vehicle.Spawn(State.Opt.DriveCar or Vehicle.Owned()[1])
+    xDTaraZ.Jobs.Leave()
+    local car = xDTaraZ.Vehicle.Current()
+    if not car or not xDTaraZ.Vehicle.IsSeated() then
+        car = xDTaraZ.Vehicle.Spawn(State.Opt.DriveCar or xDTaraZ.Vehicle.Owned()[1])
     end
     if not car then
         return false
     end
     task.wait(1)
-    Vehicle.TeleportTo(CFrame.new(Config.DriveCenter + Vector3.new(Config.DriveRadius, 4, 0)))
+    xDTaraZ.Vehicle.TeleportTo(CFrame.new(Config.DriveCenter + Vector3.new(Config.DriveRadius, 4, 0)))
     task.wait(1)
     State.DriveConn = RunService.Heartbeat:Connect(function()
-        local current = Vehicle.Current()
+        local current = xDTaraZ.Vehicle.Current()
         local root = current and current.PrimaryPart
         if not root then
             return
@@ -601,18 +598,18 @@ function Drive.Start()
     return true
 end
 
-function Drive.Stop()
+function xDTaraZ.Drive.Stop()
     if State.DriveConn then
         State.DriveConn:Disconnect()
         State.DriveConn = nil
     end
-    local car = Vehicle.Current()
+    local car = xDTaraZ.Vehicle.Current()
     if car and car.PrimaryPart then
         car.PrimaryPart.AssemblyLinearVelocity = Vector3.zero
     end
 end
 
-function Rewards.ClaimPlaytime()
+function xDTaraZ.Rewards.ClaimPlaytime()
     local ok, unclaimed = pcall(function()
         local pending = PlayRewardUtil.getUnclaimedRewards(LocalPlayer)
         if type(pending) == "table" and pending.expect then
@@ -632,35 +629,35 @@ function Rewards.ClaimPlaytime()
     return count
 end
 
-function Rewards.ClaimMisc()
+function xDTaraZ.Rewards.ClaimMisc()
     Remotes.fireServer("ClaimRewards")
     Remotes.fireServer("RaceLeaderboardClaimRewards")
 end
 
-function Rewards.Redeemed()
-    local stats = Util.Stats()
+function xDTaraZ.Rewards.Redeemed()
+    local stats = xDTaraZ.Util.Stats()
     local ok, decoded = pcall(HttpService.JSONDecode, HttpService, stats and stats.Codes.Value or "")
     return ok and type(decoded) == "table" and decoded or {}
 end
 
 ---@return number, number  new codes redeemed, cash gained
-function Rewards.RedeemCodes(codes)
-    local redeemedBefore = Rewards.Redeemed()
-    local cashBefore = Util.Cash()
+function xDTaraZ.Rewards.RedeemCodes(codes)
+    local redeemedBefore = xDTaraZ.Rewards.Redeemed()
+    local cashBefore = xDTaraZ.Util.Cash()
     local success = 0
     for _, code in ipairs(codes) do
         if not redeemedBefore[code] then
             RemoteFolder.Code:FireServer(code)
             task.wait(Config.CodeDelay)
-            if Rewards.Redeemed()[code] then
+            if xDTaraZ.Rewards.Redeemed()[code] then
                 success += 1
             end
         end
     end
-    return success, Util.Cash() - cashBefore
+    return success, xDTaraZ.Util.Cash() - cashBefore
 end
 
-function Teleport.Destinations()
+function xDTaraZ.Teleport.Destinations()
     local destinations = {}
     local names = {}
     local function Add(name, position)
@@ -672,7 +669,7 @@ function Teleport.Destinations()
     for name, position in pairs(Config.PlaceSeeds) do
         Add(name, position)
     end
-    for index, position in ipairs(Atm.DropOffPositions()) do
+    for index, position in ipairs(xDTaraZ.Atm.DropOffPositions()) do
         Add(("Criminal Drop-off %d"):format(index), position)
     end
     local heist = workspace.Game.Heists:FindFirstChild("BankHeist")
@@ -694,30 +691,30 @@ function Teleport.Destinations()
     return names, destinations
 end
 
-function Teleport.Go(position)
+function xDTaraZ.Teleport.Go(position)
     if not position then
         return
     end
     LocalPlayer:RequestStreamAroundAsync(position, 5)
-    Vehicle.TeleportTo(CFrame.new(position + Vector3.new(0, 5, 0)))
+    xDTaraZ.Vehicle.TeleportTo(CFrame.new(position + Vector3.new(0, 5, 0)))
 end
 
-function Teleport.ToPlayer(name)
+function xDTaraZ.Teleport.ToPlayer(name)
     local target = Players:FindFirstChild(name)
     local root = target and target.Character and target.Character:FindFirstChild("HumanoidRootPart")
     if root then
-        Teleport.Go(root.Position + Vector3.new(0, 0, 4))
+        xDTaraZ.Teleport.Go(root.Position + Vector3.new(0, 0, 4))
     end
 end
 
-function Movement.Step()
+function xDTaraZ.Movement.Step()
     local opt = State.Opt
-    local character = Player.Character()
-    local humanoid = Player.Humanoid()
+    local character = xDTaraZ.Player.Character()
+    local humanoid = xDTaraZ.Player.Humanoid()
     if not character or not humanoid then
         return
     end
-    if opt.SpeedEnabled and not Vehicle.IsSeated() then
+    if opt.SpeedEnabled and not xDTaraZ.Vehicle.IsSeated() then
         humanoid.WalkSpeed = opt.WalkSpeed
         humanoid.UseJumpPower = true
         humanoid.JumpPower = opt.JumpPower
@@ -729,18 +726,18 @@ function Movement.Step()
             end
         end
     end
-    Vehicle.ApplySpeed()
+    xDTaraZ.Vehicle.ApplySpeed()
 end
 
-function Movement.ResetSpeed()
-    local humanoid = Player.Humanoid()
+function xDTaraZ.Movement.ResetSpeed()
+    local humanoid = xDTaraZ.Player.Humanoid()
     if humanoid then
         humanoid.WalkSpeed = 16
         humanoid.JumpPower = 50
     end
 end
 
-function Movement.SetFullbright(enabled)
+function xDTaraZ.Movement.SetFullbright(enabled)
     if enabled then
         State.LightingBackup = State.LightingBackup or {
             Brightness = Lighting.Brightness,
@@ -762,12 +759,12 @@ function Movement.SetFullbright(enabled)
     end
 end
 
-function Movement.Bind()
+function xDTaraZ.Movement.Bind()
     table.insert(State.Conns, RunService.Stepped:Connect(function()
-        Util.Try(Movement.Step)
+        xDTaraZ.Util.Try(xDTaraZ.Movement.Step)
     end))
     table.insert(State.Conns, UserInputService.JumpRequest:Connect(function()
-        local humanoid = Player.Humanoid()
+        local humanoid = xDTaraZ.Player.Humanoid()
         if State.Opt.InfiniteJump and humanoid then
             humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
         end
@@ -790,13 +787,13 @@ local function EspMark(key, adornee, text, color)
     highlight.OutlineColor = color
     highlight.Adornee = adornee
     highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    highlight.Parent = Util.GuiRoot()
+    highlight.Parent = xDTaraZ.Util.GuiRoot()
     local billboard = Instance.new("BillboardGui")
     billboard.Size = UDim2.fromOffset(160, 28)
     billboard.StudsOffset = Vector3.new(0, 5, 0)
     billboard.AlwaysOnTop = true
     billboard.Adornee = adornee
-    billboard.Parent = Util.GuiRoot()
+    billboard.Parent = xDTaraZ.Util.GuiRoot()
     local label = Instance.new("TextLabel")
     label.Size = UDim2.fromScale(1, 1)
     label.BackgroundTransparency = 1
@@ -809,9 +806,9 @@ local function EspMark(key, adornee, text, color)
     State.EspObjects[key] = { Highlight = highlight, Billboard = billboard, Label = label }
 end
 
-function Esp.Refresh()
+function xDTaraZ.Esp.Refresh()
     local opt = State.Opt
-    local root = Player.Root()
+    local root = xDTaraZ.Player.Root()
     local alive = {}
     local function Distance(position)
         return root and math.floor((position - root.Position).Magnitude) or 0
@@ -819,7 +816,7 @@ function Esp.Refresh()
     if opt.EspAtm then
         for _, spawner in ipairs(workspace.Game.Jobs.CriminalATMSpawners:GetChildren()) do
             local atm = spawner:FindFirstChild("CriminalATM")
-            if Atm.IsAvailable(atm) then
+            if xDTaraZ.Atm.IsAvailable(atm) then
                 local key = "atm" .. tostring(spawner:GetAttribute("ComponentServerId"))
                 alive[key] = true
                 EspMark(key, atm, ("ATM %s · %dm"):format(tostring(atm:GetAttribute("Rarity")), Distance(spawner.Position)), Color3.fromRGB(90, 220, 120))
@@ -854,7 +851,7 @@ function Esp.Refresh()
     end
 end
 
-function Session.Bind()
+function xDTaraZ.Session.Bind()
     table.insert(State.Conns, LocalPlayer.Idled:Connect(function()
         if State.Opt.AntiAfk then
             VirtualUser:CaptureController()
@@ -870,8 +867,8 @@ function Session.Bind()
     end))
 end
 
-function Session.Hop()
-    local ok, body = pcall(Util.HttpGet, ("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100"):format(game.PlaceId))
+function xDTaraZ.Session.Hop()
+    local ok, body = pcall(xDTaraZ.Util.HttpGet, ("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100"):format(game.PlaceId))
     if not ok then
         return false
     end
@@ -889,36 +886,36 @@ function Session.Hop()
     return true
 end
 
-function Scheduler.Step()
+function xDTaraZ.Scheduler.Step()
     local opt = State.Opt
     local now = os.clock()
     if opt.AtmFarm then
-        Atm.FarmStep()
+        xDTaraZ.Atm.FarmStep()
     end
     if (opt.AutoPlaytime or opt.AutoClaimMisc) and now - State.LastReward > Config.RewardInterval then
         State.LastReward = now
         if opt.AutoPlaytime then
-            Rewards.ClaimPlaytime()
+            xDTaraZ.Rewards.ClaimPlaytime()
         end
         if opt.AutoClaimMisc then
-            Rewards.ClaimMisc()
+            xDTaraZ.Rewards.ClaimMisc()
         end
     end
     if now - State.LastEsp > Config.EspInterval then
         State.LastEsp = now
-        Esp.Refresh()
+        xDTaraZ.Esp.Refresh()
     end
 end
 
-function Scheduler.Boot()
-    Atm.LoadCache()
-    Movement.Bind()
-    Session.Bind()
+function xDTaraZ.Scheduler.Boot()
+    xDTaraZ.Atm.LoadCache()
+    xDTaraZ.Movement.Bind()
+    xDTaraZ.Session.Bind()
     task.spawn(function()
         while State.Alive do
             if not State.Busy then
                 State.Busy = true
-                Util.Try(Scheduler.Step)
+                xDTaraZ.Util.Try(xDTaraZ.Scheduler.Step)
                 State.Busy = false
             end
             task.wait(Config.TickDelay)
@@ -926,25 +923,25 @@ function Scheduler.Boot()
     end)
 end
 
-function Scheduler.Stop()
+function xDTaraZ.Scheduler.Stop()
     State.Alive = false
     for key in pairs(State.Opt) do
         if type(State.Opt[key]) == "boolean" and key ~= "AntiAfk" then
             State.Opt[key] = false
         end
     end
-    Drive.Stop()
-    Movement.ResetSpeed()
-    Movement.SetFullbright(false)
+    xDTaraZ.Drive.Stop()
+    xDTaraZ.Movement.ResetSpeed()
+    xDTaraZ.Movement.SetFullbright(false)
     for _, conn in ipairs(State.Conns) do
         conn:Disconnect()
     end
     table.clear(State.Conns)
-    Esp.Refresh()
+    xDTaraZ.Esp.Refresh()
 end
 
 local function BuildInterface()
-    local Library = loadstring(Util.HttpGet(Config.UiSource))()
+    local Library = loadstring(xDTaraZ.Util.HttpGet(Config.UiSource))()
     local T = function(en, th) return Library:T(en, th) end
     local opt = State.Opt
 
@@ -961,7 +958,7 @@ local function BuildInterface()
             Callback = function(value)
                 opt[key] = value
                 if onChange then
-                    Util.Try(onChange, value)
+                    xDTaraZ.Util.Try(onChange, value)
                 end
             end,
         })
@@ -980,7 +977,7 @@ local function BuildInterface()
 
     local function Spawn(action)
         return function()
-            task.spawn(Util.Try, action)
+            task.spawn(xDTaraZ.Util.Try, action)
         end
     end
 
@@ -1003,20 +1000,20 @@ local function BuildInterface()
         Toggle(atmBox, "AvoidCops", T("Avoid Police", "หลบตำรวจ"), T("Skips ATMs with police standing close", "ข้าม ATM ที่มีตำรวจอยู่ใกล้"))
         Slider(atmBox, "CashOutCrimes", T("Cash Out At Robberies", "ส่งเงินเมื่อปล้นครบ"), T("Banks the loot after this many robberies (higher = more risk)", "ส่งเงินหลังปล้นครบจำนวนนี้ (ยิ่งมากยิ่งเสี่ยง)"), 5, 30)
         atmBox:AddButton({ Text = T("Rob Nearest ATM", "ปล้น ATM ที่ใกล้ที่สุด"), Style = "Primary", Func = Spawn(function()
-            Jobs.Start("Criminal")
-            local atm = Atm.NearestAvailable()
+            xDTaraZ.Jobs.Start("Criminal")
+            local atm = xDTaraZ.Atm.NearestAvailable()
             if not atm then
                 Notify("No ATM nearby")
                 return
             end
-            local ok, reason = Atm.Bust(atm)
+            local ok, reason = xDTaraZ.Atm.Bust(atm)
             Notify(ok and "ATM robbed" or ("Failed: " .. tostring(reason)))
         end) }):AddButton({ Text = T("Cash Out Now", "ส่งเงินเดี๋ยวนี้"), Func = Spawn(function()
-            local ok, gained = Atm.CashOut()
-            Notify(ok and ("Cashed out $" .. Util.Commas(gained)) or "Need 5 stars first")
+            local ok, gained = xDTaraZ.Atm.CashOut()
+            Notify(ok and ("Cashed out $" .. xDTaraZ.Util.Commas(gained)) or "Need 5 stars first")
         end) })
         atmBox:AddButton({ Text = T("Scan Map For ATMs", "สแกนหา ATM ทั้งแมพ"), Func = Spawn(function()
-            Notify(("Found %d ATM spots"):format(Atm.Sweep()))
+            Notify(("Found %d ATM spots"):format(xDTaraZ.Atm.Sweep()))
         end) })
 
         local discordBox = FarmTab:AddRightGroupbox("Discord", "link")
@@ -1037,24 +1034,24 @@ local function BuildInterface()
             end,
         })
         jobBox:AddButton({ Text = T("Start Job", "เริ่มงาน"), Style = "Primary", Func = Spawn(function()
-            Notify(Jobs.Start(opt.JobPick or "Criminal") and "Job started" or "Could not start job")
-        end) }):AddButton({ Text = T("Quit Job", "ออกจากงาน"), Func = Spawn(Jobs.Leave) })
+            Notify(xDTaraZ.Jobs.Start(opt.JobPick or "Criminal") and "Job started" or "Could not start job")
+        end) }):AddButton({ Text = T("Quit Job", "ออกจากงาน"), Func = Spawn(xDTaraZ.Jobs.Leave) })
 
         local driveBox = FarmTab:AddRightGroupbox(T("Drive Farm", "ฟาร์มขับรถ"))
         Toggle(driveBox, "DriveFarm", T("Auto Drive", "ขับรถอัตโนมัติ"), T("Drives laps on its own for passive cash", "ขับวนเองเพื่อรับเงินจากการขับ"), function(value)
             if value then
-                if not Drive.Start() then
+                if not xDTaraZ.Drive.Start() then
                     Notify("No car to drive")
                 end
             else
-                Drive.Stop()
+                xDTaraZ.Drive.Stop()
             end
         end)
 
         local codeBox = RewardTab:AddLeftGroupbox(T("Codes", "โค้ด"))
         codeBox:AddButton({ Text = T("Redeem All Codes", "ใช้โค้ดทั้งหมด"), Style = "Primary", Func = Spawn(function()
-            local count, cash = Rewards.RedeemCodes(Config.Codes)
-            Notify(("Redeemed %d new codes (+$%s)"):format(count, Util.Commas(cash)))
+            local count, cash = xDTaraZ.Rewards.RedeemCodes(Config.Codes)
+            Notify(("Redeemed %d new codes (+$%s)"):format(count, xDTaraZ.Util.Commas(cash)))
         end) })
         codeBox:AddInput("Code", {
             Text = T("Custom Code", "ใส่โค้ดเอง"),
@@ -1066,7 +1063,7 @@ local function BuildInterface()
             end,
         })
         codeBox:AddButton({ Text = T("Redeem", "ใช้โค้ด"), Func = Spawn(function()
-            local count = Rewards.RedeemCodes({ opt.Code })
+            local count = xDTaraZ.Rewards.RedeemCodes({ opt.Code })
             Notify(count > 0 and "Code redeemed" or "Code invalid or already used")
         end) })
 
@@ -1074,12 +1071,12 @@ local function BuildInterface()
         Toggle(claimBox, "AutoPlaytime", T("Auto Playtime Rewards", "รับรางวัลเวลาเล่นอัตโนมัติ"), T("Claims cash, cars and packs as soon as they unlock", "รับเงิน รถ และแพ็กทันทีที่ปลดล็อก"))
         Toggle(claimBox, "AutoClaimMisc", T("Auto Claim Pending", "รับรางวัลค้างอัตโนมัติ"), T("Claims pending race and event rewards", "รับรางวัลแข่งและอีเวนต์ที่ค้างอยู่"))
         claimBox:AddButton({ Text = T("Claim All Now", "รับทั้งหมดเดี๋ยวนี้"), Style = "Primary", Func = Spawn(function()
-            local count = Rewards.ClaimPlaytime()
-            Rewards.ClaimMisc()
+            local count = xDTaraZ.Rewards.ClaimPlaytime()
+            xDTaraZ.Rewards.ClaimMisc()
             Notify(("Claimed %d playtime rewards"):format(count))
         end) })
 
-        local owned = Vehicle.Owned()
+        local owned = xDTaraZ.Vehicle.Owned()
         opt.DriveCar = owned[1]
         local carBox = CarTab:AddLeftGroupbox(T("Garage", "โรงรถ"))
         local carDropdown = carBox:AddDropdown("DriveCar", {
@@ -1092,16 +1089,16 @@ local function BuildInterface()
             end,
         })
         carBox:AddButton({ Text = T("Spawn Car", "เรียกรถ"), Style = "Primary", Func = Spawn(function()
-            Notify(Vehicle.Spawn(opt.DriveCar) and "Car spawned" or "Spawn failed")
-        end) }):AddButton({ Text = T("Despawn", "เก็บรถ"), Func = Spawn(Vehicle.Despawn) })
+            Notify(xDTaraZ.Vehicle.Spawn(opt.DriveCar) and "Car spawned" or "Spawn failed")
+        end) }):AddButton({ Text = T("Despawn", "เก็บรถ"), Func = Spawn(xDTaraZ.Vehicle.Despawn) })
         carBox:AddButton({ Text = T("Refresh Garage", "รีเฟรชโรงรถ"), Func = function()
-            carDropdown:SetValues(Vehicle.Owned())
+            carDropdown:SetValues(xDTaraZ.Vehicle.Owned())
         end })
 
         local tuneBox = CarTab:AddRightGroupbox(T("Performance", "สมรรถนะ"))
         Slider(tuneBox, "CarSpeed", T("Car Speed Boost", "เร่งความเร็วรถ"), T("Holds this speed while pressing W (0 = off)", "คงความเร็วนี้ขณะกด W (0 = ปิด)"), 0, 600)
 
-        local destNames, destinations = Teleport.Destinations()
+        local destNames, destinations = xDTaraZ.Teleport.Destinations()
         local placeBox = TeleportTab:AddLeftGroupbox(T("Places", "สถานที่"))
         local placeDropdown = placeBox:AddDropdown("Place", {
             Text = T("Destination", "จุดหมาย"),
@@ -1113,9 +1110,9 @@ local function BuildInterface()
             end,
         })
         placeBox:AddButton({ Text = T("Teleport", "วาร์ป"), Style = "Primary", Func = Spawn(function()
-            Teleport.Go(destinations[opt.Place or destNames[1]])
+            xDTaraZ.Teleport.Go(destinations[opt.Place or destNames[1]])
         end) }):AddButton({ Text = T("Refresh", "รีเฟรช"), Func = function()
-            destNames, destinations = Teleport.Destinations()
+            destNames, destinations = xDTaraZ.Teleport.Destinations()
             placeDropdown:SetValues(destNames)
         end })
 
@@ -1138,7 +1135,7 @@ local function BuildInterface()
             end,
         })
         playerBox:AddButton({ Text = T("Teleport To Player", "วาร์ปไปหาผู้เล่น"), Style = "Primary", Func = Spawn(function()
-            Teleport.ToPlayer(opt.TargetPlayer)
+            xDTaraZ.Teleport.ToPlayer(opt.TargetPlayer)
         end) }):AddButton({ Text = T("Refresh", "รีเฟรช"), Func = function()
             playerDropdown:SetValues(PlayerNames())
         end })
@@ -1146,7 +1143,7 @@ local function BuildInterface()
         local moveBox = PlayerTab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"))
         Toggle(moveBox, "SpeedEnabled", T("Custom Speed", "ปรับความเร็วเอง"), T("Uses the speed and jump below while on foot", "ใช้ความเร็วและแรงกระโดดด้านล่างตอนเดิน"), function(value)
             if not value then
-                Movement.ResetSpeed()
+                xDTaraZ.Movement.ResetSpeed()
             end
         end)
         Slider(moveBox, "WalkSpeed", T("Walk Speed", "ความเร็วเดิน"), nil, 16, 200)
@@ -1155,7 +1152,7 @@ local function BuildInterface()
         Toggle(moveBox, "InfiniteJump", T("Infinite Jump", "กระโดดไม่จำกัด"), T("Jump again in mid air", "กระโดดซ้ำกลางอากาศได้"))
 
         local worldBox = PlayerTab:AddRightGroupbox(T("World", "โลก"))
-        Toggle(worldBox, "Fullbright", T("Fullbright", "สว่างเต็มจอ"), T("Always daylight", "กลางวันตลอด"), Movement.SetFullbright)
+        Toggle(worldBox, "Fullbright", T("Fullbright", "สว่างเต็มจอ"), T("Always daylight", "กลางวันตลอด"), xDTaraZ.Movement.SetFullbright)
 
         local espBox = VisualTab:AddLeftGroupbox(T("ESP", "ESP"))
         Toggle(espBox, "EspAtm", T("ATMs", "ATM"), T("Shows every ATM you can rob with its rarity", "โชว์ ATM ที่ปล้นได้ทุกตู้พร้อมระดับ"))
@@ -1166,7 +1163,7 @@ local function BuildInterface()
         local sessionBox = settingsTab:AddLeftGroupbox(T("Session", "เซสชัน"))
         Toggle(sessionBox, "AntiAfk", T("Anti AFK", "กันหลุด AFK"), T("Never get kicked for idling", "ไม่โดนเตะเพราะยืนนิ่ง"))
         Toggle(sessionBox, "AutoRejoin", T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), T("Rejoins after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"))
-        sessionBox:AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), Func = Spawn(Session.Hop) })
+        sessionBox:AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), Func = Spawn(xDTaraZ.Session.Hop) })
 
         Library:Every(1, function()
             while #State.Messages > 0 do
@@ -1174,13 +1171,13 @@ local function BuildInterface()
             end
             local session = State.AtmSession
             statusLabel:SetText(("Cash $%s · Job %s · Stars %d\nATMs robbed %d · Wanted cash $%s · Cashed out $%s\nATM spots known %d"):format(
-                Util.Commas(Util.Cash()), tostring(Jobs.Current() or "Citizen"), Atm.Crimes(),
-                session.Busted, Util.Commas((Player.Character() and Player.Character():GetAttribute("CurrencyEarned")) or 0),
-                Util.Commas(session.CashedOut), Atm.SpawnerCount()))
+                xDTaraZ.Util.Commas(xDTaraZ.Util.Cash()), tostring(xDTaraZ.Jobs.Current() or "Citizen"), xDTaraZ.Atm.Crimes(),
+                session.Busted, xDTaraZ.Util.Commas((xDTaraZ.Player.Character() and xDTaraZ.Player.Character():GetAttribute("CurrencyEarned")) or 0),
+                xDTaraZ.Util.Commas(session.CashedOut), xDTaraZ.Atm.SpawnerCount()))
         end)
     end
 
-    Library:OnUnload(Scheduler.Stop)
+    Library:OnUnload(xDTaraZ.Scheduler.Stop)
     getgenv().DrivingEmpireUnload = function()
         Library:Unload()
     end
@@ -1194,7 +1191,7 @@ local function BuildInterface()
         Theme = "Overworld",
         OnUnlocked = function()
             BuildTabs()
-            Scheduler.Boot()
+            xDTaraZ.Scheduler.Boot()
             Notify("Loaded")
             Library:LoadAutoloadConfig()
         end,
