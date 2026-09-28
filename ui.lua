@@ -4225,6 +4225,9 @@ local Visuals = {
         HeadDot = false,
         Chams = false,
         Arrows = false,
+        Radar = false,
+        RadarRange = 250,
+        RadarSize = 180,
         TeamCheck = true,
         MaxDistance = 2000,
         TextSize = 13,
@@ -4745,6 +4748,100 @@ function Visuals.PreviewStep(deltaTime)
     end
 end
 
+-- มินิแมพวงกลม ตัวเราอยู่กลาง หมุนตามกล้อง เป้านอกระยะเกาะขอบแบบจาง
+Visuals.Radar = { Dots = {} }
+
+function Visuals.RadarBuild()
+    local radar = Visuals.Radar
+    if radar.Frame and radar.Frame.Parent then
+        return radar
+    end
+    local gui = Visuals.EnsureGui()
+    local frame = Draw.New("Frame", { Name = "Radar", Position = UDim2.fromOffset(24, 180), BackgroundColor3 = Color3.fromRGB(16, 16, 22), BackgroundTransparency = 0.25, Visible = false, Parent = gui })
+    Draw.New("UICorner", { CornerRadius = UDim.new(0.5, 0), Parent = frame })
+    Draw.New("UIStroke", { Thickness = 2, Color = Color3.fromRGB(232, 160, 76), Transparency = 0.2, Parent = frame })
+    for _, horizontal in ipairs({ true, false }) do
+        Draw.New("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+            Size = horizontal and UDim2.new(1, -12, 0, 1) or UDim2.new(0, 1, 1, -12),
+            BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 0.8, Parent = frame,
+        })
+    end
+    local ring = Draw.New("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromScale(0.5, 0.5), BackgroundTransparency = 1, Parent = frame })
+    Draw.New("UICorner", { CornerRadius = UDim.new(0.5, 0), Parent = ring })
+    Draw.New("UIStroke", { Thickness = 1, Color = Color3.new(1, 1, 1), Transparency = 0.75, Parent = ring })
+    local me = Draw.New("TextLabel", { AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(16, 16), BackgroundTransparency = 1, Text = "▲", TextSize = 14, Font = Enum.Font.GothamBold, TextColor3 = Color3.new(1, 1, 1), ZIndex = 3, Parent = frame })
+    radar.Frame, radar.Me = frame, me
+    Gui.Draggable(frame, function(begin, delta)
+        if not begin then
+            return frame.Position
+        end
+        frame.Position = begin + UDim2.fromOffset(delta.X, delta.Y)
+    end)
+    return radar
+end
+
+function Visuals.RadarDot(index)
+    local radar = Visuals.Radar
+    local dot = radar.Dots[index]
+    if not dot then
+        dot = Draw.New("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(7, 7), ZIndex = 2, Parent = radar.Frame })
+        Draw.New("UICorner", { CornerRadius = UDim.new(0.5, 0), Parent = dot })
+        radar.Dots[index] = dot
+    end
+    return dot
+end
+
+function Visuals.RadarRender()
+    local settings = Visuals.Settings
+    local radar = Visuals.Radar
+    if not settings.Radar then
+        if radar.Frame then
+            radar.Frame.Visible = false
+        end
+        return
+    end
+    Visuals.RadarBuild()
+    Visuals.Scan()
+    local cam = Workspace.CurrentCamera
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local size = settings.RadarSize
+    radar.Frame.Size = UDim2.fromOffset(size, size)
+    radar.Frame.Visible = cam ~= nil and root ~= nil
+    if not radar.Frame.Visible then
+        return
+    end
+
+    local look = cam.CFrame.LookVector * Vector3.new(1, 0, 1)
+    look = look.Magnitude > 0 and look.Unit or Vector3.new(0, 0, -1)
+    local right = Vector3.new(-look.Z, 0, look.X)
+    local radius = size / 2 - 6
+    local used = 0
+    for _, info in ipairs(Visuals.Targets) do
+        local model = info.Model
+        local part = info.Root or (typeof(model) == "Instance" and (model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart))
+        if not part or (settings.TeamCheck and info.Friendly) then
+            continue
+        end
+        local rel = part.Position - root.Position
+        local offset = Vector2.new(rel:Dot(right), -rel:Dot(look)) / settings.RadarRange * radius
+        local outside = offset.Magnitude > radius
+        if outside then
+            offset = offset.Unit * radius
+        end
+        used += 1
+        local dot = Visuals.RadarDot(used)
+        dot.Position = UDim2.new(0.5, offset.X, 0.5, offset.Y)
+        dot.BackgroundColor3 = info.Color or (info.Friendly and settings.FriendColor or settings.EnemyColor)
+        dot.BackgroundTransparency = outside and 0.55 or 0
+        dot.Visible = true
+    end
+    for index = used + 1, #radar.Dots do
+        radar.Dots[index].Visible = false
+    end
+end
+
 function Visuals.Start()
     if Visuals.Started then
         return
@@ -4752,6 +4849,7 @@ function Visuals.Start()
     Visuals.Started = true
     Util.Connect(RunService.RenderStepped, function(deltaTime)
         Visuals.Render()
+        Visuals.RadarRender()
         Visuals.PreviewStep(deltaTime)
     end)
     table.insert(State.UnloadHooks, function()
@@ -4803,6 +4901,11 @@ function Window:AddVisualsTab(options)
     local colors = tab:AddLeftGroupbox(T("Colors", "สี"), "flower")
     colors:AddLabel(T("Enemy", "ศัตรู")):AddColorPicker("MarioEspEnemyColor", { Default = Visuals.Settings.EnemyColor, Callback = Bind("EnemyColor") })
     colors:AddLabel(T("Friendly", "พวกเดียวกัน")):AddColorPicker("MarioEspFriendColor", { Default = Visuals.Settings.FriendColor, Callback = Bind("FriendColor") })
+
+    local radar = tab:AddLeftGroupbox(T("Radar", "เรดาร์"), "target")
+    radar:AddToggle("MarioRadar", { Text = T("Radar", "เรดาร์"), Description = T("Minimap of nearby players, drag to move", "มินิแมพผู้เล่นรอบตัว ลากย้ายได้"), Callback = Bind("Radar") })
+    radar:AddSlider("MarioRadarRange", { Text = T("Radar range", "ระยะเรดาร์"), Min = 50, Max = 1000, Default = 250, Suffix = "m", Callback = Bind("RadarRange") })
+    radar:AddSlider("MarioRadarSize", { Text = T("Radar size", "ขนาดเรดาร์"), Min = 100, Max = 320, Default = 180, Suffix = "px", Callback = Bind("RadarSize") })
     return tab
 end
 
