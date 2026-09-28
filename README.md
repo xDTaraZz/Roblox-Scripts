@@ -7,7 +7,7 @@
 **Roblox scripts by xDTaraZ**
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20the%20server-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/FHVfmeSceA)
-[![Games](https://img.shields.io/badge/Games-2-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
+[![Games](https://img.shields.io/badge/Games-3-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
 [![Keyless](https://img.shields.io/badge/Key-None-2EA043?style=for-the-badge)](#-how-to-use)
 
 </div>
@@ -30,6 +30,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 |:--|:--|
 | **[+1 TNT Mining](#-1-tnt-mining)** | Smart auto mine, instant collect, sell anywhere, Kaitun |
 | **[Loot To Forge](#%EF%B8%8F-loot-to-forge)** | Max gear, infinite ore, instant kill, tower farm, Kaitun |
+| **[Open Sea For Animals](#-open-sea-for-animals)** | Loot every wave from your base, auto hatch, sell filters, Kaitun |
 
 ---
 
@@ -64,6 +65,24 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 - **Spawn Ore**: add any ore to your storage
 - Auto sell with filters, auto train, click, rebirth and upgrades
 - Complete Index, redeem all codes, auto roll race
+- **Kaitun**: does all of the above at once
+
+</details>
+
+---
+
+### 🌊 Open Sea For Animals
+
+<details>
+<summary><b>Features</b></summary>
+
+- **Auto Loot**: takes the best eggs and brainrots from every wave without leaving your base
+- Rarity and mutation filter for what to collect
+- **Auto Sell** eggs with a keep list, and brainrots
+- **Auto Hatch** and place the best animals on your plot
+- Auto upgrade with a cash reserve, auto train, best dumbbell, auto rebirth
+- Auto claim daily, playtime, spins, free shop, packs and offline cash
+- Redeem all codes, speed, infinite jump, noclip, anti AFK
 - **Kaitun**: does all of the above at once
 
 </details>

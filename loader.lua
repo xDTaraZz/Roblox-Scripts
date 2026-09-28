@@ -7,6 +7,7 @@ local BASE = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/hea
 local GAMES = {
     [10418224975] = "TNT Mining",
     [10684750879] = "Loot To Forge",
+    [10765091041] = "Open Sea For Animals",
 }
 
 local function notify(text)
