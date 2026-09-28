@@ -7,14 +7,24 @@
 **Roblox scripts by xDTaraZ**
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20the%20server-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/FHVfmeSceA)
-[![Games](https://img.shields.io/badge/Games-2-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-scripts)
+[![Games](https://img.shields.io/badge/Games-2-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
 [![Keyless](https://img.shields.io/badge/Key-None-2EA043?style=for-the-badge)](#-how-to-use)
 
 </div>
 
 ---
 
-## 🎮 Scripts
+## ⚡ Loadstring
+
+One loadstring for every game. It detects the game you're in and loads the right script.
+
+```lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/loader.lua"))()
+```
+
+---
+
+## 🎮 Supported games
 
 | Game | Highlights |
 |:--|:--|
@@ -24,10 +34,6 @@
 ---
 
 ### 💣 +1 TNT Mining
-
-```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/All%20Map/TNT%20Mining.lua"))()
-```
 
 <details>
 <summary><b>Features</b></summary>
@@ -46,10 +52,6 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 ---
 
 ### ⚒️ Loot To Forge
-
-```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/All%20Map/Loot%20To%20Forge.lua"))()
-```
 
 <details>
 <summary><b>Features</b></summary>
@@ -71,7 +73,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 ## 🚀 How to use
 
 1. Join the game.
-2. Copy the loadstring for that game.
+2. Copy the loadstring above.
 3. Paste it into your executor and run it.
 4. Press **Left Ctrl** to show or hide the menu.
 
