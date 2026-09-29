@@ -20,9 +20,7 @@ local UserInputService = game:GetService("UserInputService")
 local VirtualUser = game:GetService("VirtualUser")
 
 local LocalPlayer = Players.LocalPlayer
-local vector3New, cframeNew = Vector3.new, CFrame.new
-local vectorZero = Vector3.zero
-local osClock, mathHuge = os.clock, math.huge
+local osClock = os.clock
 
 if game.GameId ~= 9534705677 then
     LocalPlayer:Kick("Mario Hub: this script is for Sniper Arena only")
@@ -47,11 +45,9 @@ xDTaraZ.Config = {
     SellDelay = 0.8,
     ClaimDelay = 0.5,
     FireInterval = 0.12,
+    LookSettle = 0.1,
     TriggerRange = 2000,
-    RespawnRetry = 1,
-    FlagRetry = 1,
-    JoinRetry = 3,
-    FarmMinDash = 14,
+    RespawnRetry = 0.25,
     AimRenderPriority = Enum.RenderPriority.Camera.Value + 5,
 }
 
@@ -64,16 +60,10 @@ xDTaraZ.State = {
 xDTaraZ.Options = {
     AntiAfk = false,
 
-    Speed = false,
-    SpeedValue = 32,
-    Jump = false,
-    JumpValue = 60,
-    Fly = false,
-    Noclip = false,
-    InfiniteJump = false,
     InfiniteDash = false,
-    AutoFlag = false,
-    AutoFarm = false,
+    FastRespawn = false,
+    SkinChanger = false,
+    SkinRarities = {},
 
     AutoOpenCases = false,
     OpenCount = 1,
@@ -85,14 +75,18 @@ xDTaraZ.Options = {
 
     Aimbot = false,
     AimMode = "Hold",
+    SilentAim = false,
+    Ragebot = false,
+    InstantScope = false,
+    HitChance = 100,
+    HeadChance = 100,
     TriggerBot = false,
-    KillAura = false,
     NoRecoil = false,
     NoSpread = false,
     AimTeamCheck = true,
     AimWallCheck = true,
     AimSmooth = 1,
-    AimPrediction = 0,
+    AimPrediction = 60,
     ShowFov = false,
     AimFov = 150,
     AimPriority = "Crosshair",
@@ -122,16 +116,19 @@ Util.WriteFile = Resolve(writefile)
 Util.ReadFile = Resolve(readfile)
 Util.IsFile = Resolve(isfile)
 Util.GetGc = Resolve(getgc, get_gc_objects)
+Util.GetUpvalue = Resolve(getupvalue, debug.getupvalue)
+Util.GetUpvalues = Resolve(getupvalues, debug.getupvalues)
+Util.GetRawMetatable = Resolve(getrawmetatable)
 Util.HookMeta = Resolve(hookmetamethod)
 Util.GetConnections = Resolve(getconnections, get_signal_cons)
 Util.HookFunction = Resolve(hookfunction, replaceclosure)
 Util.RestoreFunction = Resolve(restorefunction)
-Util.FireTouch = Resolve(firetouchinterest)
 xDTaraZ.Caps = {
     Hook = Util.HookMeta ~= nil,
     HookFunction = Util.HookFunction ~= nil,
     Connections = Util.GetConnections ~= nil,
     Gc = Util.GetGc ~= nil,
+    Upvalues = Util.GetUpvalue ~= nil,
     Drawing = type(Drawing) == "table" and type(Drawing.new) == "function",
     FileSystem = Util.WriteFile ~= nil and Util.ReadFile ~= nil,
     Clipboard = Util.SetClipboard ~= nil,
@@ -269,6 +266,7 @@ do
         GameLib.Service[name] = RequireChild(remoteFolder, name)
     end
     GameLib.CameraController = RequireChild(ReplicatedStorage:FindFirstChild("Client"), "CameraController")
+    GameLib.WeaponController = RequireChild(ReplicatedStorage:FindFirstChild("Client"), "WeaponController")
     local gameService = remoteFolder and remoteFolder:FindFirstChild("GameService")
     GameLib.RoomManager = RequireChild(gameService, "RoomManager")
     GameLib.Any = RequireChild(remoteFolder, "Any")
@@ -477,13 +475,16 @@ end
 
 function xDTaraZ.Player.Respawn.Fire()
     local gs = xDTaraZ.GameLib.Service.GameService
-    if gs and gs.FastRespawn then pcall(gs.FastRespawn) end
-    local remote = xDTaraZ.GameLib.Service.GameService and ReplicatedStorage.Remote.GameService:FindFirstChild("Respawn")
-    if remote then pcall(function() remote:FireServer() end) end
+    if gs and gs.CanFastRespawn and gs.CanFastRespawn() then
+        gs.FastRespawn()
+        return
+    end
+    local remote = ReplicatedStorage.Remote.GameService:FindFirstChild("Respawn")
+    if remote then remote:FireServer() end
 end
 
 function xDTaraZ.Player.Respawn.Step()
-    if not xDTaraZ.Options.AutoRespawn then
+    if not xDTaraZ.Options.FastRespawn then
         xDTaraZ.Player.Respawn.Status = "Off"
         return
     end
@@ -512,146 +513,7 @@ function xDTaraZ.Player.Respawn.GetStatus()
     return xDTaraZ.Player.Respawn.Status
 end
 
-xDTaraZ.Movement = {
-    Booted = false,
-    Status = "Off",
-    OriginalWalk = nil,
-    OriginalJump = nil,
-    OriginalPlatform = nil,
-    Collide = {},
-    FlyKeys = {
-        [Enum.KeyCode.W] = "Forward", [Enum.KeyCode.S] = "Back",
-        [Enum.KeyCode.A] = "Left", [Enum.KeyCode.D] = "Right",
-        [Enum.KeyCode.Space] = "Up", [Enum.KeyCode.LeftControl] = "Down",
-    },
-}
-
----@return table?, Humanoid?  local combat entity and character humanoid
-local function LocalRig()
-    local entity = xDTaraZ.Entity.Local()
-    local humanoid = xDTaraZ.Player.Humanoid
-    return entity, humanoid
-end
-
-function xDTaraZ.Movement.ApplySpeed(entity, humanoid)
-    local target = xDTaraZ.Options.SpeedValue
-    if entity then
-        if xDTaraZ.Movement.OriginalWalk == nil then
-            xDTaraZ.Movement.OriginalWalk = entity.WalkSpeed or entity.CurrentWalkSpeed
-        end
-        entity.CurrentWalkSpeed = target
-        if type(entity.WalkSpeedMultipliers) == "table" then
-            entity.WalkSpeedMultipliers.MarioHub = target / math.max(entity.WalkSpeed or target, 1)
-        end
-    end
-    if humanoid then
-        humanoid.WalkSpeed = target
-    end
-end
-
-function xDTaraZ.Movement.RestoreSpeed()
-    local entity, humanoid = LocalRig()
-    if entity then
-        entity.CurrentWalkSpeed = entity.WalkSpeed or xDTaraZ.Movement.OriginalWalk or 16
-        if type(entity.WalkSpeedMultipliers) == "table" then
-            entity.WalkSpeedMultipliers.MarioHub = nil
-        end
-    end
-    if humanoid then
-        humanoid.WalkSpeed = xDTaraZ.Movement.OriginalWalk or 16
-    end
-    xDTaraZ.Movement.OriginalWalk = nil
-end
-
-function xDTaraZ.Movement.ApplyJump(entity, humanoid)
-    local target = xDTaraZ.Options.JumpValue
-    if entity then
-        if xDTaraZ.Movement.OriginalJump == nil then
-            xDTaraZ.Movement.OriginalJump = entity.JumpHeight
-        end
-        entity.JumpHeight = target
-    end
-    if humanoid then
-        humanoid.UseJumpPower = false
-        humanoid.JumpHeight = target
-    end
-end
-
-function xDTaraZ.Movement.RestoreJump()
-    local entity, humanoid = LocalRig()
-    if entity and xDTaraZ.Movement.OriginalJump ~= nil then
-        entity.JumpHeight = xDTaraZ.Movement.OriginalJump
-    end
-    if humanoid and xDTaraZ.Movement.OriginalJump ~= nil then
-        humanoid.JumpHeight = xDTaraZ.Movement.OriginalJump
-    end
-    xDTaraZ.Movement.OriginalJump = nil
-end
-
-function xDTaraZ.Movement.ApplyNoclip()
-    local character = xDTaraZ.Player.Character
-    if not character then return end
-    for _, part in ipairs(character:GetDescendants()) do
-        if part:IsA("BasePart") and part.CanCollide then
-            if xDTaraZ.Movement.Collide[part] == nil then
-                xDTaraZ.Movement.Collide[part] = true
-            end
-            part.CanCollide = false
-        end
-    end
-end
-
-function xDTaraZ.Movement.RestoreNoclip()
-    for part in pairs(xDTaraZ.Movement.Collide) do
-        if part and part.Parent then
-            part.CanCollide = true
-        end
-    end
-    table.clear(xDTaraZ.Movement.Collide)
-end
-
-function xDTaraZ.Movement.FlyVelocity()
-    local root = xDTaraZ.Player.Root
-    local camera = Workspace.CurrentCamera
-    if not root or not camera then return end
-
-    local direction = vectorZero
-    for key, tag in pairs(xDTaraZ.Movement.FlyKeys) do
-        if UserInputService:IsKeyDown(key) then
-            if tag == "Forward" then direction += camera.CFrame.LookVector
-            elseif tag == "Back" then direction -= camera.CFrame.LookVector
-            elseif tag == "Left" then direction -= camera.CFrame.RightVector
-            elseif tag == "Right" then direction += camera.CFrame.RightVector
-            elseif tag == "Up" then direction += Vector3.yAxis
-            elseif tag == "Down" then direction -= Vector3.yAxis
-            end
-        end
-    end
-
-    if direction.Magnitude > 0 then
-        direction = direction.Unit * xDTaraZ.Options.FlySpeed
-    end
-    root.AssemblyLinearVelocity = direction
-end
-
-function xDTaraZ.Movement.SetFly(on)
-    local humanoid = xDTaraZ.Player.Humanoid
-    if on then
-        if humanoid and xDTaraZ.Movement.OriginalPlatform == nil then
-            xDTaraZ.Movement.OriginalPlatform = humanoid.PlatformStand
-            humanoid.PlatformStand = true
-        end
-    else
-        if humanoid and xDTaraZ.Movement.OriginalPlatform ~= nil then
-            humanoid.PlatformStand = xDTaraZ.Movement.OriginalPlatform
-        end
-        xDTaraZ.Movement.OriginalPlatform = nil
-        if xDTaraZ.Player.Root then
-            xDTaraZ.Player.Root.AssemblyLinearVelocity = vectorZero
-        end
-    end
-    xDTaraZ.Options.Fly = on
-end
+xDTaraZ.Movement = { Booted = false, Dash = nil }
 
 function xDTaraZ.Movement.DashHelper()
     if xDTaraZ.Movement.Dash ~= nil then return xDTaraZ.Movement.Dash end
@@ -663,85 +525,20 @@ function xDTaraZ.Movement.DashHelper()
     return xDTaraZ.Movement.Dash
 end
 
-function xDTaraZ.Movement.RefreshDash()
-    local dash = xDTaraZ.Movement.DashHelper()
-    if dash and dash.RefreshNextDashTime then
-        pcall(dash.RefreshNextDashTime)
-    end
-end
-
 function xDTaraZ.Movement.OnStepped()
-    if not xDTaraZ.Player:IsAlive() then return end
-    local entity, humanoid = LocalRig()
-
-    if xDTaraZ.Options.Speed then xDTaraZ.Movement.ApplySpeed(entity, humanoid) end
-    if xDTaraZ.Options.Jump then xDTaraZ.Movement.ApplyJump(entity, humanoid) end
-    if xDTaraZ.Options.Noclip then xDTaraZ.Movement.ApplyNoclip() end
-    if xDTaraZ.Options.Fly then xDTaraZ.Movement.FlyVelocity() end
-    if xDTaraZ.Options.InfiniteDash then xDTaraZ.Movement.RefreshDash() end
-end
-
-function xDTaraZ.Movement.OnJumpRequest()
-    if not xDTaraZ.Options.InfiniteJump then return end
-    local humanoid = xDTaraZ.Player.Humanoid
-    if humanoid and humanoid:GetState() ~= Enum.HumanoidStateType.Dead then
-        humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-    end
-end
-
-function xDTaraZ.Movement.SetSpeed(on)
-    xDTaraZ.Options.Speed = on
-    if not on then xDTaraZ.Movement.RestoreSpeed() end
-end
-
-function xDTaraZ.Movement.SetJump(on)
-    xDTaraZ.Options.Jump = on
-    if not on then xDTaraZ.Movement.RestoreJump() end
-end
-
-function xDTaraZ.Movement.SetNoclip(on)
-    xDTaraZ.Options.Noclip = on
-    if not on then xDTaraZ.Movement.RestoreNoclip() end
+    if not xDTaraZ.Options.InfiniteDash then return end
+    local dash = xDTaraZ.Movement.DashHelper()
+    if dash and dash.RefreshNextDashTime then pcall(dash.RefreshNextDashTime) end
 end
 
 function xDTaraZ.Movement.Start()
     if xDTaraZ.Movement.Booted then return end
     xDTaraZ.Movement.Booted = true
     xDTaraZ:Connect(RunService.Stepped, xDTaraZ.Movement.OnStepped)
-    xDTaraZ:Connect(UserInputService.JumpRequest, xDTaraZ.Movement.OnJumpRequest)
-end
-
-function xDTaraZ.Movement.Release()
-    xDTaraZ.Movement.RestoreSpeed()
-    xDTaraZ.Movement.RestoreJump()
-    xDTaraZ.Movement.RestoreNoclip()
-    xDTaraZ.Movement.SetFly(false)
-    xDTaraZ.Options.Speed = false
-    xDTaraZ.Options.Jump = false
-    xDTaraZ.Options.Noclip = false
-    xDTaraZ.Options.InfiniteJump = false
-    xDTaraZ.Options.InfiniteDash = false
-end
-
-function xDTaraZ.Movement.Stop()
-    xDTaraZ.Movement.Release()
-    xDTaraZ.Movement.Status = "Off"
 end
 
 function xDTaraZ.Movement.GetStatus()
-    local active = {}
-    if xDTaraZ.Options.Fly then active[#active + 1] = "Fly" end
-    if xDTaraZ.Options.Speed then active[#active + 1] = "Speed " .. xDTaraZ.Options.SpeedValue end
-    if xDTaraZ.Options.Jump then active[#active + 1] = "Jump" end
-    if xDTaraZ.Options.Noclip then active[#active + 1] = "Noclip" end
-    if xDTaraZ.Options.InfiniteJump then active[#active + 1] = "InfJump" end
-    if xDTaraZ.Options.InfiniteDash then active[#active + 1] = "InfDash" end
-    xDTaraZ.Movement.Status = #active > 0 and table.concat(active, ", ") or "Off"
-    return xDTaraZ.Movement.Status
-end
-
-function xDTaraZ.Movement.Step()
-    return xDTaraZ.Movement.GetStatus()
+    return xDTaraZ.Options.InfiniteDash and "Infinite dash" or "Off"
 end
 
 xDTaraZ.Esp = { Count = 0 }
@@ -986,81 +783,30 @@ function xDTaraZ.Collect.GetStatus()
     return xDTaraZ.Options.AutoClaimQuest and xDTaraZ.Collect.Status or "Off"
 end
 
-xDTaraZ.Flag = { Status = "Off", LastTouch = 0 }
-
-local CollectionService = game:GetService("CollectionService")
-
----@return string?  CTF tag active for the current mode, nil when not a flag mode
-function xDTaraZ.Flag.ModeTag()
-    local mode = xDTaraZ.Match.Info()
-    if type(mode) ~= "string" or not mode:find("CaptureFlag") then return nil end
-    return mode:find("TDM") and "CTF_FlagSubmit" or "CTF_PickFlag_FFA"
-end
-
-function xDTaraZ.Flag.Touch(part)
-    local hrp = xDTaraZ.Player.Root
-    if not (hrp and part and Util.FireTouch) then return false end
-    Util.FireTouch(hrp, part, 0)
-    Util.FireTouch(hrp, part, 1)
-    return true
-end
-
-function xDTaraZ.Flag.Step()
-    if not xDTaraZ.Options.AutoFlag then
-        xDTaraZ.Flag.Status = "Off"
-        return
-    end
-    if not (xDTaraZ.Match.InRound() and xDTaraZ.Player:IsAlive()) then
-        xDTaraZ.Flag.Status = "Waiting"
-        return
-    end
-    local tag = xDTaraZ.Flag.ModeTag()
-    if not tag then
-        xDTaraZ.Flag.Status = "Not a flag mode"
-        return
-    end
-
-    local now = os.clock()
-    if now - xDTaraZ.Flag.LastTouch < xDTaraZ.Config.FlagRetry then return end
-    xDTaraZ.Flag.LastTouch = now
-
-    local myTeam = xDTaraZ.Entity.Team(xDTaraZ.Entity.Local())
-    local touched = 0
-    for _, part in ipairs(CollectionService:GetTagged(tag)) do
-        if not part:IsA("BasePart") then continue end
-        if tag == "CTF_FlagSubmit" and myTeam and part.Name ~= myTeam then continue end
-        if xDTaraZ.Flag.Touch(part) then touched += 1 end
-    end
-    xDTaraZ.Flag.Status = touched > 0 and ("Touched " .. touched) or "No flags"
-end
-
-function xDTaraZ.Flag.GetStatus()
-    return xDTaraZ.Flag.Status
-end
-
-xDTaraZ.Combat = { State = "Idle", Status = "Off", Target = nil, Part = nil, Look = nil, Bound = false, LastShot = 0, Circle = nil, Farm = false }
+xDTaraZ.Combat = { State = "Idle", Status = "Off", Target = nil, Part = nil, Look = nil, Bound = false, LastShot = 0, Circle = nil, OriginFn = nil, OriginParams = nil, LookSource = nil, LookHolders = nil, LockedSince = 0 }
 
 local aimParams = RaycastParams.new()
 aimParams.FilterType = Enum.RaycastFilterType.Exclude
 
 function xDTaraZ.Combat.AimActive()
-    return xDTaraZ.Options.Aimbot == true or xDTaraZ.Options.KillAura == true or xDTaraZ.Combat.Farm == true
+    return xDTaraZ.Options.Aimbot == true
 end
 
-function xDTaraZ.Combat.FireActive()
-    return xDTaraZ.Options.TriggerBot == true or xDTaraZ.Options.KillAura == true or xDTaraZ.Combat.Farm == true
+function xDTaraZ.Combat.SilentActive()
+    return xDTaraZ.Options.SilentAim == true or xDTaraZ.Options.Ragebot == true
 end
 
 function xDTaraZ.Combat.Active()
-    return xDTaraZ.Combat.AimActive() or xDTaraZ.Combat.FireActive() or xDTaraZ.Options.ShowFov == true
+    local o = xDTaraZ.Options
+    return o.Aimbot or o.SilentAim or o.Ragebot or o.TriggerBot or o.ShowFov
 end
 
 ---@return BasePart?  server hitbox for the chosen bone
-function xDTaraZ.Combat.BonePart(entity)
+function xDTaraZ.Combat.BonePart(entity, bone)
     local char = xDTaraZ.Entity.Character(entity)
     if not char then return nil end
     local collider = char:FindFirstChild("Collider")
-    local bone = xDTaraZ.Options.AimBone or "Head"
+    bone = bone or xDTaraZ.Options.AimBone or "Head"
     return collider and (collider:FindFirstChild(bone) or collider:FindFirstChild("Head"))
         or char:FindFirstChild("Head")
         or xDTaraZ.Entity.Root(entity)
@@ -1072,12 +818,19 @@ function xDTaraZ.Combat.Filter()
     return cam
 end
 
----@return CFrame  where the game fires bullets from
+---@return CFrame, any  where the game fires bullets from, detect tag
 function xDTaraZ.Combat.Origin()
-    local camCtrl = xDTaraZ.GameLib.CameraController
-    local ok, origin = pcall(function() return camCtrl.GetCombatOrigin() end)
-    if ok and typeof(origin) == "CFrame" then return origin end
-    return Workspace.CurrentCamera.CFrame
+    local fn = xDTaraZ.Combat.OriginFn
+    if not fn then
+        local camCtrl = xDTaraZ.GameLib.CameraController
+        fn = camCtrl and camCtrl.GetCombatOriginFn and camCtrl.GetCombatOriginFn()
+        xDTaraZ.Combat.OriginFn = fn
+    end
+    if fn then
+        local ok, origin, detect = pcall(fn)
+        if ok and typeof(origin) == "CFrame" then return origin, detect end
+    end
+    return Workspace.CurrentCamera.CFrame, nil
 end
 
 function xDTaraZ.Combat.Visible(part, char)
@@ -1090,6 +843,8 @@ end
 function xDTaraZ.Combat.IsEnemy(entity)
     if type(entity) ~= "table" or xDTaraZ.Entity.IsLocal(entity) then return false end
     if xDTaraZ.Options.AimTeamCheck and xDTaraZ.Entity.Friendly(entity) then return false end
+    local inst = entity.Instance
+    if typeof(inst) == "Instance" and inst:GetAttribute("State") == "Dead" then return false end
     return xDTaraZ.Entity.Health(entity) > 0
 end
 
@@ -1108,6 +863,7 @@ function xDTaraZ.Combat.AimCenter(cam)
 end
 
 function xDTaraZ.Combat.UsesFov()
+    if xDTaraZ.Options.Ragebot then return false end
     local mode = xDTaraZ.Options.AimPriority
     return mode == "Crosshair" or mode == "Mouse"
 end
@@ -1144,7 +900,7 @@ function xDTaraZ.Combat.SelectTarget()
         if not part then continue end
         local score = xDTaraZ.Combat.Score(entity, part, cam, center, origin)
         if not score or (bestScore and score >= bestScore) then continue end
-        if xDTaraZ.Options.AimWallCheck and not xDTaraZ.Combat.Visible(part, xDTaraZ.Entity.Character(entity)) then continue end
+        if (xDTaraZ.Options.AimWallCheck or xDTaraZ.Options.Ragebot) and not xDTaraZ.Combat.Visible(part, xDTaraZ.Entity.Character(entity)) then continue end
         best, bestPart, bestScore = entity, part, score
     end
     return best, bestPart
@@ -1154,9 +910,10 @@ function xDTaraZ.Combat.BindCamera()
     if xDTaraZ.Combat.Bound then return end
     xDTaraZ.Combat.Bound = true
     RunService:BindToRenderStep("xDTaraZAim", xDTaraZ.Config.AimRenderPriority, function()
-        local part = xDTaraZ.Combat.Part
+        local c = xDTaraZ.Combat
         local cam = Workspace.CurrentCamera
-        if not (xDTaraZ.Combat.AimActive() and part and part.Parent) then
+        local part = c.Part
+        if not (c.AimActive() and part and part.Parent) then
             xDTaraZ.Combat.Look = nil
             return
         end
@@ -1195,14 +952,150 @@ function xDTaraZ.Combat.Fire()
     if now - xDTaraZ.Combat.LastShot < xDTaraZ.Config.FireInterval then return false end
     xDTaraZ.Combat.LastShot = now
 
-    local combat = xDTaraZ.GameLib.Service.CombatService
-    local weapon = combat and combat.GetCurrentWeapon()
-    local shooter = weapon and weapon._Shootable
+    local _, shooter = xDTaraZ.Combat.Shooter()
     if not shooter then return false end
 
     local ok, fired = pcall(shooter.LocalShoot, shooter)
     if not ok then warn("[SniperArena] shoot:", fired) end
     return ok and fired ~= nil
+end
+
+function xDTaraZ.Combat.Shooter()
+    local combat = xDTaraZ.GameLib.Service.CombatService
+    local weapon = combat and combat.GetCurrentWeapon()
+    return weapon, weapon and weapon._Shootable
+end
+
+xDTaraZ.Combat.SilentSaved = {}
+
+---@return table?  the game's combat-origin override table
+function xDTaraZ.Combat.OriginOverride()
+    if xDTaraZ.Combat.OriginParams ~= nil then return xDTaraZ.Combat.OriginParams or nil end
+    local camCtrl = xDTaraZ.GameLib.CameraController
+    local ok, holder = pcall(function() return Util.GetUpvalue(camCtrl.GetCombatOriginFn(), 1) end)
+    local params = ok and type(holder) == "table" and type(holder.TempParams) == "table" and holder.TempParams
+    xDTaraZ.Combat.OriginParams = params or false
+    return params or nil
+end
+
+---@return any  what the game's Shoot returns
+function xDTaraZ.Combat.ShootAt(shooter, entity, part, opts)
+    local params = xDTaraZ.Combat.OriginOverride()
+    local start = xDTaraZ.Combat.Origin().Position
+    local aim = xDTaraZ.Combat.Predict(part)
+    opts = type(opts) == "table" and opts or {}
+    opts.Target = entity.Instance
+    opts.TargetHeadshot = part.Name == "Head" or nil
+    local ok, localPos = pcall(function() return entity:GetPivot(true):PointToObjectSpace(aim) end)
+    if ok then opts.TargetPos = localPos end
+
+    local saved = { params.CameraCFrame, params.SubjectDistance, params.MouseLockOffset }
+    params.CameraCFrame, params.SubjectDistance, params.MouseLockOffset = CFrame.lookAt(start, aim), 0, Vector3.zero
+    local fired, shot = pcall(shooter.Shoot, shooter, start, (aim - start).Unit, opts)
+    params.CameraCFrame, params.SubjectDistance, params.MouseLockOffset = saved[1], saved[2], saved[3]
+    if not fired then warn("[SniperArena] silent:", shot) end
+    return fired and shot or nil
+end
+
+---@return any  same as the game's LocalShoot, bullet sent at the locked target
+function xDTaraZ.Combat.SilentShoot(shooter, opts)
+    local c = xDTaraZ.Combat
+    local saved = c.SilentSaved[shooter]
+    local entity = c.Target
+    if not (c.SilentActive() and entity and c.OriginOverride()) then return saved.Fn(shooter, opts) end
+    if math.random(100) > xDTaraZ.Options.HitChance then return saved.Fn(shooter, opts) end
+
+    local bone = math.random(100) <= xDTaraZ.Options.HeadChance and "Head" or "Body"
+    local part = c.BonePart(entity, bone)
+    if not (part and part.Parent) then return saved.Fn(shooter, opts) end
+    return c.ShootAt(shooter, entity, part, opts)
+end
+
+---@return CFrame  camera the server is told we look through
+function xDTaraZ.Combat.ReportedLook(...)
+    local c = xDTaraZ.Combat
+    local cf = c.LookSource(...)
+    local part = c.Part
+    if typeof(cf) ~= "CFrame" or not (c.SilentActive() and c.Target and part and part.Parent) then return cf end
+    return CFrame.lookAt(cf.Position, c.Predict(part))
+end
+
+---@return table[]  tables that really hold CameraController's functions
+function xDTaraZ.Combat.LookTables()
+    local camCtrl = xDTaraZ.GameLib.CameraController
+    local tables = {}
+    if type(camCtrl) ~= "table" then return tables end
+    if rawget(camCtrl, "GetCFrame") and not table.isfrozen(camCtrl) then tables[1] = camCtrl end
+    local mt = Util.GetRawMetatable and Util.GetRawMetatable(camCtrl)
+    local index = type(mt) == "table" and rawget(mt, "__index")
+    if type(index) == "table" then index = { index } elseif type(index) == "function" and Util.GetUpvalues then index = Util.GetUpvalues(index) else index = {} end
+    for _, holder in pairs(index) do
+        if type(holder) == "table" and type(rawget(holder, "GetCFrame")) == "function" and not table.isfrozen(holder) then
+            tables[#tables + 1] = holder
+        end
+    end
+    return tables
+end
+
+function xDTaraZ.Combat.ApplyLook()
+    local c = xDTaraZ.Combat
+    if c.LookSource ~= nil then return end
+    local tables = c.LookTables()
+    if #tables == 0 then
+        c.LookSource = false
+        return
+    end
+    c.LookSource = rawget(tables[1], "GetCFrame")
+    c.LookHolders = tables
+    for _, holder in ipairs(tables) do rawset(holder, "GetCFrame", c.ReportedLook) end
+end
+
+function xDTaraZ.Combat.RestoreLook()
+    local c = xDTaraZ.Combat
+    if not c.LookSource then
+        c.LookSource = nil
+        return
+    end
+    for _, holder in ipairs(c.LookHolders or {}) do
+        if rawget(holder, "GetCFrame") == c.ReportedLook then rawset(holder, "GetCFrame", c.LookSource) end
+    end
+    c.LookSource, c.LookHolders = nil, nil
+end
+
+function xDTaraZ.Combat.ApplySilent()
+    local _, shooter = xDTaraZ.Combat.Shooter()
+    if type(shooter) ~= "table" or rawget(shooter, "LocalShoot") == xDTaraZ.Combat.SilentShoot then return end
+    if type(shooter.Shoot) ~= "function" then return end
+    xDTaraZ.Combat.SilentSaved[shooter] = { Raw = rawget(shooter, "LocalShoot"), Fn = shooter.LocalShoot }
+    rawset(shooter, "LocalShoot", xDTaraZ.Combat.SilentShoot)
+end
+
+function xDTaraZ.Combat.RestoreSilent()
+    for shooter, saved in pairs(xDTaraZ.Combat.SilentSaved) do
+        rawset(shooter, "LocalShoot", saved.Raw)
+    end
+    table.clear(xDTaraZ.Combat.SilentSaved)
+end
+
+xDTaraZ.Combat.ScopeSaved = {}
+
+function xDTaraZ.Combat.ApplyInstantScope()
+    local weapon = xDTaraZ.Combat.Shooter()
+    local cfg = weapon and weapon.Config
+    if type(cfg) ~= "table" or rawget(cfg, "AimTime") == 0 then return end
+    if not xDTaraZ.Combat.ScopeSaved[cfg] then
+        xDTaraZ.Combat.ScopeSaved[cfg] = { rawget(cfg, "AimTime"), rawget(cfg, "DelayTime") }
+    end
+    rawset(cfg, "AimTime", 0)
+    rawset(cfg, "DelayTime", 0)
+end
+
+function xDTaraZ.Combat.RestoreScope()
+    for cfg, saved in pairs(xDTaraZ.Combat.ScopeSaved) do
+        rawset(cfg, "AimTime", saved[1])
+        rawset(cfg, "DelayTime", saved[2])
+    end
+    table.clear(xDTaraZ.Combat.ScopeSaved)
 end
 
 function xDTaraZ.Combat.UpdateCircle()
@@ -1273,45 +1166,55 @@ function xDTaraZ.Combat.RestoreRecoil()
     table.clear(xDTaraZ.Combat.ZoomSaved)
 end
 
+function xDTaraZ.Combat.Patches()
+    local o, c = xDTaraZ.Options, xDTaraZ.Combat
+    if o.NoRecoil then
+        c.ApplyNoRecoil()
+    elseif next(c.RecoilSaved) or next(c.ZoomSaved) then
+        c.RestoreRecoil()
+    end
+    if o.NoSpread then c.ApplyNoSpread() elseif next(c.SpreadSaved) then c.RestoreSpread() end
+    if o.InstantScope or o.Ragebot then c.ApplyInstantScope() elseif next(c.ScopeSaved) then c.RestoreScope() end
+    if c.SilentActive() then
+        c.ApplySilent()
+        c.ApplyLook()
+    else
+        if next(c.SilentSaved) then c.RestoreSilent() end
+        c.RestoreLook()
+    end
+end
+
 function xDTaraZ.Combat.Step()
-    xDTaraZ.Combat.UpdateCircle()
-    if xDTaraZ.Options.NoRecoil then
-        xDTaraZ.Combat.ApplyNoRecoil()
-    elseif next(xDTaraZ.Combat.RecoilSaved) or next(xDTaraZ.Combat.ZoomSaved) then
-        xDTaraZ.Combat.RestoreRecoil()
-    end
-    if xDTaraZ.Options.NoSpread then
-        xDTaraZ.Combat.ApplyNoSpread()
-    elseif next(xDTaraZ.Combat.SpreadSaved) then
-        xDTaraZ.Combat.RestoreSpread()
-    end
-    if not xDTaraZ.Combat.Active() then
-        if xDTaraZ.Combat.State ~= "Idle" then xDTaraZ.Combat.Stop() end
+    local c = xDTaraZ.Combat
+    c.UpdateCircle()
+    c.Patches()
+    if not c.Active() then
+        if c.State ~= "Idle" then c.Stop() end
         return
     end
     if not xDTaraZ.Match.InRound() then
-        xDTaraZ.Combat.Target, xDTaraZ.Combat.Part = nil, nil
-        xDTaraZ.Combat.State, xDTaraZ.Combat.Status = "Wait", "Waiting for round"
+        c.Target, c.Part = nil, nil
+        c.State, c.Status = "Wait", "Waiting for round"
         return
     end
 
     local mode = xDTaraZ.Match.Info() or "?"
-    if xDTaraZ.Combat.AimActive() then
-        xDTaraZ.Combat.BindCamera()
-        local target, part = xDTaraZ.Combat.SelectTarget()
-        xDTaraZ.Combat.Target, xDTaraZ.Combat.Part = target, part
-        xDTaraZ.Combat.State = target and "Locked" or "Acquire"
+    if c.AimActive() then c.BindCamera() else c.UnbindCamera() end
+    if c.AimActive() or c.SilentActive() then
+        local target, part = c.SelectTarget()
+        if target ~= c.Target then c.LockedSince = os.clock() end
+        c.Target, c.Part = target, part
+        c.State = target and "Locked" or "Acquire"
         local char = target and xDTaraZ.Entity.Character(target)
-        xDTaraZ.Combat.Status = mode .. " · " .. (char and char.Name or "no target")
+        c.Status = mode .. " · " .. (char and char.Name or "no target")
     else
-        xDTaraZ.Combat.UnbindCamera()
-        xDTaraZ.Combat.Target, xDTaraZ.Combat.Part = nil, nil
-        xDTaraZ.Combat.State, xDTaraZ.Combat.Status = "Ready", mode .. " · aim idle"
+        c.Target, c.Part = nil, nil
+        c.State, c.Status = "Ready", mode .. " · aim idle"
     end
 
-    if xDTaraZ.Combat.FireActive() and xDTaraZ.Combat.CrosshairOnEnemy() and xDTaraZ.Combat.Fire() then
-        xDTaraZ.Combat.State = "Fired"
-    end
+    local settled = c.Target ~= nil and os.clock() - c.LockedSince >= xDTaraZ.Config.LookSettle
+    local shoot = (xDTaraZ.Options.Ragebot and settled) or (xDTaraZ.Options.TriggerBot and c.CrosshairOnEnemy())
+    if shoot and c.Fire() then c.State = "Fired" end
 end
 
 function xDTaraZ.Combat.Stop()
@@ -1325,6 +1228,9 @@ function xDTaraZ.Combat.Unload()
     xDTaraZ.Combat.Stop()
     xDTaraZ.Combat.RestoreRecoil()
     xDTaraZ.Combat.RestoreSpread()
+    xDTaraZ.Combat.RestoreScope()
+    xDTaraZ.Combat.RestoreSilent()
+    xDTaraZ.Combat.RestoreLook()
     if xDTaraZ.Combat.Circle then
         xDTaraZ.Combat.Circle:Remove()
         xDTaraZ.Combat.Circle = nil
@@ -1335,145 +1241,151 @@ function xDTaraZ.Combat.GetStatus()
     return xDTaraZ.Combat.Status
 end
 
-xDTaraZ.Farm = { Status = "Off", Kills = 0, StartKills = 0, LastJoin = 0 }
+xDTaraZ.Skin = {
+    Catalog = {},
+    Types = {},
+    Labels = {},
+    Chosen = {},
+    Saved = setmetatable({}, { __mode = "k" }),
+    Status = "Off",
+    RarityRank = { Common = 1, UnCommon = 2, Rare = 3, Epic = 4, Legendary = 5, Mystic = 6 },
+    Hidden = { Charm = true },
+}
 
-function xDTaraZ.Farm.KillCount()
-    local status = xDTaraZ.GameLib.Service.StatusService
-    local key = xDTaraZ.GameLib.Status and xDTaraZ.GameLib.Status.Killed
-    if not (status and key) then return 0 end
-    local ok, value = pcall(function() return status.GetStatus(key) end)
-    return ok and tonumber(value) or 0
+---@return string?, string?  weapon type and family, nil for non-weapons
+function xDTaraZ.Skin.Classify(cfg)
+    if type(cfg) ~= "table" then return nil end
+    local ok, kind, family = pcall(function() return cfg.WeaponType, cfg.Family end)
+    if not ok or type(kind) ~= "string" or type(family) ~= "string" then return nil end
+    if xDTaraZ.Skin.Hidden[kind] or family:find("^Base") then return nil end
+    return kind, family
 end
 
-function xDTaraZ.Farm.JoinPad()
-    local start = Workspace:FindFirstChild("Lobby") and Workspace.Lobby:FindFirstChild("Start")
-    local label = start and start:FindFirstChild("TextLabel", true)
-    if not (start and label and label.Text:find("Touch")) then return false end
-    local now = os.clock()
-    if now - xDTaraZ.Farm.LastJoin < xDTaraZ.Config.JoinRetry then return true end
-    xDTaraZ.Farm.LastJoin = now
-    local touch = start:FindFirstChild("Touch")
-    local hrp = xDTaraZ.Player.Root
-    if touch and hrp and Util.FireTouch then
-        Util.FireTouch(hrp, touch, 0)
-        task.delay(0.1, Util.FireTouch, hrp, touch, 1)
+do
+    local configs = xDTaraZ.GameLib.Config.WeaponConfig or {}
+    for key, cfg in pairs(configs) do
+        if type(key) ~= "string" then continue end
+        local kind, family = xDTaraZ.Skin.Classify(cfg)
+        if not kind then continue end
+        local byFamily = xDTaraZ.Skin.Catalog[kind]
+        if not byFamily then
+            byFamily = {}
+            xDTaraZ.Skin.Catalog[kind] = byFamily
+            table.insert(xDTaraZ.Skin.Types, kind)
+        end
+        byFamily[family] = byFamily[family] or {}
+        local rarity = cfg.Rarity or "Common"
+        table.insert(byFamily[family], { key, rarity, type(cfg.Display) == "string" and cfg.Display or key })
     end
-    return true
-end
-
----@return table?, number  nearest enemy entity and distance, visible or not
-function xDTaraZ.Farm.NearestEnemy()
-    local root = xDTaraZ.Player.Root
-    if not root then return nil end
-    local best, bestDist
-    for _, entity in pairs(xDTaraZ.Entity.List()) do
-        if xDTaraZ.Combat.IsEnemy(entity) then
-            local enemyRoot = xDTaraZ.Entity.Root(entity)
-            if enemyRoot then
-                local dist = (enemyRoot.Position - root.Position).Magnitude
-                if not bestDist or dist < bestDist then best, bestDist = enemyRoot, dist end
-            end
+    table.sort(xDTaraZ.Skin.Types)
+    for _, byFamily in pairs(xDTaraZ.Skin.Catalog) do
+        for _, list in pairs(byFamily) do
+            table.sort(list, function(a, b)
+                local ra, rb = xDTaraZ.Skin.RarityRank[a[2]] or 0, xDTaraZ.Skin.RarityRank[b[2]] or 0
+                if ra ~= rb then return ra > rb end
+                return a[3] < b[3]
+            end)
         end
     end
-    return best, bestDist
 end
 
-function xDTaraZ.Farm.DashHelper()
-    if xDTaraZ.Farm.Dash ~= nil then return xDTaraZ.Farm.Dash end
-    local client = ReplicatedStorage:FindFirstChild("Client")
-    local helper = client and client:FindFirstChild("CombatHelper")
-    local dash = helper and helper:FindFirstChild("Dash")
-    local config = ReplicatedStorage:FindFirstChild("Config") and ReplicatedStorage.Config:FindFirstChild("Config")
-    local ffa = ReplicatedStorage.Remote.GameService.GameMode.FFA:FindFirstChild("Dash")
-    local okD, dashModule = pcall(require, dash)
-    local okC, configModule = pcall(require, config)
-    if okD and okC and ffa then
-        xDTaraZ.Farm.Dash = { Module = dashModule, Config = configModule.Movement, Remote = ffa, Entity = xDTaraZ.GameLib.Service.EntityService.LocalEntity }
-    else
-        xDTaraZ.Farm.Dash = false
+function xDTaraZ.Skin.Families(kind)
+    return Util.SortedKeys(xDTaraZ.Skin.Catalog[kind])
+end
+
+---@param rarities table?  set of rarities to show, empty = all
+---@return string[]  labels for the dropdown, best rarity first
+function xDTaraZ.Skin.List(kind, family, rarities)
+    local list = xDTaraZ.Skin.Catalog[kind] and xDTaraZ.Skin.Catalog[kind][family]
+    local names = {}
+    if not list then return names end
+    local filter = rarities and next(rarities) and rarities
+    for _, skin in ipairs(list) do
+        if filter and not filter[skin[2]] then continue end
+        local label = string.format("[%s] %s", skin[2], skin[3])
+        if xDTaraZ.Skin.Labels[label] and xDTaraZ.Skin.Labels[label] ~= skin[1] then label = label .. " · " .. skin[1] end
+        xDTaraZ.Skin.Labels[label] = skin[1]
+        names[#names + 1] = label
     end
-    return xDTaraZ.Farm.Dash
+    return names
 end
 
----@param dir Vector3  flattened world direction to dash toward
-function xDTaraZ.Farm.DashTo(dir)
-    local dash = xDTaraZ.Farm.DashHelper()
-    if not dash then return false end
-    dash.Module.RefreshNextDashTime()
-    local entity = dash.Entity
-    if not dash.Module.CanDash() or entity:InState(entity.State.Dash) then return false end
-    if not entity:RequestState(entity.State.Dash) then return false end
-    dash.Remote:FireServer(Workspace:GetServerTimeNow(), true, 0)
-    dash.Module.Dash({
-        GravityRecover = true, Up = 2, Direction = dir,
-        Duration = dash.Config.DashDuration, Distance = dash.Config.DashDistance,
-        DirectionForceEndPercent = dash.Config.DashForceEndPervcent,
-        Style = Enum.EasingStyle.Quad, StyleDirection = Enum.EasingDirection.Out,
-    })
-    return true
+function xDTaraZ.Skin.Choose(family, label)
+    xDTaraZ.Skin.Chosen[family] = label and xDTaraZ.Skin.Labels[label] or nil
 end
 
-function xDTaraZ.Farm.Navigate()
-    local root = xDTaraZ.Player.Root
-    local enemy, dist = xDTaraZ.Farm.NearestEnemy()
-    if not (root and enemy) then return false end
-    if dist < xDTaraZ.Config.FarmMinDash then return false end
-    local flat = (enemy.Position - root.Position) * Vector3.new(1, 0, 1)
-    if flat.Magnitude < 1 then return false end
-    xDTaraZ.Farm.FaceTarget(enemy.Position)
-    return xDTaraZ.Farm.DashTo(flat.Unit)
+function xDTaraZ.Skin.ClearAll()
+    table.clear(xDTaraZ.Skin.Chosen)
 end
 
----@param pos Vector3  point the camera should look at before dashing
-function xDTaraZ.Farm.FaceTarget(pos)
-    local cam = Workspace.CurrentCamera
-    if cam then cam.CFrame = CFrame.lookAt(cam.CFrame.Position, pos) end
+---@return table[]  every weapon the local player carries
+function xDTaraZ.Skin.Carried()
+    local combat = xDTaraZ.GameLib.Service.CombatService
+    local ok, weapons = pcall(function() return combat.GetWeapons() end)
+    local list = {}
+    if ok and type(weapons) == "table" then
+        for _, weapon in pairs(weapons) do
+            if type(weapon) == "table" and weapon.Name then list[#list + 1] = weapon end
+        end
+    end
+    local held = combat and combat.GetCurrentWeapon()
+    if held and not table.find(list, held) then list[#list + 1] = held end
+    return list
 end
 
-function xDTaraZ.Farm.Respawn()
-    local gs = xDTaraZ.GameLib.Service.GameService
-    if not (gs and gs.CanFastRespawn) then return end
-    local ok, ready = pcall(gs.CanFastRespawn)
-    if ok and ready then pcall(gs.FastRespawn) end
+function xDTaraZ.Skin.Rebuild(weapon)
+    local controllers = xDTaraZ.GameLib.WeaponController
+    local entity = xDTaraZ.GameLib.Service.EntityService.LocalEntity
+    if not (controllers and entity and weapon.Controller) then return end
+    weapon.Controller:Destroy()
+    controllers.Create(entity, weapon)
 end
 
-function xDTaraZ.Farm.Step()
-    if not xDTaraZ.Options.AutoFarm then
-        if xDTaraZ.Combat.Farm then xDTaraZ.Farm.Stop() end
+function xDTaraZ.Skin.Apply(weapon, key)
+    local cfg = xDTaraZ.GameLib.Config.WeaponConfig[key]
+    if not cfg then return end
+    if not xDTaraZ.Skin.Saved[weapon] then xDTaraZ.Skin.Saved[weapon] = { weapon.Name, weapon.Config } end
+    weapon.Name, weapon.Config = key, cfg
+    xDTaraZ.Skin.Rebuild(weapon)
+end
+
+function xDTaraZ.Skin.Revert(weapon)
+    local saved = xDTaraZ.Skin.Saved[weapon]
+    if not saved then return end
+    weapon.Name, weapon.Config = saved[1], saved[2]
+    xDTaraZ.Skin.Saved[weapon] = nil
+    xDTaraZ.Skin.Rebuild(weapon)
+end
+
+function xDTaraZ.Skin.Restore()
+    for weapon in pairs(xDTaraZ.Skin.Saved) do xDTaraZ.Skin.Revert(weapon) end
+end
+
+function xDTaraZ.Skin.Step()
+    if not xDTaraZ.Options.SkinChanger then
+        if next(xDTaraZ.Skin.Saved) then xDTaraZ.Skin.Restore() end
+        xDTaraZ.Skin.Status = "Off"
         return
     end
-    xDTaraZ.Combat.Farm = true
-    xDTaraZ.Farm.Kills = xDTaraZ.Farm.KillCount() - xDTaraZ.Farm.StartKills
 
-    if not xDTaraZ.Match.InRound() then
-        xDTaraZ.Farm.Status = xDTaraZ.Farm.JoinPad() and "Joining round" or "Waiting for round"
-        return
+    local applied = 0
+    for _, weapon in ipairs(xDTaraZ.Skin.Carried()) do
+        local saved = xDTaraZ.Skin.Saved[weapon]
+        local originalCfg = saved and saved[2] or weapon.Config
+        local _, family = xDTaraZ.Skin.Classify(originalCfg)
+        local key = family and xDTaraZ.Skin.Chosen[family]
+        if key then
+            if weapon.Name ~= key then xDTaraZ.Skin.Apply(weapon, key) end
+            applied += 1
+        elseif saved then
+            xDTaraZ.Skin.Revert(weapon)
+        end
     end
-    if xDTaraZ.Player:IsAlive() then
-        if not xDTaraZ.Combat.Target then xDTaraZ.Farm.Navigate() end
-        xDTaraZ.Farm.Status = "Farming · " .. xDTaraZ.Farm.Kills .. " kills"
-    else
-        xDTaraZ.Farm.Respawn()
-        xDTaraZ.Farm.Status = "Respawning"
-    end
+    xDTaraZ.Skin.Status = applied > 0 and (applied .. " weapon(s) skinned") or "Pick a skin"
 end
 
-function xDTaraZ.Farm.Start()
-    xDTaraZ.Options.AutoFarm = true
-    xDTaraZ.Combat.Farm = true
-    xDTaraZ.Farm.StartKills = xDTaraZ.Farm.KillCount()
-    xDTaraZ.Farm.Kills = 0
-end
-
-function xDTaraZ.Farm.Stop()
-    xDTaraZ.Options.AutoFarm = false
-    xDTaraZ.Combat.Farm = false
-    if not xDTaraZ.Combat.Active() then xDTaraZ.Combat.Stop() end
-    xDTaraZ.Farm.Status = "Off"
-end
-
-function xDTaraZ.Farm.GetStatus()
-    return xDTaraZ.Farm.Status
+function xDTaraZ.Skin.GetStatus()
+    return xDTaraZ.Skin.Status
 end
 
 xDTaraZ.UI = { Labels = {} }
@@ -1511,14 +1423,10 @@ function xDTaraZ.UI.BuildMain(window)
     window:AddTabSection(T("Main", "หลัก"))
     local tab = window:AddTab(T("Main", "หลัก"), "mushroom", T("Status and links", "สถานะและลิงก์"))
 
-    local farm = tab:AddLeftGroupbox(T("Auto Farm", "ฟาร์มอัตโนมัติ"), "star")
-    farm:AddToggle("AutoFarm", { Text = T("Auto farm (Kaitun)", "ฟาร์มอัตโนมัติ"), Description = T("Joins rounds, aims, fires and respawns on its own", "เข้ารอบ เล็ง ยิง และเกิดใหม่เองทั้งหมด"), Risky = true, Callback = xDTaraZ.UI.StartStop(xDTaraZ.Farm) })
-    xDTaraZ.UI.Labels.Farm = farm:AddParagraph({ Title = T("Status", "สถานะ"), Content = "-" })
-
     local status = tab:AddLeftGroupbox(T("Status", "สถานะ"), "star")
-    xDTaraZ.UI.Labels.Movement = status:AddParagraph({ Title = T("Movement", "การเคลื่อนที่"), Content = "-" })
     xDTaraZ.UI.Labels.Esp = status:AddParagraph({ Title = T("ESP", "ESP"), Content = "-" })
     xDTaraZ.UI.Labels.Combat = status:AddParagraph({ Title = T("Combat", "การต่อสู้"), Content = "-" })
+    xDTaraZ.UI.Labels.Skin = status:AddParagraph({ Title = T("Skin", "สกิน"), Content = "-" })
     xDTaraZ.UI.Labels.Economy = status:AddParagraph({ Title = T("Economy", "เศรษฐกิจ"), Content = "-" })
 
     local panic = tab:AddLeftGroupbox(T("Quick", "ด่วน"), "bomb")
@@ -1541,6 +1449,13 @@ function xDTaraZ.UI.BuildCombat(window)
     window:AddTabSection(T("Combat", "การต่อสู้"))
     local tab = window:AddTab(T("Combat", "การต่อสู้"), "target", T("Aimbot and firing", "เล็งอัตโนมัติและยิง"))
 
+    local rage = tab:AddLeftGroupbox(T("Rage", "เรจ"), "bomb")
+    rage:AddToggle("Ragebot", { Text = T("Ragebot", "เรจบอท"), Description = T("Shoots every visible enemy on its own, view stays still", "ยิงศัตรูทุกตัวที่มองเห็นเอง กล้องไม่ขยับ"), Risky = true })
+    rage:AddToggle("SilentAim", { Text = T("Silent aim", "ไซเลนต์เอม"), Description = T("Shots land on the target inside the FOV, your view never moves", "กระสุนเข้าเป้าในวง FOV กล้องไม่ขยับเลย") })
+    rage:AddSlider("HitChance", { Text = T("Hit chance", "โอกาสยิงโดน"), Min = 0, Max = 100, Default = 100, Suffix = "%", Rounding = 0 })
+    rage:AddSlider("HeadChance", { Text = T("Headshot chance", "โอกาสเข้าหัว"), Min = 0, Max = 100, Default = 100, Suffix = "%", Rounding = 0 })
+    rage:AddToggle("InstantScope", { Text = T("Instant scope", "เปิดสโคปทันที"), Description = T("Scope is ready the moment you aim", "เปิดสโคปพร้อมยิงทันทีที่เล็ง") })
+
     local aim = tab:AddLeftGroupbox(T("Aimbot", "เล็งอัตโนมัติ"), "crosshair")
     aim:AddToggle("Aimbot", {
         Text = T("Aimbot", "เล็งอัตโนมัติ"),
@@ -1554,7 +1469,7 @@ function xDTaraZ.UI.BuildCombat(window)
     aim:AddSlider("AimMaxDistance", { Text = T("Max aim distance", "ระยะเล็งสูงสุด"), Min = 50, Max = 2000, Default = 1000, Suffix = "m" })
     aim:AddDropdown("AimBone", { Text = T("Aim part", "จุดเล็ง"), Values = { "Head", "Body", "Arm", "Leg" }, Default = "Head" })
     aim:AddSlider("AimSmooth", { Text = T("Smoothness", "ความนุ่ม"), Min = 1, Max = 20, Default = 1, Rounding = 0 })
-    aim:AddSlider("AimPrediction", { Text = T("Prediction", "เล็งดักหน้า"), Min = 0, Max = 200, Default = 0, Suffix = "ms", Rounding = 0 })
+    aim:AddSlider("AimPrediction", { Text = T("Prediction", "เล็งดักหน้า"), Min = 0, Max = 200, Default = 60, Suffix = "ms", Rounding = 0 })
     aim:AddSlider("AimFov", { Text = T("FOV", "ระยะมอง"), Min = 20, Max = 600, Default = 150, Suffix = "px" })
     aim:AddToggle("ShowFov", { Text = T("Show FOV circle", "แสดงวงระยะมอง") })
     aim:AddToggle("AimWallCheck", { Text = T("Visible only", "เฉพาะที่มองเห็น"), Default = true })
@@ -1562,31 +1477,101 @@ function xDTaraZ.UI.BuildCombat(window)
 
     local fire = tab:AddRightGroupbox(T("Firing", "การยิง"), "swords")
     fire:AddToggle("TriggerBot", { Text = T("Trigger bot", "ยิงอัตโนมัติ"), Description = T("Fires the moment your crosshair is on an enemy", "ยิงทันทีเมื่อเป้าเล็งทับศัตรู"), Risky = true })
-    fire:AddToggle("KillAura", { Text = T("Kill aura", "ออร่าสังหาร"), Description = T("Auto aims and kills the nearest visible enemy, no key", "เล็งและฆ่าศัตรูที่เห็นใกล้สุดเอง ไม่ต้องกดปุ่ม"), Risky = true })
     fire:AddToggle("NoSpread", { Text = T("No spread", "ยิงไม่กระจาย"), Description = T("Shots stay accurate while moving or jumping", "ยิงแม่นแม้ตอนเดินหรือกระโดด") })
     fire:AddToggle("NoRecoil", { Text = T("No recoil", "ไม่มีแรงถีบ"), Description = T("Camera no longer kicks when firing", "กล้องไม่เด้งตอนยิง") })
-
-    local obj = tab:AddRightGroupbox(T("Objective", "ภารกิจ"), "flag")
-    obj:AddToggle("AutoFlag", { Text = T("Auto capture flag", "เก็บธงอัตโนมัติ"), Description = T("Grabs and returns flags in Capture Flag rounds", "เก็บและส่งธงในโหมด Capture Flag"), Risky = true })end
+end
 
 function xDTaraZ.UI.BuildPlayer(window)
     window:AddTabSection(T("Player", "ผู้เล่น"))
-    local tab = window:AddTab(T("Player", "ผู้เล่น"), "oneup", T("Movement and utility", "การเคลื่อนที่และอรรถประโยชน์"))
+    local tab = window:AddTab(T("Player", "ผู้เล่น"), "oneup", T("Respawn and utility", "เกิดใหม่และอรรถประโยชน์"))
 
-    local move = tab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "flag")
-    move:AddToggle("Speed", { Text = T("Speed", "วิ่งเร็ว"), Callback = xDTaraZ.UI.Detach(xDTaraZ.Movement.SetSpeed) })
-    move:AddSlider("SpeedValue", { Text = T("Walk speed", "ความเร็ว"), Min = 16, Max = 250, Default = 32 })
-    move:AddToggle("Jump", { Text = T("High jump", "กระโดดสูง"), Callback = xDTaraZ.UI.Detach(xDTaraZ.Movement.SetJump) })
-    move:AddSlider("JumpValue", { Text = T("Jump height", "ความสูงกระโดด"), Min = 7, Max = 300, Default = 60 })
-    move:AddToggle("Fly", { Text = T("Fly", "บิน"), Callback = xDTaraZ.UI.Detach(xDTaraZ.Movement.SetFly) }):AddKeyPicker("FlyKey", { Default = "F", Mode = "Toggle" })
-    move:AddSlider("FlySpeed", { Text = T("Fly speed", "ความเร็วบิน"), Min = 16, Max = 400, Default = 90 })
-    move:AddToggle("Noclip", { Text = T("Noclip", "เดินทะลุ"), Callback = xDTaraZ.UI.Detach(xDTaraZ.Movement.SetNoclip) })
-    move:AddToggle("InfiniteJump", { Text = T("Infinite jump", "กระโดดไม่จำกัด") })
-    move:AddToggle("InfiniteDash", { Text = T("Infinite dash", "พุ่งไม่จำกัด"), Description = T("Removes the dash cooldown (FFA/TDM)", "ตัดคูลดาวน์การพุ่ง") })
-
-    local util = tab:AddRightGroupbox(T("Utility", "อรรถประโยชน์"), "gear")
+    local util = tab:AddLeftGroupbox(T("Utility", "อรรถประโยชน์"), "gear")
+    util:AddToggle("FastRespawn", { Text = T("Fast respawn", "เกิดใหม่เร็ว"), Description = T("Back in the fight the moment you die", "กลับเข้าสนามทันทีที่ตาย") })
+    util:AddToggle("InfiniteDash", { Text = T("Infinite dash", "พุ่งไม่จำกัด"), Description = T("Dash again without waiting (FFA/TDM)", "พุ่งซ้ำได้ไม่ต้องรอ (FFA/TDM)") })
     util:AddToggle("AntiAfk", { Text = T("Anti AFK", "กันหลุด AFK"), Callback = xDTaraZ.UI.StartStop(xDTaraZ.Player.AntiAfk) })
-    util:AddToggle("AutoRespawn", { Text = T("Auto respawn", "เกิดใหม่อัตโนมัติ"), Description = T("Respawns right away after dying", "เกิดใหม่ทันทีหลังตาย") })
+end
+
+xDTaraZ.UI.SkinKinds = {
+    Sniper = { "Snipers", "สไนเปอร์", "crosshair" },
+    Rifle = { "Rifles", "ไรเฟิล", "target" },
+    Melee = { "Knives", "มีด", "swords" },
+    Glove = { "Gloves", "ถุงมือ", "shield" },
+}
+
+function xDTaraZ.UI.SkinRarities()
+    return Util.SetFromList(xDTaraZ.Options.SkinRarities)
+end
+
+---@param kind string  WeaponType from the game config
+function xDTaraZ.UI.BuildSkinGroup(tab, kind, left)
+    local meta = xDTaraZ.UI.SkinKinds[kind] or { kind, kind, "star" }
+    local group = left and tab:AddLeftGroupbox(T(meta[1], meta[2]), meta[3]) or tab:AddRightGroupbox(T(meta[1], meta[2]), meta[3])
+    local families = xDTaraZ.Skin.Families(kind)
+    local weaponIdx, skinIdx = "Skin" .. kind .. "Weapon", "Skin" .. kind .. "Pick"
+
+    local function Refill()
+        local family = Library.Options[weaponIdx] and Library.Options[weaponIdx].Value
+        local picker = Library.Options[skinIdx]
+        if picker then picker:SetValues(xDTaraZ.Skin.List(kind, family, xDTaraZ.UI.SkinRarities())) end
+    end
+    xDTaraZ.UI.SkinRefill[#xDTaraZ.UI.SkinRefill + 1] = Refill
+
+    group:AddDropdown(weaponIdx, {
+        Text = T("Weapon", "อาวุธ"),
+        Values = families,
+        Default = families[1],
+        Searchable = true,
+        Callback = function() Refill() end,
+    })
+    group:AddDropdown(skinIdx, {
+        Text = T("Skin", "สกิน"),
+        Values = xDTaraZ.Skin.List(kind, families[1], {}),
+        Searchable = true,
+        AllowNull = true,
+        Callback = function(label)
+            local family = Library.Options[weaponIdx] and Library.Options[weaponIdx].Value
+            if family then xDTaraZ.Skin.Choose(family, label) end
+        end,
+    })
+    group:AddButton({ Text = T("Use default skin", "ใช้สกินเดิม"), Func = function()
+        local family = Library.Options[weaponIdx] and Library.Options[weaponIdx].Value
+        if family then xDTaraZ.Skin.Choose(family, nil) end
+        Library.Options[skinIdx]:SetValue(nil)
+    end })
+end
+
+function xDTaraZ.UI.BuildSkins(window)
+    xDTaraZ.UI.SkinRefill = {}
+    local tab = window:AddTab(T("Skins", "สกิน"), "star", T("Every weapon, knife and glove skin", "สกินปืน มีด และถุงมือทุกแบบ"))
+
+    local main = tab:AddLeftGroupbox(T("Skin Changer", "เปลี่ยนสกิน"), "star")
+    main:AddToggle("SkinChanger", { Text = T("Skin changer", "เปลี่ยนสกิน"), Description = T("Pick any skin per weapon, only you see it", "เลือกสกินรายอาวุธได้ทุกแบบ เห็นแค่ตัวเอง") })
+    local rarityValues = {}
+    for rarity in pairs(xDTaraZ.Skin.RarityRank) do rarityValues[#rarityValues + 1] = rarity end
+    table.sort(rarityValues, function(a, b) return xDTaraZ.Skin.RarityRank[a] > xDTaraZ.Skin.RarityRank[b] end)
+    local filter = main:AddDropdown("SkinRarities", {
+        Text = T("Show rarities", "แสดงเฉพาะ rarity"),
+        Description = T("Empty shows everything", "ไม่เลือก = แสดงทั้งหมด"),
+        Values = rarityValues,
+        Multi = true,
+        Default = {},
+        AllowNull = true,
+    })
+    xDTaraZ.UI.Bind(filter, "SkinRarities")
+    filter:OnChanged(function()
+        for _, refill in ipairs(xDTaraZ.UI.SkinRefill) do refill() end
+    end)
+    main:AddButton({ Text = T("Reset all skins", "คืนสกินเดิมทั้งหมด"), Style = "Warning", Func = function()
+        xDTaraZ.Skin.ClearAll()
+        for _, kind in ipairs(xDTaraZ.Skin.Types) do
+            local picker = Library.Options["Skin" .. kind .. "Pick"]
+            if picker then picker:SetValue(nil) end
+        end
+    end })
+
+    for index, kind in ipairs(xDTaraZ.Skin.Types) do
+        xDTaraZ.UI.BuildSkinGroup(tab, kind, index % 2 == 0)
+    end
 end
 
 function xDTaraZ.UI.BuildVisuals(window)
@@ -1633,8 +1618,7 @@ function xDTaraZ.UI.BuildEconomy(window)
 end
 
 function xDTaraZ.UI.RefreshStatus()
-    if xDTaraZ.UI.Labels.Farm then xDTaraZ.UI.Labels.Farm:SetText(xDTaraZ.Farm.GetStatus()) end
-    if xDTaraZ.UI.Labels.Movement then xDTaraZ.UI.Labels.Movement:SetText(xDTaraZ.Movement.GetStatus()) end
+    if xDTaraZ.UI.Labels.Skin then xDTaraZ.UI.Labels.Skin:SetText(xDTaraZ.Skin.GetStatus()) end
     if xDTaraZ.UI.Labels.Esp then xDTaraZ.UI.Labels.Esp:SetText(xDTaraZ.Esp.GetStatus()) end
     if xDTaraZ.UI.Labels.Combat then xDTaraZ.UI.Labels.Combat:SetText(xDTaraZ.Combat.GetStatus()) end
     if xDTaraZ.UI.Labels.Economy then
@@ -1649,13 +1633,15 @@ function xDTaraZ.UI.Build()
     xDTaraZ.UI.BuildCombat(window)
     xDTaraZ.UI.BuildPlayer(window)
     xDTaraZ.UI.BuildVisuals(window)
+    xDTaraZ.UI.BuildSkins(window)
     xDTaraZ.UI.BuildEconomy(window)
     window:AddTabSection(T("Other", "อื่นๆ"))
     window:AddSettingsTab()
 
-    for _, key in ipairs({ "SpeedValue", "JumpValue", "FlySpeed", "AimFov", "AimMode", "AimBone", "AimPriority", "AimMaxDistance",
-        "Aimbot", "AimSmooth", "AimPrediction", "ShowFov", "AimWallCheck",
-        "AimTeamCheck", "TriggerBot", "KillAura", "NoRecoil", "NoSpread", "AutoRespawn", "InfiniteDash", "AutoFlag", "AutoFarm", "InfiniteJump", "OpenCount", "MaxSellPrice", "KeepPerRarity" }) do
+    for _, key in ipairs({ "AimFov", "AimMode", "AimBone", "AimPriority", "AimMaxDistance",
+        "Aimbot", "AimSmooth", "AimPrediction", "ShowFov", "AimWallCheck", "AimTeamCheck",
+        "SilentAim", "Ragebot", "InstantScope", "HitChance", "HeadChance", "TriggerBot", "NoRecoil", "NoSpread",
+        "FastRespawn", "InfiniteDash", "SkinChanger", "OpenCount", "MaxSellPrice", "KeepPerRarity" }) do
         local widget = Library.Options[key]
         if widget then xDTaraZ.UI.Bind(widget, key) end
     end
@@ -1687,7 +1673,6 @@ end
 
 function xDTaraZ.Boot()
     xDTaraZ:Connect(LocalPlayer.CharacterAdded, function(character)
-        xDTaraZ.Movement.Release()
         xDTaraZ.Player:Bind(character)
     end)
 
@@ -1695,9 +1680,8 @@ function xDTaraZ.Boot()
 
     xDTaraZ.Scheduler.Every("Combat", 0.03, xDTaraZ.Combat.Step)
     xDTaraZ.Scheduler.Every("AntiAfk", 5, xDTaraZ.Player.AntiAfk.Step)
-    xDTaraZ.Scheduler.Every("Respawn", 0.5, xDTaraZ.Player.Respawn.Step)
-    xDTaraZ.Scheduler.Every("Flag", 1, xDTaraZ.Flag.Step)
-    xDTaraZ.Scheduler.Every("Farm", 0.5, xDTaraZ.Farm.Step)
+    xDTaraZ.Scheduler.Every("Respawn", 0.1, xDTaraZ.Player.Respawn.Step)
+    xDTaraZ.Scheduler.Every("Skin", 0.5, xDTaraZ.Skin.Step)
     xDTaraZ.Scheduler.Every("Shop", xDTaraZ.Config.EconomyInterval, xDTaraZ.Shop.Step)
     xDTaraZ.Scheduler.Every("Sell", xDTaraZ.Config.EconomyInterval, xDTaraZ.Sell.Step)
     xDTaraZ.Scheduler.Every("Collect", xDTaraZ.Config.EconomyInterval, xDTaraZ.Collect.Step)
@@ -1706,8 +1690,8 @@ end
 
 function xDTaraZ:Unload()
     self.State.Alive = false
-    xDTaraZ.Movement.Release()
     xDTaraZ.Combat.Unload()
+    xDTaraZ.Skin.Restore()
     for _, connection in ipairs(self.State.Connections) do
         pcall(function() connection:Disconnect() end)
     end

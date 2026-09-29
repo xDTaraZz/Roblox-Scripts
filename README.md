@@ -33,7 +33,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 | **[Open Sea For Animals](#-open-sea-for-animals)** | Loot every wave from your base, auto hatch, sell filters, Kaitun |
 | **[Murder Mystery 2](#-murder-mystery-2)** | Silent aim, auto shoot, kill all, coin farm, role ESP, auto win |
 | **[Driving Empire](#-driving-empire)** | Auto ATM farm, auto drive, playtime rewards, teleport, ESP |
-| **[Sniper Arena](#-sniper-arena)** | Auto farm kills, aimbot, kill aura, no spread, ESP with preview and radar |
+| **[Sniper Arena](#-sniper-arena)** | Silent aim, ragebot, aimbot, skin changer, ESP with preview and radar |
 | **[Violence District](#-violence-district)** | Auto repair, instant escape, killer auto slash and hook, auto farm both roles, ESP |
 
 ---
@@ -136,18 +136,17 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 <details>
 <summary><b>Features</b></summary>
 
-- **Auto Farm (Kaitun)**: joins rounds, hunts enemies, aims, fires and respawns on its own
+- **Silent aim**: shots land on the target inside the FOV, your view never moves
+- **Ragebot**: shoots every visible enemy on its own, view stays still
+- Hit chance and headshot chance sliders
 - **Aimbot** with hold, toggle or always mode, head/body/arm/leg, smoothness and prediction
 - Target priority: crosshair, mouse, distance or lowest health, with FOV circle and max distance
-- **Trigger bot** and **Kill aura**
-- **No spread** and **No recoil**
-- Works in every mode with team check (FFA, TDM, Duel, Boss)
+- **Trigger bot**, **Instant scope**, **No spread**, **No recoil**
+- **Skin changer** for snipers, rifles, knives and gloves, with rarity filter (only you see it)
 - **ESP**: box, name, health, distance, tracers, head dot, chams, off-screen arrows, live preview beside the menu
 - **Radar** minimap
-- Infinite dash, walk speed, high jump, fly, noclip, infinite jump
-- Auto respawn, anti AFK
+- Fast respawn, infinite dash, anti AFK
 - Auto open owned cases, auto sell by rarity with a price limit, auto claim quests
-- Auto capture flag
 
 </details>
 
