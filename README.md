@@ -7,7 +7,7 @@
 **Roblox scripts by xDTaraZ**
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20the%20server-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/FHVfmeSceA)
-[![Games](https://img.shields.io/badge/Games-7-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
+[![Games](https://img.shields.io/badge/Games-8-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
 [![Keyless](https://img.shields.io/badge/Key-None-2EA043?style=for-the-badge)](#-how-to-use)
 
 </div>
@@ -35,6 +35,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 | **[Driving Empire](#-driving-empire)** | Auto ATM farm, auto drive, playtime rewards, teleport, ESP |
 | **[Sniper Arena](#-sniper-arena)** | Silent aim, ragebot, aimbot, skin changer, ESP with preview and radar |
 | **[Violence District](#-violence-district)** | Auto repair, instant escape, killer auto slash and hook, auto farm both roles, ESP |
+| **[Anime Dice](#-anime-dice)** | Smart Kaitun, fast roll, auto upgrade and rebirth, auto tower, redeem all codes |
 
 ---
 
@@ -167,6 +168,27 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 - Teleport to generators, gates, hooks, players or away from the killer
 - Auto buy and level perks, buy items and killers
 - Walk speed, no slow, noclip, infinite jump, fullbright, no fog, anti camera shake, anti AFK
+
+</details>
+
+---
+
+### 🎲 Anime Dice
+
+<details>
+<summary><b>Features</b></summary>
+
+- **Kaitun**: rolls, places your best units, levels, grades, upgrades, buys dice, climbs towers and rebirths on its own
+- Smart spending: saves for the next dice or rebirth and only buys levels and upgrades that pay back fast
+- Fast roll, auto collect, auto equip best units (by real potential), auto level up
+- Auto buy and equip best dice, auto upgrades by branch, auto rebirth
+- Auto sell with rarity and mutation filters, auto clear full storage
+- Auto grade and auto trait with minimum target and protected-tier options, smart fuse, auto lock rare units
+- Auto tower with difficulty, stop floor, re-equip and smart difficulty
+- Auto equip best gear, ticket shop, auto potion and auto spin *(beta)*
+- Redeem all codes, auto daily, group, offline and quest rewards
+- Rare pull alerts with Discord webhook *(beta)*, session stats, auto rejoin *(beta)*
+- Disable cutscenes, walk speed, fly, noclip, infinite jump, anti AFK
 
 </details>
 
