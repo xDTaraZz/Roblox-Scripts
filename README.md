@@ -7,7 +7,7 @@
 **Roblox scripts by xDTaraZ**
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20the%20server-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/FHVfmeSceA)
-[![Games](https://img.shields.io/badge/Games-6-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
+[![Games](https://img.shields.io/badge/Games-7-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
 [![Keyless](https://img.shields.io/badge/Key-None-2EA043?style=for-the-badge)](#-how-to-use)
 
 </div>
@@ -34,6 +34,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 | **[Murder Mystery 2](#-murder-mystery-2)** | Silent aim, auto shoot, kill all, coin farm, role ESP, auto win |
 | **[Driving Empire](#-driving-empire)** | Auto ATM farm, auto drive, playtime rewards, teleport, ESP |
 | **[Sniper Arena](#-sniper-arena)** | Auto farm kills, aimbot, kill aura, no spread, ESP with preview and radar |
+| **[Violence District](#-violence-district)** | Auto repair, instant escape, killer auto slash and hook, auto farm both roles, ESP |
 
 ---
 
@@ -147,6 +148,26 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 - Auto respawn, anti AFK
 - Auto open owned cases, auto sell by rarity with a price limit, auto claim quests
 - Auto capture flag
+
+</details>
+
+---
+
+### 🔪 Violence District
+
+<details>
+<summary><b>Features</b></summary>
+
+- **Auto Farm (Kaitun)**: plays both roles for you, with an optional escape timer
+- **Survivor**: auto repair, perfect skill checks, auto heal and unhook teammates, auto dodge killer, auto self-unhook, killer alert
+- **Instant escape** (with delay) and **Escape Now**, sacrifice self
+- **Killer**: auto slash (Rage or Legit), smart hitbox, auto carry and hook, auto kick generators, no turn limit
+- Anti pallet stun, anti blind, auto parry, no parry cooldown *(beta)*
+- **Role**: survivor only or prefer killer
+- **ESP** for players, generators with progress, hooks, exit gates, pallets and windows
+- Teleport to generators, gates, hooks, players or away from the killer
+- Auto buy and level perks, buy items and killers
+- Walk speed, no slow, noclip, infinite jump, fullbright, no fog, anti camera shake, anti AFK
 
 </details>
 

@@ -440,7 +440,7 @@ xDTaraZ.Player.AntiAfk = { Connection = nil, Status = "Off" }
 function xDTaraZ.Player.AntiAfk.OnIdled()
     if not xDTaraZ.Options.AntiAfk then return end
     VirtualUser:CaptureController()
-    VirtualUser:ClickButton2(vectorZero)
+    VirtualUser:ClickButton2(Vector2.zero)
 end
 
 function xDTaraZ.Player.AntiAfk.Start()
