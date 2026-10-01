@@ -13,6 +13,7 @@ local GAMES = {
     [9534705677] = "Sniper Arena",
     [6739698191] = "Violence District",
     [10708913337] = "Anime Dice",
+    [10035204815] = "Ride A Pet",
 }
 
 local function notify(text)

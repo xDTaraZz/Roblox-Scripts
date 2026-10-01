@@ -1,0 +1,1351 @@
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
+if not LPH_OBFUSCATED then
+    local function Passthrough(fn) return fn end
+    LPH_JIT, LPH_JIT_MAX, LPH_NO_VIRTUALIZE = Passthrough, Passthrough, Passthrough
+end
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local VirtualUser = game:GetService("VirtualUser")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local CoreGui = game:GetService("CoreGui")
+
+local LocalPlayer = Players.LocalPlayer
+
+if game.GameId ~= 10035204815 then
+    LocalPlayer:Kick("Mario Hub: this script is for Ride A Pet only")
+    return
+end
+
+local environment = getgenv and getgenv() or _G
+if type(environment.RideAPetUnload) == "function" then
+    pcall(environment.RideAPetUnload)
+end
+
+local vector3New, cframeNew = Vector3.new, CFrame.new
+local osClock = os.clock
+
+local Library, T
+
+local xDTaraZ = setmetatable({}, {
+    __newindex = function(self, key, value)
+        rawset(self, key, type(value) == "function" and LPH_JIT(value) or value)
+    end,
+})
+
+xDTaraZ.Config = {
+    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
+    ReloadSource = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/loader.lua"))()',
+    Discord = "https://discord.gg/FHVfmeSceA",
+    SaveFolder = "Ride A Pet",
+    Tag = "[RideAPet]",
+    LoadTimeout = 30,
+
+    EggHover = 4,
+    HomeHover = 3,
+    NestHover = 5,
+    TeleportSettle = 0.25,
+    EquipSettle = 0.15,
+    PickupWait = 0.6,
+    DeliverWait = 0.6,
+    ClaimBatch = 64,
+    EggSkipFor = 30,
+    EggStock = 40,
+    DeliverBackoff = 3,
+    SnapshotTtl = 0.2,
+    LockWait = 6,
+
+    EggTick = 0.1,
+    StepTick = 0.5,
+    HatchGap = 1.5,
+    HatchRetry = 30,
+    PlaceGap = 0.4,
+    NestSkipFor = 30,
+    PetSpread = 0.35,
+    PetLift = 0.5,
+    PetFailBackoff = 20,
+    FeedGap = 1,
+    FeedEvery = 5,
+    ClaimGap = 30,
+    UpgradeGap = 2,
+    NestsGap = 5,
+    RebirthGap = 5,
+    RebirthBackoff = 60,
+    RebirthReserve = 2,
+
+    HuntHopAfter = 15,
+    HopPick = 15,
+    HopReset = 15,
+
+    FlySpeed = 120,
+    WalkSpeed = 60,
+    JumpPower = 80,
+    FlingSpin = 2000,
+    FlingForce = 9e4,
+    StickOffset = 2,
+
+    EspRange = 8000,
+    EspRefresh = 0.5,
+    EspLift = 4,
+    RarityColors = {
+        Common = Color3.fromRGB(200, 200, 200), Rare = Color3.fromRGB(90, 170, 255), Epic = Color3.fromRGB(190, 110, 255),
+        Legendary = Color3.fromRGB(255, 200, 60), Mythic = Color3.fromRGB(255, 90, 90), Divine = Color3.fromRGB(120, 255, 220),
+        Ethereal = Color3.fromRGB(255, 130, 230),
+    },
+}
+
+xDTaraZ.State = {
+    Alive = true,
+    Connections = {},
+    Status = "Idle",
+    Lock = nil,
+    EggsCollected = 0,
+    EggSkip = {},
+    NestSkip = {},
+    Snapshot = nil,
+    StockFloor = 0,
+    SnapshotAt = 0,
+    DeliverFailUntil = 0,
+    PetFailUntil = 0,
+    LastHatch = 0,
+    LastHatchAll = 0,
+    LastClaim = 0,
+    LastUpgrade = 0,
+    LastNests = 0,
+    LastRebirth = 0,
+    RebirthBlockedUntil = 0,
+    LastFeed = 0,
+    NextRebirthCost = math.huge,
+    EmptySince = nil,
+    Hopping = false,
+    EspBoards = {},
+    CollidePatch = {},
+    FlingHome = nil,
+}
+
+xDTaraZ.Options = {}
+
+local Config, State = xDTaraZ.Config, xDTaraZ.State
+
+---@return Instance  errors with a clear message when missing
+local function Need(parent, name)
+    local child = parent and parent:WaitForChild(name, Config.LoadTimeout)
+    if not child then error(Config.Tag .. " missing " .. name .. " (game updated?)") end
+    return child
+end
+
+local GameRemotes = Need(Need(ReplicatedStorage, "Remotes"), "Game")
+local PlotRemotes = Need(GameRemotes, "Plot")
+
+xDTaraZ.Net = {
+    EggPickup = Need(GameRemotes, "EggPickup"),
+    EggArrivalClaim = Need(GameRemotes, "EggArrivalClaim"),
+    EggPlaced = Need(GameRemotes, "EggPlaced"),
+    Hatch = Need(GameRemotes, "Hatch"),
+    PlacePet = Need(GameRemotes, "PlacePet"),
+    PickupPet = Need(GameRemotes, "PickupPet"),
+    PetCollect = Need(GameRemotes, "PetCollect"),
+    FeedPet = Need(GameRemotes, "FeedPet"),
+    Rebirth = Need(GameRemotes, "Rebirth"),
+    Upgrades = Need(PlotRemotes, "Upgrades"),
+    Nests = Need(PlotRemotes, "Nests"),
+    ClaimIndexReward = Need(GameRemotes, "ClaimIndexReward"),
+    OfflineEarnings = Need(GameRemotes, "OfflineEarnings"),
+}
+
+local GameData = Need(ReplicatedStorage, "GameData")
+xDTaraZ.GameLib = {
+    Eggs = require(Need(GameData, "Eggs")),
+    Pets = require(Need(GameData, "Pets")),
+    Rebirths = require(Need(GameData, "Rebirths")),
+    Mutations = require(Need(GameData, "Mutations")),
+    Foods = require(Need(GameData, "Foods")),
+    Nests = require(Need(GameData, "Nests")),
+    EggBaskets = require(Need(GameData, "EggBaskets")),
+}
+local GameLib = xDTaraZ.GameLib
+
+xDTaraZ.EggInfo = {}
+xDTaraZ.EggNames = {}
+xDTaraZ.Rarities = {}
+xDTaraZ.RarityRank = {}
+xDTaraZ.FoodNames = {}
+
+function xDTaraZ.BuildLists()
+    table.clear(xDTaraZ.EggInfo)
+    table.clear(xDTaraZ.EggNames)
+    table.clear(xDTaraZ.Rarities)
+    table.clear(xDTaraZ.RarityRank)
+    table.clear(xDTaraZ.FoodNames)
+
+    local rarityFloor = {}
+    for name, info in pairs(GameLib.Eggs) do
+        local rarity = info.Rarity or "Common"
+        local luck = tonumber(info.Luck) or math.huge
+        xDTaraZ.EggInfo[name] = { Rarity = rarity, Luck = luck, Growth = tonumber(info.GrowthTime) or 0 }
+        xDTaraZ.EggNames[#xDTaraZ.EggNames + 1] = name
+        rarityFloor[rarity] = math.min(rarityFloor[rarity] or math.huge, luck)
+    end
+    table.sort(xDTaraZ.EggNames, function(a, b) return xDTaraZ.EggInfo[a].Luck > xDTaraZ.EggInfo[b].Luck end)
+
+    for rarity in pairs(rarityFloor) do
+        xDTaraZ.Rarities[#xDTaraZ.Rarities + 1] = rarity
+    end
+    table.sort(xDTaraZ.Rarities, function(a, b) return rarityFloor[a] < rarityFloor[b] end)
+    for index, rarity in ipairs(xDTaraZ.Rarities) do
+        xDTaraZ.RarityRank[rarity] = index
+    end
+
+    for name in pairs(GameLib.Foods) do
+        xDTaraZ.FoodNames[#xDTaraZ.FoodNames + 1] = name
+    end
+    table.sort(xDTaraZ.FoodNames, function(a, b) return (GameLib.Foods[a].XP or 0) > (GameLib.Foods[b].XP or 0) end)
+end
+xDTaraZ.BuildLists()
+
+xDTaraZ.Util = {}
+
+function xDTaraZ.Util.HttpGet(url)
+    local ok, body = pcall(game.HttpGet, game, url)
+    if ok and type(body) == "string" then return body end
+    local requester = (syn and syn.request) or (http and http.request) or http_request or request
+    if not requester then error("no http function") end
+    local response = requester({ Url = url, Method = "GET" })
+    return response and response.Body
+end
+
+function xDTaraZ.Util.Copy(text)
+    local copier = setclipboard or toclipboard
+    if not copier then return false end
+    copier(text)
+    return true
+end
+
+function xDTaraZ.Util.FormatNumber(n)
+    if n == math.huge then return "-" end
+    local suffixes = { "", "K", "M", "B", "T", "Qa", "Qi", "Sx" }
+    local i = 1
+    while math.abs(n) >= 1000 and i < #suffixes do
+        n /= 1000
+        i += 1
+    end
+    return i == 1 and tostring(math.floor(n)) or string.format("%.2f%s", n, suffixes[i])
+end
+
+xDTaraZ.Player = { Client = LocalPlayer, Parts = {} }
+
+function xDTaraZ.Player:Bind(character)
+    self.Character = character
+    self.Humanoid = character:WaitForChild("Humanoid", Config.LoadTimeout)
+    self.Root = character:WaitForChild("HumanoidRootPart", Config.LoadTimeout)
+    table.clear(self.Parts)
+    table.clear(State.CollidePatch)
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then self.Parts[#self.Parts + 1] = part end
+    end
+    xDTaraZ:Connect(character.DescendantAdded, function(part)
+        if part:IsA("BasePart") then self.Parts[#self.Parts + 1] = part end
+    end)
+    if self.Humanoid then
+        xDTaraZ.Move.Saved.WalkSpeed = xDTaraZ.Move.Saved.WalkSpeed or self.Humanoid.WalkSpeed
+        xDTaraZ.Move.Saved.JumpPower = xDTaraZ.Move.Saved.JumpPower or self.Humanoid.JumpPower
+    end
+end
+
+function xDTaraZ.Player:IsAlive()
+    return self.Humanoid ~= nil and self.Humanoid.Health > 0 and self.Root ~= nil and self.Root.Parent ~= nil
+end
+
+function xDTaraZ:Connect(signal, handler)
+    local conn = signal:Connect(handler)
+    table.insert(self.State.Connections, conn)
+    return conn
+end
+
+function xDTaraZ:SetStatus(text)
+    State.Status = text
+end
+
+---@return boolean  got the character lock
+function xDTaraZ:Acquire(owner, patience)
+    local deadline = osClock() + (patience or 0)
+    while State.Lock and State.Lock ~= owner do
+        if osClock() > deadline or not State.Alive then return false end
+        task.wait(0.05)
+    end
+    State.Lock = owner
+    return true
+end
+
+function xDTaraZ:Release(owner)
+    if State.Lock == owner then State.Lock = nil end
+end
+
+---@return boolean ok, any err
+function xDTaraZ:WithLock(owner, patience, fn, ...)
+    if not self:Acquire(owner, patience) then return false, "busy" end
+    local ok, err = pcall(fn, ...)
+    self:Release(owner)
+    if not ok then warn(Config.Tag, owner .. ":", err) end
+    return ok, err
+end
+
+function xDTaraZ:TrollActive()
+    return self.Options.Fling or self.Options.Stick
+end
+
+function xDTaraZ:Saved()
+    return LocalPlayer:FindFirstChild("SavedData")
+end
+
+function xDTaraZ:Cash()
+    local saved = self:Saved()
+    return saved and saved.Cash.Value or 0
+end
+
+function xDTaraZ:Rebirths()
+    local saved = self:Saved()
+    return saved and saved.Rebirths.Value or 0
+end
+
+function xDTaraZ:GetPlot()
+    if State.Plot and State.Plot.Parent then return State.Plot end
+    local plots = Workspace:FindFirstChild("Plots")
+    if not plots then return nil end
+    for _, plot in ipairs(plots:GetChildren()) do
+        local data = plot:FindFirstChild("Data")
+        local owner = data and data:FindFirstChild("Owner")
+        if owner and owner.Value == LocalPlayer then
+            State.Plot = plot
+            return plot
+        end
+    end
+end
+
+---@return CFrame?  standing spot on own plot
+function xDTaraZ:HomeCFrame()
+    local plot = self:GetPlot()
+    local base = plot and plot:FindFirstChild("Baseplate")
+    if not base then return nil end
+    return base.CFrame + vector3New(0, base.Size.Y / 2 + Config.HomeHover, 0)
+end
+
+function xDTaraZ:MoveTo(cf)
+    local player = self.Player
+    if not cf or not player:IsAlive() then return false end
+    player.Root.AssemblyLinearVelocity = Vector3.zero
+    player.Root.CFrame = cf
+    return true
+end
+
+function xDTaraZ:BasketCount()
+    local basket = LocalPlayer:FindFirstChild("Basket")
+    return basket and #basket:GetChildren() or 0
+end
+
+function xDTaraZ:BasketCapacity()
+    local saved = self:Saved()
+    local info = GameLib.EggBaskets[saved and saved.EquippedEggBasket.Value or "Wooden"]
+    local capacity = type(info) == "table" and tonumber(info.Capacity) or 1
+    return math.min(capacity, Config.ClaimBatch)
+end
+
+xDTaraZ.Eggs = {}
+
+---@return boolean  passes hunter/rarity/name/luck filters
+function xDTaraZ.Eggs.Wanted(eggName)
+    local info = xDTaraZ.EggInfo[eggName]
+    if not info then return false end
+    local opts = xDTaraZ.Options
+    if opts.EggHunter then
+        local floor = xDTaraZ.RarityRank[opts.HuntMinRarity or "Mythic"] or 1
+        if (xDTaraZ.RarityRank[info.Rarity] or 1) < floor then return false end
+    end
+    local rarities = opts.EggRarities
+    if rarities and next(rarities) and not rarities[info.Rarity] then return false end
+    local names = opts.EggNames
+    if names and next(names) and not names[eggName] then return false end
+    if opts.SmartEggs and info.Luck <= State.StockFloor then return false end
+    return info.Luck >= (opts.MinLuck or 0)
+end
+
+---@return number  luck an egg must beat once the bag holds EggStock eggs
+function xDTaraZ.Eggs.StockFloor()
+    local tools = xDTaraZ.Hatch.EggTools()
+    if #tools < Config.EggStock then return 0 end
+    local lucks = table.create(#tools)
+    for i, tool in ipairs(tools) do
+        local info = xDTaraZ.Hatch.ToolEgg(tool)
+        lucks[i] = info and info.Luck or 0
+    end
+    table.sort(lucks, function(a, b) return a > b end)
+    return lucks[Config.EggStock]
+end
+
+---@return Instance[]  pickable wanted eggs, best first (cached briefly)
+function xDTaraZ.Eggs.Available()
+    local now = osClock()
+    if State.Snapshot and now - State.SnapshotAt < Config.SnapshotTtl then return State.Snapshot end
+
+    State.StockFloor = xDTaraZ.Options.SmartEggs and xDTaraZ.Eggs.StockFloor() or 0
+    local folder = ReplicatedStorage:FindFirstChild("ServerData")
+    folder = folder and folder:FindFirstChild("ActiveEggs")
+    local list = {}
+    if folder then
+        local serverNow = Workspace:GetServerTimeNow()
+        for _, egg in ipairs(folder:GetChildren()) do
+            local name = egg:GetAttribute("Egg")
+            local private = egg:GetAttribute("PrivateTo")
+            if not name or not egg:GetAttribute("Position") then continue end
+            if private and private ~= LocalPlayer.UserId then continue end
+            if (tonumber(egg:GetAttribute("DropEndsAt")) or 0) > serverNow then continue end
+            if (State.EggSkip[egg.Name] or 0) > now then continue end
+            if not xDTaraZ.Eggs.Wanted(name) then continue end
+            list[#list + 1] = { egg, xDTaraZ.EggInfo[name].Luck * (egg:GetAttribute("Weight") or 1) }
+        end
+        table.sort(list, function(a, b) return a[2] > b[2] end)
+        for i, pair in ipairs(list) do list[i] = pair[1] end
+    end
+
+    State.Snapshot, State.SnapshotAt = list, now
+    return list
+end
+
+---@return boolean  picked up
+function xDTaraZ.Eggs.Pickup(egg)
+    local before = xDTaraZ:BasketCount()
+    xDTaraZ:MoveTo(cframeNew(egg:GetAttribute("Position") + vector3New(0, Config.EggHover, 0)))
+    task.wait(Config.TeleportSettle)
+    xDTaraZ.Net.EggPickup:FireServer(egg.Name)
+
+    local deadline = osClock() + Config.PickupWait
+    repeat task.wait() until xDTaraZ:BasketCount() > before or osClock() > deadline
+    local got = xDTaraZ:BasketCount() > before
+    if not got then State.EggSkip[egg.Name] = osClock() + Config.EggSkipFor end
+    return got
+end
+
+---@return boolean  basket emptied
+function xDTaraZ.Eggs.Deliver()
+    if xDTaraZ:BasketCount() == 0 then return true end
+    if not xDTaraZ:MoveTo(xDTaraZ:HomeCFrame()) then return false end
+    task.wait(Config.TeleportSettle)
+
+    local names = {}
+    for _, egg in ipairs(LocalPlayer.Basket:GetChildren()) do
+        names[#names + 1] = egg.Name
+        if #names >= Config.ClaimBatch then break end
+    end
+    xDTaraZ.Net.EggArrivalClaim:FireServer(Workspace:GetServerTimeNow(), xDTaraZ.Player.Root.Position, names)
+
+    local deadline = osClock() + Config.DeliverWait
+    repeat task.wait() until xDTaraZ:BasketCount() == 0 or osClock() > deadline
+    return xDTaraZ:BasketCount() == 0
+end
+
+---@return number  eggs picked up this run
+function xDTaraZ.Eggs.Run()
+    local origin = xDTaraZ.Player.Root.CFrame
+    local capacity = xDTaraZ:BasketCapacity()
+    local got = 0
+
+    for _, egg in ipairs(xDTaraZ.Eggs.Available()) do
+        if not State.Alive or not xDTaraZ.Player:IsAlive() or xDTaraZ:TrollActive() then break end
+        if not egg.Parent then continue end
+        xDTaraZ:SetStatus("Grabbing " .. egg:GetAttribute("Egg"))
+        if xDTaraZ.Eggs.Pickup(egg) then got += 1 end
+        if xDTaraZ:BasketCount() >= capacity and not xDTaraZ.Eggs.Deliver() then
+            State.DeliverFailUntil = osClock() + Config.DeliverBackoff
+            xDTaraZ:SetStatus("Delivery refused, retrying soon")
+            break
+        end
+    end
+    if xDTaraZ:BasketCount() > 0 and not xDTaraZ.Eggs.Deliver() then
+        State.DeliverFailUntil = osClock() + Config.DeliverBackoff
+    end
+
+    State.Snapshot = nil
+    State.EggsCollected += got
+    if xDTaraZ.Options.ReturnAfter and got > 0 then xDTaraZ:MoveTo(origin) end
+    if osClock() > State.DeliverFailUntil then
+        xDTaraZ:SetStatus(got > 0 and ("Collected " .. got .. " eggs") or "Waiting for eggs")
+    end
+    return got
+end
+
+---@return number  eggs picked up
+function xDTaraZ.Eggs.CollectNow()
+    if not xDTaraZ.Player:IsAlive() then return 0 end
+    local got = 0
+    xDTaraZ:WithLock("eggs", Config.LockWait, function() got = xDTaraZ.Eggs.Run() end)
+    return got
+end
+
+function xDTaraZ.Eggs.Step()
+    local opts = xDTaraZ.Options
+    if not opts.AutoEggs and not opts.EggHunter then return end
+    if xDTaraZ:TrollActive() or osClock() < State.DeliverFailUntil then return end
+
+    if #xDTaraZ.Eggs.Available() > 0 then
+        State.EmptySince = nil
+        xDTaraZ:WithLock("eggs", 0, xDTaraZ.Eggs.Run)
+        return
+    end
+
+    State.EmptySince = State.EmptySince or osClock()
+    if not opts.EggHunter then
+        xDTaraZ:SetStatus("Waiting for eggs")
+        return
+    end
+    local left = Config.HuntHopAfter - (osClock() - State.EmptySince)
+    xDTaraZ:SetStatus(string.format("No rare eggs here, hopping in %ds", math.max(0, math.ceil(left))))
+    if left <= 0 and not State.Hopping then xDTaraZ.Server.HuntHop() end
+end
+
+xDTaraZ.Hatch = {}
+
+function xDTaraZ.Hatch.EggTools()
+    local tools = {}
+    for _, holder in ipairs({ LocalPlayer:FindFirstChild("Backpack"), xDTaraZ.Player.Character }) do
+        if not holder then continue end
+        for _, tool in ipairs(holder:GetChildren()) do
+            if tool:IsA("Tool") and tool:GetAttribute("EggInventoryId") then tools[#tools + 1] = tool end
+        end
+    end
+    return tools
+end
+
+function xDTaraZ.Hatch.ToolEgg(tool)
+    return xDTaraZ.EggInfo[tool.Name:match("^(.-Egg)") or ""]
+end
+
+function xDTaraZ.Hatch.MyEggs()
+    local plot = xDTaraZ:GetPlot()
+    local folder = plot and plot:FindFirstChild("Eggs")
+    local eggs = {}
+    if not folder then return eggs end
+    for _, egg in ipairs(folder:GetChildren()) do
+        if egg:GetAttribute("EggKey") and egg:GetAttribute("OwnerUserId") == LocalPlayer.UserId then eggs[#eggs + 1] = egg end
+    end
+    return eggs
+end
+
+---@return boolean  timer gone or finished
+function xDTaraZ.Hatch.IsReady(egg)
+    for _, label in ipairs(egg:GetDescendants()) do
+        if label.Name == "Timer" and label:IsA("TextLabel") then
+            local text = label.Text
+            return text == "" or not text:find("%d+:%d%d") or text:match("^0?0?:?0:00$") ~= nil
+        end
+    end
+    return true
+end
+
+function xDTaraZ.Hatch.FreeNests()
+    local plot = xDTaraZ:GetPlot()
+    local nests = plot and plot:FindFirstChild("Nests")
+    local free = {}
+    if not nests then return free end
+    for _, nest in ipairs(nests:GetChildren()) do
+        if nest:GetAttribute("Unlocked") and not nest:GetAttribute("Occupied") and (State.NestSkip[nest] or 0) < osClock() then
+            free[#free + 1] = nest
+        end
+    end
+    return free
+end
+
+function xDTaraZ.Hatch.Place()
+    local tools = xDTaraZ.Hatch.EggTools()
+    local nests = xDTaraZ.Hatch.FreeNests()
+    if #tools == 0 or #nests == 0 then return end
+
+    local fastest = xDTaraZ.Options.FastestFirst
+    local function Rank(tool)
+        local info = xDTaraZ.Hatch.ToolEgg(tool)
+        if not info then return -math.huge end
+        return fastest and -info.Growth or info.Luck
+    end
+    table.sort(tools, function(a, b) return Rank(a) > Rank(b) end)
+
+    local origin = xDTaraZ.Player.Root.CFrame
+    for _, nest in ipairs(nests) do
+        local tool = table.remove(tools, 1)
+        if not tool or not xDTaraZ.Player:IsAlive() then break end
+        xDTaraZ:SetStatus("Placing " .. tool.Name)
+        xDTaraZ:MoveTo(nest:GetPivot() + vector3New(0, Config.NestHover, 0))
+        task.wait(Config.TeleportSettle)
+        xDTaraZ.Player.Humanoid:EquipTool(tool)
+        task.wait(Config.EquipSettle)
+        xDTaraZ.Net.EggPlaced:FireServer({ NestId = nest.Name })
+        task.wait(Config.PlaceGap)
+        if not nest:GetAttribute("Occupied") then State.NestSkip[nest] = osClock() + Config.NestSkipFor end
+    end
+    xDTaraZ.Player.Humanoid:UnequipTools()
+    xDTaraZ:MoveTo(origin)
+end
+
+function xDTaraZ.Hatch.PlaceNow()
+    xDTaraZ:WithLock("place", Config.LockWait, xDTaraZ.Hatch.Place)
+end
+
+---@param force boolean?  ignore the timer check
+function xDTaraZ.Hatch.HatchNow(force)
+    for _, egg in ipairs(xDTaraZ.Hatch.MyEggs()) do
+        if force or xDTaraZ.Hatch.IsReady(egg) then
+            xDTaraZ.Net.Hatch:FireServer({ EggKey = egg:GetAttribute("EggKey") })
+        end
+    end
+end
+
+function xDTaraZ.Hatch.Step()
+    local opts, now = xDTaraZ.Options, osClock()
+    if opts.AutoPlaceEggs and not xDTaraZ:TrollActive() and #xDTaraZ.Hatch.FreeNests() > 0 and #xDTaraZ.Hatch.EggTools() > 0 then
+        xDTaraZ:WithLock("place", 0, xDTaraZ.Hatch.Place)
+    end
+    if opts.AutoHatch and now - State.LastHatch > Config.HatchGap then
+        State.LastHatch = now
+        local sweep = now - State.LastHatchAll > Config.HatchRetry
+        if sweep then State.LastHatchAll = now end
+        xDTaraZ.Hatch.HatchNow(sweep)
+    end
+end
+
+xDTaraZ.Pets = {}
+
+---@return number  income per second estimate (weight and mutations included)
+function xDTaraZ.Pets.Score(inst)
+    local info = GameLib.Pets[inst:GetAttribute("PetName") or ""]
+    local income = type(info) == "table" and tonumber(info.Income) or 0
+    local factor = 1
+    for _, attr in ipairs({ "Mutation", "SpawnMutation" }) do
+        local mutation = GameLib.Mutations[inst:GetAttribute(attr) or ""]
+        if type(mutation) == "table" then factor *= 1 + (tonumber(mutation.StatMultiplier) or 0) / 100 end
+    end
+    return income * (inst:GetAttribute("Weight") or 1) * factor
+end
+
+---@return table[]  { inst, score } sorted
+function xDTaraZ.Pets.Ranked(list, ascending)
+    local ranked = table.create(#list)
+    for i, inst in ipairs(list) do ranked[i] = { inst, xDTaraZ.Pets.Score(inst) } end
+    table.sort(ranked, function(a, b)
+        if ascending then return a[2] < b[2] end
+        return a[2] > b[2]
+    end)
+    return ranked
+end
+
+function xDTaraZ.Pets.Placed()
+    local plot = xDTaraZ:GetPlot()
+    local folder = plot and plot:FindFirstChild("Pets")
+    local list = {}
+    if not folder then return list end
+    for _, pet in ipairs(folder:GetChildren()) do
+        if pet:GetAttribute("OwnerUserId") == LocalPlayer.UserId and pet:GetAttribute("PetKey") then list[#list + 1] = pet end
+    end
+    return list
+end
+
+function xDTaraZ.Pets.Owned()
+    local list = {}
+    for _, holder in ipairs({ LocalPlayer:FindFirstChild("Backpack"), xDTaraZ.Player.Character }) do
+        if not holder then continue end
+        for _, tool in ipairs(holder:GetChildren()) do
+            if tool:IsA("Tool") and tool:GetAttribute("PetKey") then list[#list + 1] = tool end
+        end
+    end
+    return list
+end
+
+function xDTaraZ.Pets.MaxSlots()
+    local saved = xDTaraZ:Saved()
+    return tonumber(saved and saved.MaxPets.Value) or GameLib.Rebirths.BasePetCapacity or 5
+end
+
+function xDTaraZ.Pets.RandomSpot()
+    local plot = xDTaraZ:GetPlot()
+    local base = plot and plot:FindFirstChild("Baseplate")
+    if not base then return nil end
+    local half = base.Size * Config.PetSpread
+    local offset = vector3New((math.random() * 2 - 1) * half.X, base.Size.Y / 2 + Config.PetLift, (math.random() * 2 - 1) * half.Z)
+    return (base.CFrame * cframeNew(offset)).Position
+end
+
+---@return boolean  changed something
+function xDTaraZ.Pets.EquipBest()
+    if osClock() < State.PetFailUntil then return false end
+    local placed = xDTaraZ.Pets.Ranked(xDTaraZ.Pets.Placed(), true)
+    local owned = xDTaraZ.Pets.Ranked(xDTaraZ.Pets.Owned(), false)
+    local free = xDTaraZ.Pets.MaxSlots() - #placed
+    local before = #placed
+    local acted = false
+
+    for _, pair in ipairs(owned) do
+        local tool, score = pair[1], pair[2]
+        local spot = xDTaraZ.Pets.RandomSpot()
+        if not spot then return false end
+        if free > 0 then
+            xDTaraZ.Net.PlacePet:FireServer(tool:GetAttribute("PetKey"), spot)
+            free -= 1
+            acted = true
+            task.wait(Config.PlaceGap)
+            continue
+        end
+        local worst = placed[1]
+        if not worst or score <= worst[2] then break end
+        table.remove(placed, 1)
+        xDTaraZ.Net.PickupPet:FireServer(worst[1]:GetAttribute("PetKey"))
+        task.wait(Config.PlaceGap)
+        xDTaraZ.Net.PlacePet:FireServer(tool:GetAttribute("PetKey"), spot)
+        acted = true
+        task.wait(Config.PlaceGap)
+    end
+
+    if acted and #xDTaraZ.Pets.Placed() < math.min(before + 1, xDTaraZ.Pets.MaxSlots()) and before < xDTaraZ.Pets.MaxSlots() then
+        State.PetFailUntil = osClock() + Config.PetFailBackoff
+    end
+    return acted
+end
+
+function xDTaraZ.Pets.EquipBestNow()
+    xDTaraZ:WithLock("pets", Config.LockWait, xDTaraZ.Pets.EquipBest)
+end
+
+function xDTaraZ.Pets.CollectNow()
+    for _, pet in ipairs(xDTaraZ.Pets.Placed()) do
+        xDTaraZ.Net.PetCollect:FireServer(pet:GetAttribute("PetKey"))
+    end
+end
+
+function xDTaraZ.Pets.FoodTool()
+    local allowed = xDTaraZ.Options.FoodTypes
+    local backpack = LocalPlayer:FindFirstChild("Backpack")
+    for _, name in ipairs(xDTaraZ.FoodNames) do
+        if allowed and next(allowed) and not allowed[name] then continue end
+        local tool = (backpack and backpack:FindFirstChild(name)) or (xDTaraZ.Player.Character and xDTaraZ.Player.Character:FindFirstChild(name))
+        if tool then return tool end
+    end
+end
+
+function xDTaraZ.Pets.Feed()
+    for _, pair in ipairs(xDTaraZ.Pets.Ranked(xDTaraZ.Pets.Placed(), false)) do
+        local food = xDTaraZ.Pets.FoodTool()
+        if not food or not xDTaraZ.Player:IsAlive() then break end
+        xDTaraZ.Player.Humanoid:EquipTool(food)
+        task.wait(Config.EquipSettle)
+        xDTaraZ.Net.FeedPet:FireServer(pair[1]:GetAttribute("PetKey"), food.Name, true)
+        task.wait(Config.FeedGap)
+    end
+    if xDTaraZ.Player.Humanoid then xDTaraZ.Player.Humanoid:UnequipTools() end
+end
+
+function xDTaraZ.Pets.FeedNow()
+    xDTaraZ:WithLock("feed", Config.LockWait, xDTaraZ.Pets.Feed)
+end
+
+function xDTaraZ.Pets.Step()
+    local opts, now = xDTaraZ.Options, osClock()
+    if opts.AutoEquipBest then xDTaraZ:WithLock("pets", 0, xDTaraZ.Pets.EquipBest) end
+    if opts.AutoCollectCash then xDTaraZ.Pets.CollectNow() end
+    if opts.AutoFeed and now - State.LastFeed > Config.FeedGap * Config.FeedEvery then
+        State.LastFeed = now
+        xDTaraZ:WithLock("feed", 0, xDTaraZ.Pets.Feed)
+    end
+end
+
+xDTaraZ.Progress = {}
+
+function xDTaraZ.Progress.RebirthCost()
+    local lib = GameLib.Rebirths
+    local nextRebirth = xDTaraZ:Rebirths() + 1
+    if nextRebirth > (lib.Cap or math.huge) then return math.huge end
+    if lib.RiggedCost and lib.RiggedCost[nextRebirth] then return lib.RiggedCost[nextRebirth] end
+    local ok, cost = pcall(lib.GetCost, xDTaraZ:Rebirths())
+    return ok and tonumber(cost) or math.huge
+end
+
+function xDTaraZ.Progress.CanRebirthSoon()
+    return xDTaraZ.Options.AutoRebirth and State.NextRebirthCost < math.huge and osClock() > State.RebirthBlockedUntil
+end
+
+function xDTaraZ.Progress.RebirthNow()
+    if xDTaraZ:Rebirths() >= (GameLib.Rebirths.Cap or math.huge) then return end
+    local before = xDTaraZ:Rebirths()
+    xDTaraZ.Net.Rebirth:FireServer()
+    task.delay(3, function()
+        if xDTaraZ:Rebirths() == before then
+            State.RebirthBlockedUntil = osClock() + Config.RebirthBackoff
+            xDTaraZ:SetStatus("Rebirth refused (missing required pet?)")
+        end
+    end)
+end
+
+function xDTaraZ.Progress.UpgradeNow()
+    xDTaraZ.Net.Upgrades:FireServer("Max")
+end
+
+function xDTaraZ.Progress.BuyNestsNow()
+    local plot = xDTaraZ:GetPlot()
+    local nests = plot and plot:FindFirstChild("Nests")
+    if not nests then return end
+    local prices = GameLib.Nests.Prices or {}
+    for _, nest in ipairs(nests:GetChildren()) do
+        local index = tonumber(nest.Name)
+        if nest:GetAttribute("Unlocked") or not index then continue end
+        if xDTaraZ:Cash() < (prices[index] or math.huge) then continue end
+        xDTaraZ.Net.Nests:FireServer(index)
+        task.wait(Config.PlaceGap)
+    end
+end
+
+function xDTaraZ.Progress.ClaimNow()
+    xDTaraZ.Net.ClaimIndexReward:FireServer()
+    xDTaraZ.Net.OfflineEarnings:FireServer()
+end
+
+---@return boolean  luck upgrades should wait for rebirth cash
+function xDTaraZ.Progress.SavingForRebirth()
+    if not xDTaraZ.Options.SmartSpend or not xDTaraZ.Progress.CanRebirthSoon() then return false end
+    return xDTaraZ:Cash() < State.NextRebirthCost * Config.RebirthReserve
+end
+
+function xDTaraZ.Progress.Step()
+    local opts, now = xDTaraZ.Options, osClock()
+    State.NextRebirthCost = xDTaraZ.Progress.RebirthCost()
+
+    if opts.AutoRebirth and now - State.LastRebirth > Config.RebirthGap and now > State.RebirthBlockedUntil and xDTaraZ:Cash() >= State.NextRebirthCost then
+        State.LastRebirth = now
+        xDTaraZ.Progress.RebirthNow()
+    end
+    if opts.AutoNests and now - State.LastNests > Config.NestsGap then
+        State.LastNests = now
+        xDTaraZ.Progress.BuyNestsNow()
+    end
+    if opts.AutoUpgrade and now - State.LastUpgrade > Config.UpgradeGap and not xDTaraZ.Progress.SavingForRebirth() then
+        State.LastUpgrade = now
+        xDTaraZ.Progress.UpgradeNow()
+    end
+    if opts.AutoClaim and now - State.LastClaim > Config.ClaimGap then
+        State.LastClaim = now
+        xDTaraZ.Progress.ClaimNow()
+    end
+end
+
+xDTaraZ.Move = { Saved = {} }
+
+function xDTaraZ.Move.SetNoClip(on)
+    if on then
+        for _, part in ipairs(xDTaraZ.Player.Parts) do
+            if part.Parent and part.CanCollide then
+                State.CollidePatch[part] = true
+                part.CanCollide = false
+            end
+        end
+        return
+    end
+    for part in pairs(State.CollidePatch) do
+        if part.Parent then part.CanCollide = true end
+    end
+    table.clear(State.CollidePatch)
+end
+
+function xDTaraZ.Move.FlyStep(dt)
+    local root = xDTaraZ.Player.Root
+    if not root then return end
+    local cam = Workspace.CurrentCamera
+    local dir = Vector3.zero
+    if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir += cam.CFrame.LookVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir -= cam.CFrame.LookVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir += cam.CFrame.RightVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir -= cam.CFrame.RightVector end
+    if UserInputService:IsKeyDown(Enum.KeyCode.Space) then dir += Vector3.yAxis end
+    if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then dir -= Vector3.yAxis end
+    root.AssemblyLinearVelocity = Vector3.zero
+    if dir.Magnitude > 0 then root.CFrame += dir.Unit * (xDTaraZ.Options.FlySpeed or Config.FlySpeed) * dt end
+end
+
+function xDTaraZ.Move.Frame(dt)
+    local opts = xDTaraZ.Options
+    local hum = xDTaraZ.Player.Humanoid
+    if opts.NoClip or opts.Fly or opts.Fling then xDTaraZ.Move.SetNoClip(true) end
+    if opts.Fly then xDTaraZ.Move.FlyStep(dt) end
+    if hum and opts.SpeedOn then hum.WalkSpeed = opts.WalkSpeed or Config.WalkSpeed end
+    if hum and opts.JumpOn then hum.JumpPower = opts.JumpPower or Config.JumpPower end
+end
+
+---@param idx string  option that just turned off
+function xDTaraZ.Move.Restore(idx)
+    local opts, hum = xDTaraZ.Options, xDTaraZ.Player.Humanoid
+    if hum and (idx == "SpeedOn" or idx == nil) then hum.WalkSpeed = xDTaraZ.Move.Saved.WalkSpeed or 16 end
+    if hum and (idx == "JumpOn" or idx == nil) then hum.JumpPower = xDTaraZ.Move.Saved.JumpPower or 50 end
+    if idx == nil or not (opts.NoClip or opts.Fly or opts.Fling) then xDTaraZ.Move.SetNoClip(false) end
+    if idx == "Fly" and xDTaraZ.Player.Root then xDTaraZ.Player.Root.AssemblyLinearVelocity = Vector3.zero end
+end
+
+xDTaraZ.Esp = {}
+
+function xDTaraZ.Esp.Clear()
+    for key, entry in pairs(State.EspBoards) do
+        entry.Board:Destroy()
+        State.EspBoards[key] = nil
+    end
+end
+
+function xDTaraZ.Esp.Entry(model, info)
+    local entry = State.EspBoards[model]
+    if entry and entry.Board.Parent then return entry end
+    local part = model:IsA("BasePart") and model or model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true)
+    if not part then return nil end
+
+    local board = Instance.new("BillboardGui")
+    board.Name = "MarioEsp"
+    board.AlwaysOnTop = true
+    board.Size = UDim2.fromOffset(200, 40)
+    board.StudsOffset = vector3New(0, Config.EspLift, 0)
+    board.MaxDistance = Config.EspRange
+    board.Adornee = part
+    local label = Instance.new("TextLabel")
+    label.BackgroundTransparency = 1
+    label.Size = UDim2.fromScale(1, 1)
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 14
+    label.TextStrokeTransparency = 0.3
+    label.TextColor3 = Config.RarityColors[info.Rarity] or Color3.new(1, 1, 1)
+    label.Parent = board
+    board.Parent = (gethui and gethui()) or CoreGui
+
+    entry = { Board = board, Label = label, Part = part }
+    State.EspBoards[model] = entry
+    return entry
+end
+
+function xDTaraZ.Esp.Refresh()
+    if not xDTaraZ.Options.EggEsp then
+        if next(State.EspBoards) then xDTaraZ.Esp.Clear() end
+        return
+    end
+    local rendered = Workspace:FindFirstChild("RenderedEggs")
+    if not rendered then return end
+
+    local root = xDTaraZ.Player.Root
+    local minRank = xDTaraZ.RarityRank[xDTaraZ.Options.EspMinRarity or ""] or 1
+    local seen = {}
+    for _, model in ipairs(rendered:GetChildren()) do
+        local info = xDTaraZ.EggInfo[model.Name]
+        if not info or (xDTaraZ.RarityRank[info.Rarity] or 1) < minRank then continue end
+        local entry = xDTaraZ.Esp.Entry(model, info)
+        if not entry then continue end
+        seen[model] = true
+        local dist = root and math.floor((entry.Part.Position - root.Position).Magnitude) or 0
+        entry.Label.Text = string.format("%s [%s]\n1 in %s | %dm", model.Name, info.Rarity, xDTaraZ.Util.FormatNumber(info.Luck), dist)
+    end
+    for key, entry in pairs(State.EspBoards) do
+        if not seen[key] then
+            entry.Board:Destroy()
+            State.EspBoards[key] = nil
+        end
+    end
+end
+
+xDTaraZ.Teleport = {}
+
+function xDTaraZ.Teleport.Places()
+    local places = { ["My Plot"] = function() return xDTaraZ:HomeCFrame() end }
+    local stalls = Workspace:FindFirstChild("Stalls")
+    for _, stall in ipairs(stalls and stalls:GetChildren() or {}) do
+        places["Shop: " .. stall.Name] = function() return stall:GetPivot() + vector3New(0, Config.HomeHover, 0) end
+    end
+    local volcano = Workspace:FindFirstChild("Volcano")
+    for _, spot in ipairs({ "VolcanoEntrance", "VolcanoTop" }) do
+        local part = volcano and volcano:FindFirstChild(spot)
+        if part then
+            places["Volcano: " .. spot:sub(8)] = function() return part.CFrame + vector3New(0, Config.NestHover, 0) end
+        end
+    end
+    return places
+end
+
+function xDTaraZ.Teleport.PlaceNames()
+    local names = {}
+    for name in pairs(xDTaraZ.Teleport.Places()) do names[#names + 1] = name end
+    table.sort(names)
+    return names
+end
+
+function xDTaraZ.Teleport.To(name)
+    local getter = xDTaraZ.Teleport.Places()[name or ""]
+    if getter then xDTaraZ:MoveTo(getter()) end
+end
+
+function xDTaraZ.Teleport.ToPlayer(name)
+    local target = Players:FindFirstChild(name or "")
+    local root = target and target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+    if root then xDTaraZ:MoveTo(root.CFrame + vector3New(0, Config.HomeHover, 0)) end
+end
+
+function xDTaraZ.Teleport.BestEgg()
+    local egg = xDTaraZ.Eggs.Available()[1]
+    if egg then xDTaraZ:MoveTo(cframeNew(egg:GetAttribute("Position") + vector3New(0, Config.EggHover, 0))) end
+end
+
+xDTaraZ.Troll = {}
+
+function xDTaraZ.Troll.TargetRoot()
+    local target = Players:FindFirstChild(xDTaraZ.Options.TrollTarget or "")
+    return target and target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+end
+
+function xDTaraZ.Troll.Spectate(name)
+    local target = Players:FindFirstChild(name or "")
+    local hum = target and target.Character and target.Character:FindFirstChildOfClass("Humanoid")
+    Workspace.CurrentCamera.CameraSubject = hum or xDTaraZ.Player.Humanoid
+end
+
+function xDTaraZ.Troll.Frame()
+    local opts = xDTaraZ.Options
+    if not opts.Fling and not opts.Stick then return end
+    local troot, root = xDTaraZ.Troll.TargetRoot(), xDTaraZ.Player.Root
+    if not troot or not root then return end
+
+    if opts.Fling then
+        State.FlingHome = State.FlingHome or root.CFrame
+        root.CFrame = troot.CFrame * CFrame.Angles(0, math.rad(osClock() * Config.FlingSpin % 360), 0)
+        root.AssemblyLinearVelocity = vector3New(0, Config.FlingForce, 0)
+        root.AssemblyAngularVelocity = vector3New(0, Config.FlingForce, 0)
+        return
+    end
+    root.CFrame = troot.CFrame * cframeNew(0, 0, Config.StickOffset)
+end
+
+function xDTaraZ.Troll.StopFling()
+    local root = xDTaraZ.Player.Root
+    if root then
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+        if State.FlingHome then root.CFrame = State.FlingHome end
+    end
+    State.FlingHome = nil
+    xDTaraZ.Move.Restore("Fling")
+end
+
+xDTaraZ.Server = {}
+
+function xDTaraZ.Server.Rejoin()
+    TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+end
+
+function xDTaraZ.Server.Hop()
+    local url = ("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100"):format(game.PlaceId)
+    local ok, decoded = pcall(function() return HttpService:JSONDecode(xDTaraZ.Util.HttpGet(url)) end)
+    local open = {}
+    for _, server in ipairs(ok and decoded and decoded.data or {}) do
+        if server.id ~= game.JobId and server.playing < server.maxPlayers then open[#open + 1] = server.id end
+    end
+    if #open > 0 then
+        TeleportService:TeleportToPlaceInstance(game.PlaceId, open[math.random(1, math.min(#open, Config.HopPick))], LocalPlayer)
+        return
+    end
+    TeleportService:Teleport(game.PlaceId, LocalPlayer)
+end
+
+function xDTaraZ.Server.HuntHop()
+    State.Hopping = true
+    local queue = queue_on_teleport or queueonteleport or (syn and syn.queue_on_teleport)
+    if queue then queue("getgenv().RideAPetHunt = true " .. Config.ReloadSource) end
+    task.delay(Config.HopReset, function()
+        State.Hopping = false
+        State.EmptySince = osClock()
+    end)
+    local ok, err = pcall(xDTaraZ.Server.Hop)
+    if not ok then warn(Config.Tag, "hop:", err) end
+end
+
+xDTaraZ.Scheduler = {}
+
+function xDTaraZ.Scheduler.Loop(tick, steps)
+    task.spawn(function()
+        while State.Alive do
+            for _, step in ipairs(steps) do
+                local ok, err = pcall(step)
+                if not ok then warn(Config.Tag, "step:", err) end
+            end
+            task.wait(tick)
+        end
+    end)
+end
+
+function xDTaraZ.Scheduler.Boot()
+    xDTaraZ.Scheduler.Loop(Config.EggTick, { xDTaraZ.Eggs.Step })
+    xDTaraZ.Scheduler.Loop(Config.StepTick, { xDTaraZ.Hatch.Step, xDTaraZ.Pets.Step, xDTaraZ.Progress.Step })
+    xDTaraZ:Connect(RunService.Heartbeat, function(dt)
+        xDTaraZ.Move.Frame(dt)
+        xDTaraZ.Troll.Frame()
+    end)
+    xDTaraZ:Connect(LocalPlayer.Idled, function()
+        if not xDTaraZ.Options.AntiAfk then return end
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new())
+    end)
+    xDTaraZ:Connect(UserInputService.JumpRequest, function()
+        if xDTaraZ.Options.InfJump and xDTaraZ.Player.Humanoid then
+            xDTaraZ.Player.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+        end
+    end)
+    xDTaraZ:Connect(Players.PlayerRemoving, function(player)
+        local subject = Workspace.CurrentCamera.CameraSubject
+        if subject and subject:IsDescendantOf(player.Character or game) and player ~= LocalPlayer then xDTaraZ.Troll.Spectate(nil) end
+    end)
+end
+
+xDTaraZ.UI = {}
+
+xDTaraZ.UI.OffHooks = {
+    SpeedOn = function() xDTaraZ.Move.Restore("SpeedOn") end,
+    JumpOn = function() xDTaraZ.Move.Restore("JumpOn") end,
+    NoClip = function() xDTaraZ.Move.Restore("NoClip") end,
+    Fly = function() xDTaraZ.Move.Restore("Fly") end,
+    Fling = function() xDTaraZ.Troll.StopFling() end,
+}
+
+function xDTaraZ.UI.Bind(idx, option)
+    xDTaraZ.Options[idx] = option.Value
+    option:OnChanged(function(value)
+        xDTaraZ.Options[idx] = value
+        local hook = xDTaraZ.UI.OffHooks[idx]
+        if hook and not value then hook() end
+    end)
+    return option
+end
+
+function xDTaraZ.UI.Toggle(group, idx, en, th, desc, risky)
+    return xDTaraZ.UI.Bind(idx, group:AddToggle(idx, { Text = T(en, th), Description = desc, Default = false, Risky = risky }))
+end
+
+function xDTaraZ.UI.Home(window)
+    local tab = window:AddTab(T("Home", "หน้าแรก"), "mushroom", T("Status and full auto", "สถานะและโหมดอัตโนมัติ"))
+    local status = tab:AddLeftGroupbox(T("Status", "สถานะ"), "info")
+    xDTaraZ.UI.StatusLabel = status:AddLabel("...")
+    xDTaraZ.UI.CashLabel = status:AddLabel("...")
+    xDTaraZ.UI.EggLabel = status:AddLabel("...")
+
+    local kaitun = tab:AddLeftGroupbox(T("Smart Kaitun", "ไก่ตันอัจฉริยะ"), "star")
+    kaitun:AddToggle("Kaitun", {
+        Text = T("Smart Kaitun", "ไก่ตันอัจฉริยะ"),
+        Description = T("Runs the whole account: best eggs, hatching, best pets, feeding, saves for rebirth before luck", "เล่นแทนทั้งบัญชี: เก็บไข่ดีสุด ฟัก วางสัตว์ดีสุด ให้อาหาร เก็บเงินรีเบิร์ธก่อนอัปโชค"),
+        Default = false,
+        Callback = function(on)
+            for _, idx in ipairs({ "AutoEggs", "SmartEggs", "AutoPlaceEggs", "AutoHatch", "AutoEquipBest", "AutoCollectCash", "AutoFeed", "AutoUpgrade", "SmartSpend", "AutoRebirth", "AutoNests", "AutoClaim", "AntiAfk" }) do
+                local option = Library.Options[idx]
+                if option then option:SetValue(on) end
+            end
+        end,
+    })
+    xDTaraZ.UI.Toggle(kaitun, "SmartSpend", "Save For Rebirth", "เก็บเงินไว้รีเบิร์ธ", T("Holds luck upgrades until rebirth is paid for", "รอซื้ออัปโชคจนกว่าจะรีเบิร์ธได้"))
+
+    local discord = tab:AddRightGroupbox(T("Discord", "ดิสคอร์ด"), "link")
+    discord:AddLabel(Config.Discord)
+    discord:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ดิสคอร์ด"), Func = function()
+        if xDTaraZ.Util.Copy(Config.Discord) then
+            Library:Notify("Discord", "Link copied", 3, "Success")
+        else
+            Library:Notify("Discord", Config.Discord, 6, "Info")
+        end
+    end })
+end
+
+function xDTaraZ.UI.EggFarm(window)
+    local tab = window:AddTab(T("Egg Farm", "ฟาร์มไข่"), "coin", T("Instant wild egg collecting", "เก็บไข่ป่าทันที"))
+    local farm = tab:AddLeftGroupbox(T("Instant Eggs", "เก็บไข่ทันที"), "zap")
+    xDTaraZ.UI.Toggle(farm, "AutoEggs", "Auto Collect Eggs", "เก็บไข่อัตโนมัติ", T("Grabs every wanted egg on the map and brings it home instantly", "เก็บไข่ที่เลือกทั่วแมพแล้วพากลับบ้านทันที"), true)
+    xDTaraZ.UI.Toggle(farm, "SmartEggs", "Smart Egg Stock", "เก็บไข่แบบฉลาด", T("Once your bag is stocked, only grabs eggs better than what you hold", "พอไข่ในกระเป๋าเยอะแล้ว เก็บเฉพาะไข่ที่ดีกว่าที่มี"))
+    xDTaraZ.UI.Toggle(farm, "ReturnAfter", "Return To Spot", "กลับจุดเดิม", T("Go back where you stood after each run", "กลับไปจุดเดิมหลังเก็บเสร็จ"))
+    farm:AddButton({ Text = T("Collect Eggs Now", "เก็บไข่เดี๋ยวนี้"), Style = "Primary", Func = function()
+        task.spawn(function()
+            Library:Notify("Eggs", "Collected " .. xDTaraZ.Eggs.CollectNow(), 3, "Success")
+        end)
+    end })
+    farm:AddButton({ Text = T("Teleport To Best Egg", "วาร์ปไปไข่ที่ดีที่สุด"), Func = xDTaraZ.Teleport.BestEgg })
+
+    local hunter = tab:AddLeftGroupbox(T("Rare Egg Hunter", "ล่าไข่หายาก"), "star")
+    xDTaraZ.UI.Toggle(hunter, "EggHunter", "Rare Egg Hunter", "ล่าไข่หายาก", T("Grabs only top rarity eggs and hops servers until it finds them", "เก็บเฉพาะไข่ระดับสูง ไม่มีก็ย้ายเซิร์ฟหาเอง"), true)
+    xDTaraZ.UI.Bind("HuntMinRarity", hunter:AddDropdown("HuntMinRarity", { Text = T("Minimum Rarity", "ความหายากขั้นต่ำ"), Values = xDTaraZ.Rarities, Default = "Mythic" }))
+    hunter:AddButton({ Text = T("Hop Server Now", "ย้ายเซิร์ฟเดี๋ยวนี้"), Func = xDTaraZ.Server.HuntHop })
+
+    local filters = tab:AddRightGroupbox(T("Egg Filters", "ตัวกรองไข่"), "target")
+    xDTaraZ.UI.Bind("EggRarities", filters:AddDropdown("EggRarities", { Text = T("Rarities (empty = all)", "ความหายาก (ว่าง = ทั้งหมด)"), Values = xDTaraZ.Rarities, Multi = true, Default = {} }))
+    local eggNames = xDTaraZ.UI.Bind("EggNames", filters:AddDropdown("EggNames", { Text = T("Eggs (empty = all)", "ไข่ (ว่าง = ทั้งหมด)"), Values = xDTaraZ.EggNames, Multi = true, Searchable = true, Default = {} }))
+    xDTaraZ.UI.Bind("MinLuck", filters:AddSlider("MinLuck", { Text = T("Minimum Luck (1 in X)", "โชคขั้นต่ำ (1 ใน X)"), Min = 0, Max = 1000000, Default = 0, Rounding = 0 }))
+    filters:AddButton({ Text = T("Refresh Egg List", "รีเฟรชรายการไข่"), Func = function()
+        xDTaraZ.BuildLists()
+        eggNames:SetValues(xDTaraZ.EggNames)
+    end })
+end
+
+function xDTaraZ.UI.Hatching(window)
+    local tab = window:AddTab(T("Hatch", "ฟักไข่"), "flower", T("Nests and hatching", "รังและการฟัก"))
+    local hatch = tab:AddLeftGroupbox(T("Hatching", "ฟักไข่"), "flower")
+    xDTaraZ.UI.Toggle(hatch, "AutoPlaceEggs", "Auto Place Eggs", "วางไข่ลงรังอัตโนมัติ", T("Puts your best eggs into free nests", "เอาไข่ที่ดีที่สุดลงรังที่ว่าง"))
+    xDTaraZ.UI.Toggle(hatch, "AutoHatch", "Auto Hatch", "ฟักอัตโนมัติ", T("Hatches eggs from anywhere as soon as they are ready", "ฟักไข่จากที่ไหนก็ได้ทันทีที่พร้อม"))
+    xDTaraZ.UI.Toggle(hatch, "FastestFirst", "Fastest Eggs First", "ไข่ที่ฟักเร็วก่อน", T("Off = best luck first", "ปิด = ไข่โชคดีสุดก่อน"))
+    hatch:AddButton({ Text = T("Place Eggs Now", "วางไข่เดี๋ยวนี้"), Func = function() task.spawn(xDTaraZ.Hatch.PlaceNow) end })
+    hatch:AddButton({ Text = T("Hatch Now", "ฟักเดี๋ยวนี้"), Style = "Primary", Func = function() xDTaraZ.Hatch.HatchNow(true) end })
+
+    local nests = tab:AddRightGroupbox(T("Nests", "รัง"), "castle")
+    xDTaraZ.UI.Toggle(nests, "AutoNests", "Auto Buy Nests", "ซื้อรังอัตโนมัติ", T("Unlocks new nests when you can afford them", "ปลดล็อกรังใหม่เมื่อเงินพอ"))
+    nests:AddButton({ Text = T("Buy Nests Now", "ซื้อรังเดี๋ยวนี้"), Func = function() task.spawn(xDTaraZ.Progress.BuyNestsNow) end })
+end
+
+function xDTaraZ.UI.PetsTab(window)
+    local tab = window:AddTab(T("Pets", "สัตว์เลี้ยง"), "shell", T("Ranch, feeding and cash", "ฟาร์ม ให้อาหาร และเงิน"))
+    local ranch = tab:AddLeftGroupbox(T("Ranch", "ฟาร์ม"), "house")
+    xDTaraZ.UI.Toggle(ranch, "AutoEquipBest", "Auto Place Best Pets", "วางสัตว์ตัวดีสุดอัตโนมัติ", T("Keeps your ranch filled with the highest income pets", "ใส่สัตว์ที่ทำเงินได้มากสุดลงฟาร์มเสมอ"))
+    xDTaraZ.UI.Toggle(ranch, "AutoCollectCash", "Auto Collect Cash", "เก็บเงินอัตโนมัติ", T("Collects pet cash from anywhere", "เก็บเงินจากสัตว์จากที่ไหนก็ได้"))
+    ranch:AddButton({ Text = T("Place Best Now", "วางตัวดีสุดเดี๋ยวนี้"), Style = "Primary", Func = function() task.spawn(xDTaraZ.Pets.EquipBestNow) end })
+    ranch:AddButton({ Text = T("Collect Cash Now", "เก็บเงินเดี๋ยวนี้"), Func = xDTaraZ.Pets.CollectNow })
+
+    local feed = tab:AddRightGroupbox(T("Feeding", "ให้อาหาร"), "heart")
+    xDTaraZ.UI.Toggle(feed, "AutoFeed", "Auto Feed", "ให้อาหารอัตโนมัติ", T("Feeds your best pets with the food you own", "ให้อาหารสัตว์ตัวดีสุดด้วยอาหารที่มี"))
+    xDTaraZ.UI.Bind("FoodTypes", feed:AddDropdown("FoodTypes", { Text = T("Foods to use (empty = all)", "อาหารที่ใช้ (ว่าง = ทั้งหมด)"), Values = xDTaraZ.FoodNames, Multi = true, Default = {} }))
+    feed:AddButton({ Text = T("Feed Now", "ให้อาหารเดี๋ยวนี้"), Func = function() task.spawn(xDTaraZ.Pets.FeedNow) end })
+end
+
+function xDTaraZ.UI.Upgrades(window)
+    local tab = window:AddTab(T("Upgrades", "อัปเกรด"), "oneup", T("Luck, rebirth, rewards", "โชค รีเบิร์ธ รางวัล"))
+    local up = tab:AddLeftGroupbox(T("Upgrades", "อัปเกรด"), "oneup")
+    xDTaraZ.UI.Toggle(up, "AutoUpgrade", "Auto Upgrade Hatch Luck", "อัปโชคฟักอัตโนมัติ", T("Buys as many luck upgrades as you can afford", "ซื้ออัปเกรดโชคเท่าที่เงินพอ"))
+    up:AddButton({ Text = T("Upgrade Max Now", "อัปสุดเดี๋ยวนี้"), Style = "Primary", Func = xDTaraZ.Progress.UpgradeNow })
+    xDTaraZ.UI.Toggle(up, "AutoRebirth", "Auto Rebirth", "รีเบิร์ธอัตโนมัติ", T("Rebirths when you have the cash (needs the required pet)", "รีเบิร์ธเมื่อเงินพอ (ต้องมีสัตว์ที่กำหนด)"), true)
+    up:AddButton({ Text = T("Rebirth Now", "รีเบิร์ธเดี๋ยวนี้"), Style = "Warning", DoubleClick = true, Func = xDTaraZ.Progress.RebirthNow })
+
+    local rewards = tab:AddRightGroupbox(T("Rewards", "รางวัล"), "key")
+    xDTaraZ.UI.Toggle(rewards, "AutoClaim", "Auto Claim Rewards", "รับรางวัลอัตโนมัติ", T("Index and offline rewards", "รางวัลสมุดสะสมและออฟไลน์"))
+    rewards:AddButton({ Text = T("Claim Now", "รับเดี๋ยวนี้"), Func = xDTaraZ.Progress.ClaimNow })
+end
+
+function xDTaraZ.UI.TeleportTab(window)
+    local tab = window:AddTab(T("Teleport", "วาร์ป"), "pipe", T("Places and players", "สถานที่และผู้เล่น"))
+    local places = tab:AddLeftGroupbox(T("Places", "สถานที่"), "map")
+    local placeDrop = places:AddDropdown("TeleportPlace", { Text = T("Place", "สถานที่"), Values = xDTaraZ.Teleport.PlaceNames(), Searchable = true })
+    places:AddButton({ Text = T("Teleport", "วาร์ป"), Style = "Primary", Func = function() xDTaraZ.Teleport.To(placeDrop.Value) end })
+    places:AddButton({ Text = T("Refresh", "รีเฟรช"), Func = function() placeDrop:SetValues(xDTaraZ.Teleport.PlaceNames()) end })
+
+    local players = tab:AddRightGroupbox(T("Players", "ผู้เล่น"), "user")
+    local playerDrop = players:AddDropdown("TeleportPlayer", { Text = T("Player", "ผู้เล่น"), SpecialType = "Player", Searchable = true })
+    players:AddButton({ Text = T("Teleport To Player", "วาร์ปไปหาผู้เล่น"), Func = function() xDTaraZ.Teleport.ToPlayer(playerDrop.Value) end })
+end
+
+function xDTaraZ.UI.PlayerTab(window)
+    local tab = window:AddTab(T("Player", "ผู้เล่น"), "user", T("Movement and utility", "การเคลื่อนที่และอรรถประโยชน์"))
+    local move = tab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "zap")
+    xDTaraZ.UI.Toggle(move, "SpeedOn", "Speed", "วิ่งเร็ว")
+    xDTaraZ.UI.Bind("WalkSpeed", move:AddSlider("WalkSpeed", { Text = T("Walk Speed", "ความเร็ว"), Min = 16, Max = 300, Default = Config.WalkSpeed, Rounding = 0 }))
+    xDTaraZ.UI.Toggle(move, "JumpOn", "Jump Power", "กระโดดสูง")
+    xDTaraZ.UI.Bind("JumpPower", move:AddSlider("JumpPower", { Text = T("Jump Power", "แรงกระโดด"), Min = 50, Max = 300, Default = Config.JumpPower, Rounding = 0 }))
+    xDTaraZ.UI.Toggle(move, "InfJump", "Infinite Jump", "กระโดดไม่จำกัด")
+    xDTaraZ.UI.Toggle(move, "NoClip", "Noclip", "เดินทะลุ")
+    xDTaraZ.UI.Toggle(move, "Fly", "Fly", "บิน")
+    xDTaraZ.UI.Bind("FlySpeed", move:AddSlider("FlySpeed", { Text = T("Fly Speed", "ความเร็วบิน"), Min = 20, Max = 500, Default = Config.FlySpeed, Rounding = 0 }))
+
+    local misc = tab:AddRightGroupbox(T("Utility", "อรรถประโยชน์"), "gear")
+    xDTaraZ.UI.Toggle(misc, "AntiAfk", "Anti AFK", "กันหลุด AFK")
+    misc:AddButton({ Text = T("Rejoin", "เข้าเซิร์ฟใหม่"), Func = xDTaraZ.Server.Rejoin })
+    misc:AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), Func = xDTaraZ.Server.Hop })
+
+    local esp = tab:AddRightGroupbox(T("Egg ESP", "มองเห็นไข่"), "eye")
+    xDTaraZ.UI.Toggle(esp, "EggEsp", "Egg ESP", "มองเห็นไข่", T("Shows eggs through walls with rarity and distance", "แสดงไข่ทะลุกำแพง พร้อมความหายากและระยะ"))
+    xDTaraZ.UI.Bind("EspMinRarity", esp:AddDropdown("EspMinRarity", { Text = T("Minimum Rarity", "ความหายากขั้นต่ำ"), Values = xDTaraZ.Rarities, Default = xDTaraZ.Rarities[1] }))
+
+    local troll = tab:AddLeftGroupbox(T("Troll", "ป่วน"), "troll")
+    xDTaraZ.UI.Bind("TrollTarget", troll:AddDropdown("TrollTarget", { Text = T("Target", "เป้าหมาย"), SpecialType = "Player", Searchable = true }))
+    xDTaraZ.UI.Toggle(troll, "Fling", "Fling", "เหวี่ยงกระเด็น", T("Pauses egg farming while on", "หยุดฟาร์มไข่ชั่วคราวระหว่างเปิด"), true)
+    xDTaraZ.UI.Toggle(troll, "Stick", "Stick To Player", "เกาะติดผู้เล่น", T("Pauses egg farming while on", "หยุดฟาร์มไข่ชั่วคราวระหว่างเปิด"))
+    troll:AddButton({ Text = T("Spectate", "ส่องดู"), Func = function() xDTaraZ.Troll.Spectate(xDTaraZ.Options.TrollTarget) end })
+    troll:AddButton({ Text = T("Stop Spectate", "เลิกส่อง"), Func = function() xDTaraZ.Troll.Spectate(nil) end })
+end
+
+function xDTaraZ.UI.Build()
+    local window = Library.Window
+    window:AddTabSection(T("Main", "หลัก"))
+    xDTaraZ.UI.Home(window)
+    window:AddTabSection(T("Farming", "ฟาร์ม"))
+    xDTaraZ.UI.EggFarm(window)
+    xDTaraZ.UI.Hatching(window)
+    window:AddTabSection(T("Progression", "พัฒนา"))
+    xDTaraZ.UI.PetsTab(window)
+    xDTaraZ.UI.Upgrades(window)
+    window:AddTabSection(T("Misc", "อื่นๆ"))
+    xDTaraZ.UI.TeleportTab(window)
+    xDTaraZ.UI.PlayerTab(window)
+    window:AddSettingsTab()
+end
+
+function xDTaraZ.UI.Refresh()
+    if not xDTaraZ.UI.StatusLabel then return end
+    local saving = xDTaraZ.Progress.SavingForRebirth() and " (saving for rebirth)" or ""
+    xDTaraZ.UI.StatusLabel:SetText("Status: " .. State.Status .. saving)
+    xDTaraZ.UI.CashLabel:SetText(string.format("Cash: %s | Rebirths: %d | Next: %s", xDTaraZ.Util.FormatNumber(xDTaraZ:Cash()), xDTaraZ:Rebirths(), xDTaraZ.Util.FormatNumber(State.NextRebirthCost)))
+    xDTaraZ.UI.EggLabel:SetText(string.format("Eggs collected: %d | Wanted on map: %d", State.EggsCollected, #xDTaraZ.Eggs.Available()))
+    xDTaraZ.Esp.Refresh()
+end
+
+function xDTaraZ:Unload()
+    self.State.Alive = false
+    xDTaraZ.Esp.Clear()
+    if self.Options.Fling then xDTaraZ.Troll.StopFling() end
+    xDTaraZ.Move.Restore(nil)
+    xDTaraZ.Troll.Spectate(nil)
+    for _, conn in ipairs(self.State.Connections) do
+        conn:Disconnect()
+    end
+    table.clear(self.State.Connections)
+end
+
+local function BuildInterface()
+    Library = loadstring(xDTaraZ.Util.HttpGet(Config.UiSource))()
+    xDTaraZ.Library = Library
+    T = function(en, th) return Library:T(en, th) end
+
+    Library:CreateWindow({
+        Title = "Mario Hub",
+        SubTitle = "Ride A Pet by xDTaraZ",
+        MenuKey = Enum.KeyCode.LeftControl,
+        ConfigFolder = Config.SaveFolder,
+        Language = "Auto",
+        Theme = "Overworld",
+        OnUnlocked = function()
+            xDTaraZ.UI.Build()
+            Library:Every(Config.EspRefresh, xDTaraZ.UI.Refresh)
+            xDTaraZ.Scheduler.Boot()
+            Library:LoadAutoloadConfig()
+            if environment.RideAPetHunt then
+                environment.RideAPetHunt = nil
+                for _, idx in ipairs({ "EggHunter", "AutoPlaceEggs", "AutoHatch", "AntiAfk" }) do
+                    Library.Options[idx]:SetValue(true)
+                end
+            end
+        end,
+    })
+    Library:OnUnload(function() xDTaraZ:Unload() end)
+end
+
+environment.RideAPetUnload = function()
+    if xDTaraZ.Library and not xDTaraZ.Library.Unloaded then
+        xDTaraZ.Library:Unload()
+    else
+        xDTaraZ:Unload()
+    end
+end
+
+if LocalPlayer.Character then xDTaraZ.Player:Bind(LocalPlayer.Character) end
+xDTaraZ:Connect(LocalPlayer.CharacterAdded, function(character)
+    xDTaraZ.Player:Bind(character)
+end)
+
+BuildInterface()

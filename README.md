@@ -7,7 +7,7 @@
 **Roblox scripts by xDTaraZ**
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20the%20server-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/FHVfmeSceA)
-[![Games](https://img.shields.io/badge/Games-8-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
+[![Games](https://img.shields.io/badge/Games-9-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
 [![Keyless](https://img.shields.io/badge/Key-None-2EA043?style=for-the-badge)](#-how-to-use)
 
 </div>
@@ -36,6 +36,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 | **[Sniper Arena](#-sniper-arena)** | Silent aim, ragebot, aimbot, skin changer, ESP with preview and radar |
 | **[Violence District](#-violence-district)** | Auto repair, instant escape, killer auto slash and hook, auto farm both roles, ESP |
 | **[Anime Dice](#-anime-dice)** | Smart Kaitun, fast roll, auto upgrade and rebirth, auto tower, redeem all codes |
+| **[Ride A Pet](#-ride-a-pet)** | Instant egg collect, rare egg hunter with server hop, auto hatch, best pets, Smart Kaitun |
 
 ---
 
@@ -189,6 +190,29 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 - Redeem all codes, auto daily, group, offline and quest rewards
 - Rare pull alerts with Discord webhook *(beta)*, session stats, auto rejoin *(beta)*
 - Disable cutscenes, walk speed, fly, noclip, infinite jump, anti AFK
+
+</details>
+
+---
+
+### 🥚 Ride A Pet
+
+<details>
+<summary><b>Features</b></summary>
+
+- **Smart Kaitun**: collects eggs, fills nests, hatches, places your best pets, feeds them and rebirths on its own
+- Smart spending: saves for the next rebirth before buying luck upgrades
+- **Instant Eggs**: grabs every wanted wild egg on the map and brings it home in seconds
+- **Rare Egg Hunter**: only takes top rarity eggs and hops servers until it finds them
+- Smart egg stock: once your bag is full, only picks eggs better than the ones you hold
+- Egg filters by rarity, egg and minimum luck
+- Auto place eggs (best luck or fastest first), auto hatch from anywhere, auto buy nests
+- Auto place best pets (weight and mutations counted), auto collect cash, auto feed
+- Auto upgrade hatch luck, auto rebirth, auto claim index and offline rewards
+- Egg ESP with rarity, odds and distance
+- Teleport to plot, shops, volcano and players
+- Speed, jump, fly, noclip, infinite jump, anti AFK, rejoin, server hop
+- Troll: fling, stick to player, spectate
 
 </details>
 
