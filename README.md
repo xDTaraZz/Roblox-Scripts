@@ -7,7 +7,7 @@
 **Roblox scripts by xDTaraZ**
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20the%20server-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/FHVfmeSceA)
-[![Games](https://img.shields.io/badge/Games-10-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
+[![Games](https://img.shields.io/badge/Games-11-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
 [![Keyless](https://img.shields.io/badge/Key-None-2EA043?style=for-the-badge)](#-how-to-use)
 
 </div>
@@ -38,6 +38,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 | **[Anime Dice](#-anime-dice)** | Smart Kaitun, fast roll, auto upgrade and rebirth, auto tower, redeem all codes |
 | **[Ride A Pet](#-ride-a-pet)** | Instant egg collect, rare egg hunter with server hop, auto hatch, best pets, Smart Kaitun |
 | **[FPS AirDrop Arena](#-fps-airdrop-arena)** | Silent aim, ragebot, hunt, auto heal, loot best gear from anywhere, Kaitun |
+| **[BloxStrike](#-bloxstrike)** | Silent aim, aimbot, triggerbot, gun mods, skin changer, bunny hop, ESP |
 
 ---
 
@@ -235,6 +236,24 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 - Rapid fire, no spread, no recoil, instant aim down sights
 - Super slide, speed, fly, infinite jump, noclip
 - Player ESP and loot ESP, fullbright, camera FOV, anti AFK, rejoin, server hop
+
+</details>
+
+---
+
+### 🔫 BloxStrike
+
+<details>
+<summary><b>Features</b></summary>
+
+- **Aimbot** with Hold, Toggle or Always key modes, smoothness, sticky target, FOV circle
+- **Silent aim** with hit chance and headshot chance *(beta)*
+- **Triggerbot** with reaction delay, and **Ragebot** *(beta)*
+- Gun mods: no recoil with adjustable strength, no spread, full auto, rapid fire, move speed
+- **Skin changer** for every gun, knife, glove and grenade, sorted by category and rarity (only you see them) *(beta)*
+- **Bunny hop** with crouch jump *(beta)*
+- Player ESP with weapon names, fullbright, no flash, no smoke, camera FOV
+- Auto rebuy your loadout, redeem all codes, infinite jump, anti AFK, rejoin, server hop
 
 </details>
 
