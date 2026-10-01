@@ -80,7 +80,8 @@ xDTaraZ.Config = {
     RebirthBackoff = 60,
     RebirthReserve = 2,
 
-    HuntHopAfter = 15,
+    HuntHopAfter = 45,
+    HuntMaxHops = 15,
     HopPick = 15,
     HopReset = 15,
 
@@ -495,6 +496,7 @@ function xDTaraZ.Eggs.Step()
 
     if #xDTaraZ.Eggs.Available() > 0 then
         State.EmptySince = nil
+        if opts.EggHunter then State.HuntHops = 0 end
         xDTaraZ:WithLock("eggs", 0, xDTaraZ.Eggs.Run)
         return
     end
@@ -1057,8 +1059,17 @@ end
 
 function xDTaraZ.Server.HuntHop()
     State.Hopping = true
+    local hops = (State.HuntHops or 0) + 1
+    if hops > Config.HuntMaxHops then
+        State.HuntHops = 0
+        Library.Options.EggHunter:SetValue(false)
+        Library:Notify("Rare Egg Hunter", "No rare eggs after " .. Config.HuntMaxHops .. " servers, stopped", 8, "Warning")
+        return
+    end
     local queue = queue_on_teleport or queueonteleport or (syn and syn.queue_on_teleport)
-    if queue then queue("getgenv().RideAPetHunt = true " .. Config.ReloadSource) end
+    if queue and xDTaraZ.Options.EggHunter then
+        queue(string.format("getgenv().RideAPetHunt = { Hops = %d, Rarity = %q } ", hops, xDTaraZ.Options.HuntMinRarity or "Mythic") .. Config.ReloadSource)
+    end
     task.delay(Config.HopReset, function()
         State.Hopping = false
         State.EmptySince = osClock()
@@ -1176,7 +1187,7 @@ function xDTaraZ.UI.EggFarm(window)
     local hunter = tab:AddLeftGroupbox(T("Rare Egg Hunter", "ล่าไข่หายาก"), "star")
     xDTaraZ.UI.Toggle(hunter, "EggHunter", "Rare Egg Hunter", "ล่าไข่หายาก", T("Grabs only top rarity eggs and hops servers until it finds them", "เก็บเฉพาะไข่ระดับสูง ไม่มีก็ย้ายเซิร์ฟหาเอง"), true)
     xDTaraZ.UI.Bind("HuntMinRarity", hunter:AddDropdown("HuntMinRarity", { Text = T("Minimum Rarity", "ความหายากขั้นต่ำ"), Values = xDTaraZ.Rarities, Default = "Mythic" }))
-    hunter:AddButton({ Text = T("Hop Server Now", "ย้ายเซิร์ฟเดี๋ยวนี้"), Func = xDTaraZ.Server.HuntHop })
+    hunter:AddButton({ Text = T("Hop Server Now", "ย้ายเซิร์ฟเดี๋ยวนี้"), Func = xDTaraZ.Server.Hop })
 
     local filters = tab:AddRightGroupbox(T("Egg Filters", "ตัวกรองไข่"), "target")
     xDTaraZ.UI.Bind("EggRarities", filters:AddDropdown("EggRarities", { Text = T("Rarities (empty = all)", "ความหายาก (ว่าง = ทั้งหมด)"), Values = xDTaraZ.Rarities, Multi = true, Default = {} }))
@@ -1324,11 +1335,15 @@ local function BuildInterface()
             Library:Every(Config.EspRefresh, xDTaraZ.UI.Refresh)
             xDTaraZ.Scheduler.Boot()
             Library:LoadAutoloadConfig()
-            if environment.RideAPetHunt then
-                environment.RideAPetHunt = nil
+            local hunt = environment.RideAPetHunt
+            environment.RideAPetHunt = nil
+            if type(hunt) == "table" then
+                State.HuntHops = tonumber(hunt.Hops) or 0
+                Library.Options.HuntMinRarity:SetValue(hunt.Rarity)
                 for _, idx in ipairs({ "EggHunter", "AutoPlaceEggs", "AutoHatch", "AntiAfk" }) do
                     Library.Options[idx]:SetValue(true)
                 end
+                Library:Notify("Rare Egg Hunter", string.format("Hunting %s+ (server %d/%d). Turn it off to stop.", tostring(hunt.Rarity), State.HuntHops, Config.HuntMaxHops), 8, "Info")
             end
         end,
     })
