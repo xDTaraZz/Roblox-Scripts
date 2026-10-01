@@ -7,7 +7,7 @@
 **Roblox scripts by xDTaraZ**
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20the%20server-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/FHVfmeSceA)
-[![Games](https://img.shields.io/badge/Games-9-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
+[![Games](https://img.shields.io/badge/Games-10-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
 [![Keyless](https://img.shields.io/badge/Key-None-2EA043?style=for-the-badge)](#-how-to-use)
 
 </div>
@@ -37,6 +37,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 | **[Violence District](#-violence-district)** | Auto repair, instant escape, killer auto slash and hook, auto farm both roles, ESP |
 | **[Anime Dice](#-anime-dice)** | Smart Kaitun, fast roll, auto upgrade and rebirth, auto tower, redeem all codes |
 | **[Ride A Pet](#-ride-a-pet)** | Instant egg collect, rare egg hunter with server hop, auto hatch, best pets, Smart Kaitun |
+| **[FPS AirDrop Arena](#-fps-airdrop-arena)** | Silent aim, ragebot, hunt, auto heal, loot best gear from anywhere, Kaitun |
 
 ---
 
@@ -213,6 +214,27 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 - Teleport to plot, shops, volcano and players
 - Speed, jump, fly, noclip, infinite jump, anti AFK, rejoin, server hop
 - Troll: fling, stick to player, spectate
+
+</details>
+
+---
+
+### 🪂 FPS AirDrop Arena
+
+<details>
+<summary><b>Features</b></summary>
+
+- **Kaitun**: one switch that kills, hunts, heals, loots and respawns on its own, with gold, ore and kills per hour
+- **Silent aim** and **Ragebot** (works even when the game window is not focused)
+- **Hunt**: warps behind the closest enemy whenever nobody is in sight
+- Aimbot with Hold, Toggle or Always key modes and smoothness
+- **Auto heal**: grabs a med kit from anywhere on the map when your HP drops
+- **Instant respawn**
+- **Auto loot best gear**: better guns, pistols, helmets and armor from any crate on the map
+- Auto loot valuables (ore, crystals, gold) and air drops from anywhere
+- Rapid fire, no spread, no recoil, instant aim down sights
+- Super slide, speed, fly, infinite jump, noclip
+- Player ESP and loot ESP, fullbright, camera FOV, anti AFK, rejoin, server hop
 
 </details>
 
