@@ -141,9 +141,13 @@ xDTaraZ.State = {
 
 local State = xDTaraZ.State
 
-for _, name in ipairs({ "Util", "Round", "Sheriff", "Murderer", "Troll", "Survive", "Kaitun", "Farm", "Aim", "Skin", "Teleport", "Movement", "Esp", "Visual", "Session", "Scheduler" }) do
+for _, name in ipairs({ "Util", "Round", "Sheriff", "Murderer", "Troll", "Survive", "Kaitun", "Farm", "Aim", "Skin", "Teleport", "Movement", "Esp", "Visual", "Session", "Scheduler", "UI" }) do
     xDTaraZ[name] = {}
 end
+
+xDTaraZ.Caps = {
+    Hook = type(hookmetamethod) == "function" and type(newcclosure) == "function" and type(getnamecallmethod) == "function",
+}
 
 function xDTaraZ.Util.Try(fn, ...)
     local ok, err = pcall(fn, ...)
@@ -563,6 +567,7 @@ function xDTaraZ.Murderer.NearestVictimRoot(origin)
 end
 
 function xDTaraZ.Sheriff.InstallAimHook()
+    if not xDTaraZ.Caps.Hook then return end
     local original
     original = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         if not State.Alive or getnamecallmethod() ~= "FireServer" or checkcaller() then
@@ -1159,6 +1164,19 @@ local function BuildInterface()
     local T = function(en, th) return Library:T(en, th) end
     local opt = State.Opt
 
+    ---@param cap string  key in xDTaraZ.Caps
+    function xDTaraZ.UI.NeedCap(idx, cap)
+        if xDTaraZ.Caps[cap] then return end
+        local option = Library.Options[idx]
+        if not option then return end
+        option:OnChanged(function(on)
+            if not on then return end
+            local title = option.Row and option.Row.Title
+        Library:Notify("Mario Hub", (title and title.Text or idx) .. " is not supported on this executor", 5, "Warning")
+            task.defer(function() option:SetValue(false) end)
+        end)
+    end
+
     local function Notify(text)
         Library:Notify("Murder Mystery 2", text, 5)
     end
@@ -1179,6 +1197,7 @@ local function BuildInterface()
             Default = false,
             Callback = Bind("SilentAim"),
         })
+        xDTaraZ.UI.NeedCap("SilentAim", "Hook")
         gunBox:AddToggle("AutoShoot", {
             Text = T("Auto Shoot Murderer", "ยิงฆาตกรอัตโนมัติ"),
             Description = T("Kills the murderer as soon as you hold the gun", "ยิงฆาตกรทันทีที่ได้ถือปืน"),
@@ -1226,6 +1245,7 @@ local function BuildInterface()
             Default = false,
             Callback = Bind("KnifeAim"),
         })
+        xDTaraZ.UI.NeedCap("KnifeAim", "Hook")
 
         local aimBox = tab:AddRightGroupbox(T("Aimbot", "ล็อกกล้อง"))
         aimBox:AddToggle("Aimbot", {

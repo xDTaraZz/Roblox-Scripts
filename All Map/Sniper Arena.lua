@@ -971,6 +971,7 @@ xDTaraZ.Combat.SilentSaved = {}
 ---@return table?  the game's combat-origin override table
 function xDTaraZ.Combat.OriginOverride()
     if xDTaraZ.Combat.OriginParams ~= nil then return xDTaraZ.Combat.OriginParams or nil end
+    if not xDTaraZ.Caps.Upvalues then return nil end
     local camCtrl = xDTaraZ.GameLib.CameraController
     local ok, holder = pcall(function() return Util.GetUpvalue(camCtrl.GetCombatOriginFn(), 1) end)
     local params = ok and type(holder) == "table" and type(holder.TempParams) == "table" and holder.TempParams
@@ -1408,6 +1409,19 @@ function xDTaraZ.UI.StartStop(module)
     end)
 end
 
+---@param cap string  key in xDTaraZ.Caps
+function xDTaraZ.UI.NeedCap(idx, cap)
+    if xDTaraZ.Caps[cap] then return end
+    local option = Library.Options[idx]
+    if not option then return end
+    option:OnChanged(function(on)
+        if not on then return end
+        local title = option.Row and option.Row.Title
+        Library:Notify("Mario Hub", (title and title.Text or idx) .. " is not supported on this executor", 5, "Warning")
+        task.defer(function() option:SetValue(false) end)
+    end)
+end
+
 ---@param widget table  option whose value mirrors an Options key
 function xDTaraZ.UI.Bind(widget, key, transform)
     local function Apply(value)
@@ -1479,6 +1493,10 @@ function xDTaraZ.UI.BuildCombat(window)
     fire:AddToggle("TriggerBot", { Text = T("Trigger bot", "ยิงอัตโนมัติ"), Description = T("Fires the moment your crosshair is on an enemy", "ยิงทันทีเมื่อเป้าเล็งทับศัตรู"), Risky = true })
     fire:AddToggle("NoSpread", { Text = T("No spread", "ยิงไม่กระจาย"), Description = T("Shots stay accurate while moving or jumping", "ยิงแม่นแม้ตอนเดินหรือกระโดด") })
     fire:AddToggle("NoRecoil", { Text = T("No recoil", "ไม่มีแรงถีบ"), Description = T("Camera no longer kicks when firing", "กล้องไม่เด้งตอนยิง") })
+
+    xDTaraZ.UI.NeedCap("Ragebot", "Upvalues")
+    xDTaraZ.UI.NeedCap("SilentAim", "Upvalues")
+    xDTaraZ.UI.NeedCap("ShowFov", "Drawing")
 end
 
 function xDTaraZ.UI.BuildPlayer(window)

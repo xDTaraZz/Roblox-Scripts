@@ -1028,10 +1028,16 @@ function xDTaraZ.UI.Bind(widget, key)
     widget:OnChanged(Apply)
 end
 
+---@param cap string  key in xDTaraZ.Caps
 function xDTaraZ.UI.NeedCap(idx, cap)
     if xDTaraZ.Caps[cap] then return end
-    Library.Options[idx]:OnChanged(function(on)
-        if on then Library:Notify("Mario Hub", "Not supported on this executor", 4, "Warning") end
+    local option = Library.Options[idx]
+    if not option then return end
+    option:OnChanged(function(on)
+        if not on then return end
+        local title = option.Row and option.Row.Title
+        Library:Notify("Mario Hub", (title and title.Text or idx) .. " is not supported on this executor", 5, "Warning")
+        task.defer(function() option:SetValue(false) end)
     end)
 end
 
@@ -1087,6 +1093,7 @@ function xDTaraZ.UI.BuildAimbot(window)
     target:AddToggle("AimbotVisible", { Text = T("Visible only", "เฉพาะที่มองเห็น"), Default = true })
     target:AddSlider("AimbotFov", { Text = T("FOV", "ขนาดวง"), Min = 20, Max = 800, Default = 150, Suffix = "px" })
     target:AddToggle("AimbotShowFov", { Text = T("Show FOV circle", "แสดงวง FOV") })
+    xDTaraZ.UI.NeedCap("AimbotShowFov", "Drawing")
     target:AddSlider("AimbotMaxDistance", { Text = T("Max distance", "ระยะสูงสุด"), Min = 50, Max = 3000, Default = 1500, Suffix = "m" })
 end
 
@@ -1105,6 +1112,7 @@ function xDTaraZ.UI.BuildSilent(window)
     target:AddToggle("SilentVisible", { Text = T("Visible only", "เฉพาะที่มองเห็น"), Description = T("Off = also through walls", "ปิด = ยิงทะลุกำแพงด้วย"), Default = true })
     target:AddSlider("SilentFov", { Text = T("FOV", "ขนาดวง"), Min = 20, Max = 1000, Default = 220, Suffix = "px" })
     target:AddToggle("SilentShowFov", { Text = T("Show FOV circle", "แสดงวง FOV") })
+    xDTaraZ.UI.NeedCap("SilentShowFov", "Drawing")
     target:AddSlider("SilentMaxDistance", { Text = T("Max distance", "ระยะสูงสุด"), Min = 50, Max = 3000, Default = 2000, Suffix = "m" })
 end
 
@@ -1155,6 +1163,7 @@ function xDTaraZ.UI.BuildVisuals(window)
 
     local cam = tab:AddRightGroupbox(T("Camera", "กล้อง"), "eye")
     cam:AddToggle("CameraFov", { Text = T("Custom FOV", "ปรับมุมมอง") })
+    xDTaraZ.UI.NeedCap("CameraFov", "Hook")
     cam:AddSlider("CameraFovValue", { Text = T("FOV", "มุมมอง"), Min = 70, Max = 120, Default = 100, Rounding = 0 })
 end
 
@@ -1230,6 +1239,7 @@ function xDTaraZ.UI.BuildMisc(window)
 
     local buy = tab:AddLeftGroupbox(T("Auto Buy", "ซื้ออัตโนมัติ"), "shop")
     buy:AddToggle("AutoRebuy", { Text = T("Auto rebuy", "ซื้อซ้ำอัตโนมัติ"), Description = T("Buys your last loadout every round", "ซื้อชุดล่าสุดของคุณให้ทุกรอบ") })
+    xDTaraZ.UI.NeedCap("AutoRebuy", "Hook")
     xDTaraZ.UI.Labels.Bought = buy:AddParagraph({ Title = T("Saved loadout", "ชุดที่จำไว้"), Content = "-" })
     buy:AddButton({ Text = T("Rebuy Now", "ซื้อซ้ำตอนนี้"), Style = "Primary", Func = xDTaraZ.UI.Detach(function()
         local sent = xDTaraZ.Economy.Rebuy()

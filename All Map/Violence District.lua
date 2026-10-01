@@ -172,6 +172,12 @@ Util.HookMeta = Resolve(hookmetamethod)
 Util.GetGc = Resolve(getgc, get_gc_objects)
 Util.NameCallMethod = Resolve(getnamecallmethod)
 
+xDTaraZ.Caps = {
+    Hook = Util.HookMeta ~= nil and Util.NameCallMethod ~= nil,
+    Gc = Util.GetGc ~= nil,
+    Connections = Util.GetConnections ~= nil,
+}
+
 ---@return string  response body, throws if every transport fails
 function Util.HttpGet(url)
     local ok, body = pcall(function() return game:HttpGet(url) end)
@@ -1602,6 +1608,19 @@ function xDTaraZ.UI.Detach(fn)
     end
 end
 
+---@param cap string  key in xDTaraZ.Caps
+function xDTaraZ.UI.NeedCap(idx, cap)
+    if xDTaraZ.Caps[cap] then return end
+    local option = Library.Options[idx]
+    if not option then return end
+    option:OnChanged(function(on)
+        if not on then return end
+        local title = option.Row and option.Row.Title
+        Library:Notify("Mario Hub", (title and title.Text or idx) .. " is not supported on this executor", 5, "Warning")
+        task.defer(function() option:SetValue(false) end)
+    end)
+end
+
 ---@param widget table  option whose value mirrors an Options key
 function xDTaraZ.UI.Bind(widget, key)
     xDTaraZ.Options[key] = widget.Value
@@ -1695,6 +1714,7 @@ function xDTaraZ.UI.BuildSurvivor(window)
     safety:AddToggle("AutoSelfUnhook", { Text = T("Auto self-unhook", "ปลดตัวเองจากตะขอ"), Risky = true })
     safety:AddToggle("AutoParry", { Text = T("Auto parry (beta)", "ปัดป้องอัตโนมัติ (beta)"), Description = T("Needs the Parrying Dagger equipped", "ต้องใส่ Parrying Dagger") })
     safety:AddToggle("NoParryCooldown", { Text = T("No parry cooldown (beta)", "ปัดป้องไม่มีคูลดาวน์ (beta)") })
+    xDTaraZ.UI.NeedCap("NoParryCooldown", "Gc")
     safety:AddToggle("KillerAlert", { Text = T("Killer alert", "เตือนฆาตกรเข้าใกล้") })
     safety:AddButton({ Text = T("Sacrifice Self", "สละชีพตัวเอง"), Style = "Danger", Func = xDTaraZ.UI.Detach(function()
         if not xDTaraZ.Survivor.Sacrifice() then
@@ -1716,7 +1736,9 @@ function xDTaraZ.UI.BuildKiller(window)
 
     local defense = tab:AddRightGroupbox(T("Defense", "ป้องกัน"), "shield")
     defense:AddToggle("AntiStun", { Text = T("Anti pallet stun (beta)", "กันพาเลทสตัน (beta)") })
+    xDTaraZ.UI.NeedCap("AntiStun", "Connections")
     defense:AddToggle("AntiBlind", { Text = T("Anti blind (beta)", "กันแสงไฟฉาย (beta)"), Description = T("Flashlights no longer blind you", "ไม่โดนไฟฉายแยงตา") })
+    xDTaraZ.UI.NeedCap("AntiBlind", "Connections")
     defense:AddToggle("FreeTurn", { Text = T("No turn limit", "หมุนตัวได้อิสระ"), Description = T("Keep turning while attacking or lunging", "หันตัวได้ตอนฟันและพุ่ง") })
 end
 
@@ -1729,12 +1751,14 @@ function xDTaraZ.UI.BuildPlayer(window)
     move:AddSlider("SpeedValue", { Text = T("Walk speed", "ความเร็ว"), Min = 16, Max = 60, Default = 24 })
     move:AddToggle("NoSlow", { Text = T("No slow", "ไม่โดนสโลว์"), Description = T("Never drops below your normal run speed", "ความเร็วไม่ต่ำกว่าวิ่งปกติ") })
     move:AddToggle("NoFall", { Text = T("No fall (beta)", "ไม่เซตอนตก (beta)"), Description = T("No landing stumble after a drop", "ลงพื้นแล้วไม่เซ") })
+    xDTaraZ.UI.NeedCap("NoFall", "Hook")
     move:AddToggle("Noclip", { Text = T("Noclip", "เดินทะลุ") })
     move:AddToggle("InfiniteJump", { Text = T("Infinite jump", "กระโดดไม่จำกัด"), Description = T("Jump anywhere, even mid-air", "กระโดดได้ทุกที่ แม้กลางอากาศ") })
 
     local world = tab:AddRightGroupbox(T("World", "โลก"), "star")
     world:AddToggle("Fullbright", { Text = T("Fullbright", "สว่างทั้งแมพ") })
     world:AddToggle("AntiShake", { Text = T("Anti camera shake", "กันจอสั่น") })
+    xDTaraZ.UI.NeedCap("AntiShake", "Connections")
     world:AddToggle("NoFog", { Text = T("No fog", "ไม่มีหมอก") })
     world:AddToggle("AntiAfk", { Text = T("Anti AFK", "กันหลุด AFK"), Callback = xDTaraZ.UI.Detach(xDTaraZ.Player.AntiAfk.Arm) })
 end

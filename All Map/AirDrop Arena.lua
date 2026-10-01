@@ -1266,8 +1266,13 @@ end
 ---@param cap string  key in xDTaraZ.Caps
 function xDTaraZ.UI.NeedCap(idx, cap)
     if xDTaraZ.Caps[cap] then return end
-    Library.Options[idx]:OnChanged(function(on)
-        if on then Library:Notify("Mario Hub", "Not supported on this executor", 4, "Warning") end
+    local option = Library.Options[idx]
+    if not option then return end
+    option:OnChanged(function(on)
+        if not on then return end
+        local title = option.Row and option.Row.Title
+        Library:Notify("Mario Hub", (title and title.Text or idx) .. " is not supported on this executor", 5, "Warning")
+        task.defer(function() option:SetValue(false) end)
     end)
 end
 
@@ -1329,6 +1334,7 @@ function xDTaraZ.UI.BuildCombat(window)
     target:AddToggle("TargetBots", { Text = T("Include bots", "รวมบอท"), Default = true })
     target:AddSlider("AimFov", { Text = T("FOV", "ระยะมอง"), Min = 20, Max = 800, Default = 200, Suffix = "px" })
     target:AddToggle("ShowFov", { Text = T("Show FOV circle", "แสดงวงระยะมอง") })
+    xDTaraZ.UI.NeedCap("ShowFov", "Drawing")
     target:AddSlider("AimMaxDistance", { Text = T("Max distance", "ระยะสูงสุด"), Min = 50, Max = 2000, Default = 1000, Suffix = "m" })
 
     local life = tab:AddRightGroupbox(T("Survival", "เอาตัวรอด"), "heart")
