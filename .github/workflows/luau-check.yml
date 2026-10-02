@@ -1,0 +1,36 @@
+name: Luau compile check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Luau
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release view --repo luau-lang/luau --json tagName -q .tagName)
+          echo "Luau $tag"
+          gh release download "$tag" --repo luau-lang/luau --pattern luau-ubuntu.zip --dir /tmp
+          unzip -q /tmp/luau-ubuntu.zip -d "$HOME/luau"
+          chmod +x "$HOME/luau/"*
+          echo "$HOME/luau" >> "$GITHUB_PATH"
+
+      - name: Compile scripts
+        shell: bash
+        run: |
+          failed=0
+          while IFS= read -r -d '' file; do
+            if luau-compile --binary "$file" > /dev/null; then
+              echo "ok   $file"
+            else
+              echo "::error file=$file::compile failed"
+              failed=1
+            fi
+          done < <(find . -name '*.lua' -not -path './.git/*' -print0 | sort -z)
+          exit $failed
