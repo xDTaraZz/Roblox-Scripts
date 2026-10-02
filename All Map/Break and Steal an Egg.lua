@@ -48,7 +48,9 @@ xDTaraZ.Config = {
     BreakPickupRadius = 40,
     EquipInterval = 2,
     BuyInterval = 1.5,
-    ClaimInterval = 30,
+    ClaimInterval = 31,
+    EggInterval = 5,
+    EggSpacing = 8,
     SellInterval = 4,
     EspInterval = 0.4,
     BatRange = 15,
@@ -89,6 +91,7 @@ xDTaraZ.State = {
         AutoTreadmill = false,
         CashReserve = 0,
         AutoClaim = false,
+        AutoHatch = false,
         BatTarget = nil,
         BatLoop = false,
         BatAura = false,
@@ -702,7 +705,57 @@ xDTaraZ.Rewards = {}
 function xDTaraZ.Rewards.Claim()
     xDTaraZ:Fire("IndexRemote", "ClaimAll", nil)
     xDTaraZ:Fire("OfflineRewardRemote", "Claim")
-    xDTaraZ:Fire("GroupRewardRemote", "Claim")
+    if not State.GroupClaimed then
+        xDTaraZ:Fire("GroupRewardRemote", "Joined")
+        xDTaraZ:Fire("GroupRewardRemote", "Claim")
+    end
+    if not State.DiscordClaimed then xDTaraZ:Fire("DiscordRewardRemote", "Verify", LocalPlayer.Name) end
+end
+
+function xDTaraZ.Rewards.Watch()
+    local function Track(remote, key)
+        if not remote then return end
+        xDTaraZ:Connect(remote.OnClientEvent, function(kind, info)
+            if kind == "State" and type(info) == "table" and info.Claimed then State[key] = true end
+        end)
+        remote:FireServer("Get")
+    end
+    Track(GameLib.Remote.GroupRewardRemote, "GroupClaimed")
+    Track(GameLib.Remote.DiscordRewardRemote, "DiscordClaimed")
+end
+
+xDTaraZ.Eggs = {}
+
+function xDTaraZ.Eggs.Tools()
+    local list = {}
+    for _, tool in ipairs(LocalPlayer.Backpack:GetChildren()) do
+        if tool:IsA("Tool") and CollectionService:HasTag(tool, "MergeEggTool") then list[#list + 1] = tool end
+    end
+    return list
+end
+
+---@return number  eggs that got placed or hatched
+function xDTaraZ.Eggs.Step()
+    local done = 0
+    local now = Workspace:GetServerTimeNow()
+    for _, egg in ipairs(CollectionService:GetTagged("MergeEggPlaced")) do
+        if egg:GetAttribute("OwnerUserId") == LocalPlayer.UserId and (egg:GetAttribute("ReadyAtServerTime") or math.huge) <= now then
+            xDTaraZ:Fire("MergeMachineRemote", "HatchEgg", egg:GetAttribute("EggId"))
+            done += 1
+        end
+    end
+    local tools = xDTaraZ.Eggs.Tools()
+    local hitbox = #tools > 0 and xDTaraZ.Base.Hitbox()
+    if not hitbox then return done end
+    local _, hum = xDTaraZ:Character()
+    for i, tool in ipairs(tools) do
+        if hum then hum:EquipTool(tool) end
+        local offset = vector3New((i % 3 - 1) * Config.EggSpacing, -hitbox.Size.Y / 2 + 0.5, math.floor(i / 3) * Config.EggSpacing)
+        xDTaraZ:Fire("MergeMachineRemote", "PlaceEgg", tool, hitbox.Position + offset)
+        done += 1
+        task.wait(0.2)
+    end
+    return done
 end
 
 xDTaraZ.Teleport = {}
@@ -913,6 +966,7 @@ xDTaraZ.Scheduler.MoveHandlers = {
         if best and xDTaraZ.Pickup.Grab(best) then xDTaraZ.Base.Bank() end
     end,
     BankNow = xDTaraZ.Base.Bank,
+    HatchNow = function() xDTaraZ:Notify(("Eggs handled: %d"):format(xDTaraZ.Eggs.Step())) end,
     BatNow = function() xDTaraZ.Bat.Swing(Players:FindFirstChild(State.Opt.BatTarget or ""), true) end,
     Goto = function()
         local job = State.Goto
@@ -981,11 +1035,13 @@ function xDTaraZ.Scheduler.Control()
         return
     end
     if opt.BatAura then xDTaraZ.Scheduler.Run(xDTaraZ.Bat.Aura) end
+    if opt.AutoHatch then xDTaraZ.Scheduler.Every("Eggs", Config.EggInterval, xDTaraZ.Eggs.Step) end
     xDTaraZ.Scheduler.Run(xDTaraZ.Farm.Step)
 end
 
 function xDTaraZ.Scheduler.Boot()
     xDTaraZ.Session.Bind()
+    xDTaraZ.Scheduler.Run(xDTaraZ.Rewards.Watch)
     task.spawn(function()
         while State.Alive do
             xDTaraZ.Scheduler.Side()
@@ -1085,7 +1141,7 @@ local function BuildInterface()
             NoSave = true,
             Callback = function(value)
                 State.KaitunSet = State.KaitunSet or {}
-                for _, key in ipairs({ "AutoSteal", "AutoBreak", "AutoPlace", "AutoSell", "AutoBuyPickaxe", "AutoUpgradePlot", "AutoClaim", "AntiAfk" }) do
+                for _, key in ipairs({ "AutoSteal", "AutoBreak", "AutoPlace", "AutoSell", "AutoBuyPickaxe", "AutoUpgradePlot", "AutoClaim", "AutoHatch", "AntiAfk" }) do
                     if value and not opt[key] then
                         State.KaitunSet[key] = true
                         Options[key]:SetValue(true)
@@ -1180,8 +1236,10 @@ local function BuildInterface()
         })
 
         local rewardBox = BaseTab:AddLeftGroupbox(T("Rewards", "รางวัล"), "star")
-        Toggle(rewardBox, "AutoClaim", T("Auto Claim", "รับรางวัลอัตโนมัติ"), T("Claims index, offline and group rewards", "รับรางวัล Index ออฟไลน์ และกลุ่ม"))
+        Toggle(rewardBox, "AutoClaim", T("Auto Claim", "รับรางวัลอัตโนมัติ"), T("Claims index, offline, group and community rewards, no joining needed", "รับรางวัล Index ออฟไลน์ กลุ่ม และคอมมูนิตี้ ไม่ต้องเข้ากลุ่ม"))
         rewardBox:AddButton({ Text = T("Claim Now", "รับเดี๋ยวนี้"), Func = Request("ClaimNow") })
+        Toggle(rewardBox, "AutoHatch", T("Auto Hatch Eggs", "ฟักไข่อัตโนมัติ"), T("Places eggs from your backpack on your base and hatches them when ready", "วางไข่ในกระเป๋าบนฐานแล้วฟักเมื่อพร้อม"))
+        rewardBox:AddButton({ Text = T("Hatch Eggs Now", "ฟักไข่เดี๋ยวนี้"), Func = Request("HatchNow") })
 
         local moveBox = PlayerTab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "star")
         Toggle(moveBox, "SpeedOn", T("Speed", "ความเร็ว"), nil, Request("Speed"))

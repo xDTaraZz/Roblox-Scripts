@@ -286,7 +286,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 <details>
 <summary><b>Features</b></summary>
 
-- **Kaitun**: steals, breaks eggs, places, sells, upgrades and claims rewards on its own
+- **Kaitun**: steals, breaks eggs, places, sells, upgrades, hatches eggs and claims rewards on its own
 - **Instant steal**: grabs the most valuable animals on the map and brings them home in under a second
 - **Upgrades only**: takes only animals that earn more than your weakest one, so your base never fills with junk
 - Rarity filter and minimum cash per second for stealing
@@ -294,7 +294,8 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 - Auto place best animals, auto sell leftovers with rarities you never want sold
 - Auto buy the best pickaxe you can afford and auto upgrade base, with a cash reserve
 - Auto buy trails and upgrade treadmill *(beta)*
-- Auto claim index, offline and group rewards
+- Auto claim index, offline, group and community rewards, no joining needed
+- Auto hatch eggs: places eggs from your backpack on your base and hatches them when ready
 - ESP for animals (rarity, weight, cash per second), eggs (HP, hits) and players (what they carry)
 - Bat a target on loop, bat aura, rob players who carry animals *(beta)*
 - Teleport to every zone, shops, the egg machine and players
