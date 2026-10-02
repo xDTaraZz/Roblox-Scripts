@@ -1146,10 +1146,10 @@ function xDTaraZ.UI.Home(window)
     xDTaraZ.UI.CashLabel = status:AddLabel("...")
     xDTaraZ.UI.EggLabel = status:AddLabel("...")
 
-    local kaitun = tab:AddLeftGroupbox(T("Smart Kaitun", "ไก่ตันอัจฉริยะ"), "star")
+    local kaitun = tab:AddLeftGroupbox(T("Kaitun", "ไก่ตัน"), "star")
     kaitun:AddToggle("Kaitun", {
-        Text = T("Smart Kaitun", "ไก่ตันอัจฉริยะ"),
-        Description = T("Runs the whole account: best eggs, hatching, best pets, feeding, saves for rebirth before luck", "เล่นแทนทั้งบัญชี: เก็บไข่ดีสุด ฟัก วางสัตว์ดีสุด ให้อาหาร เก็บเงินรีเบิร์ธก่อนอัปโชค"),
+        Text = T("Kaitun", "ไก่ตัน"),
+        Description = T("Plays the whole account for you, from eggs to rebirth", "เล่นแทนทั้งบัญชี ตั้งแต่ไข่จนถึงรีเบิร์ธ"),
         Default = false,
         Callback = function(on)
             for _, idx in ipairs({ "AutoEggs", "SmartEggs", "AutoPlaceEggs", "AutoHatch", "AutoEquipBest", "AutoCollectCash", "AutoFeed", "AutoUpgrade", "SmartSpend", "AutoRebirth", "AutoNests", "AutoClaim", "AntiAfk" }) do

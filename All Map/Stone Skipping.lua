@@ -846,7 +846,7 @@ local function BuildInterface()
         local kaitunBox = MainTab:AddRightGroupbox(T("Kaitun", "ไก่ตัน"), "oneup")
         kaitunBox:AddToggle("Kaitun", {
             Text = T("Kaitun (All-in-one)", "ไก่ตัน (ทำทุกอย่าง)"),
-            Description = T("Trains, throws, buys stones, rebirths, hatches, drinks potions and claims rewards by itself", "ฝึก ปาหิน ซื้อหิน รีเบิร์ธ ฟักไข่ ใช้ยา และรับรางวัลให้เองทั้งหมด"),
+            Description = T("Trains, throws, upgrades, rebirths and claims rewards by itself", "ฝึก ปาหิน อัปเกรด รีเบิร์ธ และรับรางวัลให้เอง"),
             NoSave = true,
             Callback = function(value)
                 State.KaitunSet = State.KaitunSet or {}
@@ -874,7 +874,7 @@ local function BuildInterface()
         Toggle(farmBox, "AutoFarm", T("Auto Farm", "ฟาร์มอัตโนมัติ"), T("Earns skill and wins without stopping", "ฟาร์ม Skill และ Wins ไม่หยุด"))
         farmBox:AddDropdown("FarmMode", {
             Text = T("Farm Mode", "โหมดฟาร์ม"),
-            Description = T("Smart = throws when wins are needed, trains the rest of the time", "Smart = ปาหินเมื่อต้องใช้ Wins นอกนั้นฝึก Skill"),
+            Description = T("Smart: throws for wins when needed, trains otherwise", "Smart: ปาหินเมื่อต้องใช้ Wins นอกนั้นฝึก Skill"),
             Values = { "Smart", "Train", "Throw" },
             Default = 1,
             Callback = function(value) opt.FarmMode = value or "Smart" end,
