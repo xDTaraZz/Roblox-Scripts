@@ -7,7 +7,7 @@
 **Roblox scripts by xDTaraZ**
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20the%20server-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/FHVfmeSceA)
-[![Games](https://img.shields.io/badge/Games-13-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
+[![Games](https://img.shields.io/badge/Games-14-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
 [![Keyless](https://img.shields.io/badge/Key-None-2EA043?style=for-the-badge)](#-how-to-use)
 
 </div>
@@ -41,6 +41,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 | **[BloxStrike](#-bloxstrike)** | Silent aim, aimbot, triggerbot, gun mods, skin changer, bunny hop, ESP |
 | **[+1 Stone Skipping](#-1-stone-skipping)** | Smart Kaitun, auto throw and train, best stones, auto rebirth, fast hatch, redeem codes |
 | **[Break and Steal an Egg](#-break-and-steal-an-egg)** | Instant steal, break eggs in any zone, upgrades-only filter, auto upgrades, bat troll, Kaitun |
+| **[Build the Pyramid!](#-build-the-pyramid)** | Auto farm with no walking, multi-place, auto train at the best gym, auto upgrade, redeem codes |
 
 ---
 
@@ -300,6 +301,25 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 - Bat a target on loop, bat aura, rob players who carry animals *(beta)*
 - Teleport to every zone, shops, the egg machine and players
 - Speed, infinite jump, noclip, anti AFK, auto rejoin
+
+</details>
+
+---
+
+### 🔺 Build the Pyramid!
+<details>
+<summary><b>Features</b></summary>
+
+- **Auto Farm**: grabs a full load at the quarry and places it on the pyramid without walking, several slots at once
+- Return to your spot when the farm stops
+- **Auto Train Strength and Speed** at the best gym you have unlocked
+- Farm or train first, or switch between them every few minutes
+- Auto upgrade Bulk Pickup, Bulk Place and Placement Range, cheapest first or in order, with a coin reserve, plus Buy Now
+- Redeem all codes, with the result for each one
+- Auto join the pool when a pyramid is completed *(beta)*
+- Teleport to the quarry, the pyramid, the pool, every gym and players
+- Speed, fly, noclip, infinite jump, anti AFK, FPS boost, disable 3D rendering, rejoin and server hop
+- Live status: coins, coins per minute, carry, level and pyramids completed
 
 </details>
 
