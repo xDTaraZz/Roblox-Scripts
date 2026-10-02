@@ -234,7 +234,7 @@ local GameLib = xDTaraZ.GameLib
 
 local function RequireChild(parent, name)
     local child = parent and parent:FindFirstChild(name)
-    if not child then return nil end
+    if not child or not child:IsA("ModuleScript") then return nil end
     local ok, module = pcall(require, child)
     if not ok then
         warn("[SniperArena] require " .. name .. ": " .. tostring(module))
@@ -269,7 +269,6 @@ do
     GameLib.WeaponController = RequireChild(ReplicatedStorage:FindFirstChild("Client"), "WeaponController")
     local gameService = remoteFolder and remoteFolder:FindFirstChild("GameService")
     GameLib.RoomManager = RequireChild(gameService, "RoomManager")
-    GameLib.Any = RequireChild(remoteFolder, "Any")
     GameLib.Status = RequireChild(constantFolder, "Status")
     GameLib.Constant = constantFolder
 end
