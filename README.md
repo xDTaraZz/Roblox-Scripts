@@ -7,7 +7,7 @@
 **Roblox scripts by xDTaraZ**
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20the%20server-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/FHVfmeSceA)
-[![Games](https://img.shields.io/badge/Games-11-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
+[![Games](https://img.shields.io/badge/Games-12-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
 [![Keyless](https://img.shields.io/badge/Key-None-2EA043?style=for-the-badge)](#-how-to-use)
 
 </div>
@@ -39,6 +39,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 | **[Ride A Pet](#-ride-a-pet)** | Instant egg collect, rare egg hunter with server hop, auto hatch, best pets, Smart Kaitun |
 | **[FPS AirDrop Arena](#-fps-airdrop-arena)** | Silent aim, ragebot, hunt, auto heal, loot best gear from anywhere, Kaitun |
 | **[BloxStrike](#-bloxstrike)** | Silent aim, aimbot, triggerbot, gun mods, skin changer, bunny hop, ESP |
+| **[+1 Stone Skipping](#-1-stone-skipping)** | Smart Kaitun, auto throw and train, best stones, auto rebirth, fast hatch, redeem codes |
 
 ---
 
@@ -254,6 +255,27 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 - **Bunny hop** with crouch jump *(beta)*
 - Player ESP with weapon names, fullbright, no flash, no smoke, camera FOV
 - Auto rebuy your loadout, redeem all codes, infinite jump, anti AFK, rejoin, server hop
+
+</details>
+
+---
+
+### 🪨 +1 Stone Skipping
+
+<details>
+<summary><b>Features</b></summary>
+
+- **Kaitun**: trains, throws, buys stones, rebirths, drinks potions and claims rewards on its own
+- **Smart farm**: throws only while you need wins, trains the rest of the time in the best zone you unlocked
+- Farm modes: Smart, Train only, Throw only, with a training zone picker
+- Auto buy and equip the best stone you can afford, with a wins reserve
+- Auto rebirth the moment your level is high enough
+- **Fast hatch**: hatches the best egg you can afford back to back and skips the reveal
+- Auto open eggs from your inventory, auto use Skill, Win and Luck potions
+- Auto claim playtime gifts, daily, offline and group rewards, redeem all codes
+- Auto next world *(beta)*
+- Teleport to the throw zone, training zones and eggs
+- Speed, infinite jump, anti AFK, auto rejoin
 
 </details>
 
