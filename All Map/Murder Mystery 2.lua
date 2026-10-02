@@ -1275,7 +1275,7 @@ local function BuildInterface()
 
         local smartBox = tab:AddLeftGroupbox(T("Smart", "อัจฉริยะ"))
         smartBox:AddToggle("Kaitun", {
-            Text = T("Kaitun (Auto Win)", "ไก่ตัน (ชนะอัตโนมัติ)"),
+            Text = T("Auto Win", "ชนะอัตโนมัติ"),
             Description = T("Plays every round for you: kills as murderer, shoots the murderer with the gun, farms coins, dodges and grabs the gun as innocent", "เล่นทุกรอบให้เอง: เป็นฆาตกรก็ไล่ฆ่า ได้ปืนก็ยิงฆาตกร เป็นคนธรรมดาก็ฟาร์มเหรียญ หลบ และเก็บปืน"),
             Default = false,
             Risky = true,

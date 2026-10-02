@@ -54,15 +54,14 @@ xDTaraZ.Config = {
     RespawnGap = 0.5,
     LootRetry = 15,
     StatScanGap = 2,
+    LobbyRejoin = 5,
     HealGap = 0.4,
     HealUrgent = 35,
     CurrencyType = 1,
-    LobbyRejoin = 5,
     HuntIdle = 0.6,
     HuntDistance = 15,
     HuntLift = 10,
     TrackedCurrency = { "Gold", "Ore", "Crystal" },
-    KaitunToggles = { "SilentAim", "Ragebot", "InstantRespawn", "AutoHeal", "AutoGear", "AutoValuables", "AutoAirDrop", "RapidFire", "NoSpread", "NoRecoil", "AntiAfk", "Hunt" },
     GearSlots = {
         [4] = { "Primary", 1 },
         [5] = { "Pistol", 4 },
@@ -108,7 +107,6 @@ xDTaraZ.State = {
 }
 
 xDTaraZ.Options = {
-    Kaitun = false,
     Hunt = false,
     SilentAim = false,
     Ragebot = false,
@@ -121,6 +119,7 @@ xDTaraZ.Options = {
     Aimbot = false,
     AimSmooth = 1,
     InstantRespawn = false,
+    AutoRejoin = false,
     AutoHeal = false,
     HealAt = 70,
     RapidFire = false,
@@ -999,6 +998,16 @@ function xDTaraZ.Respawn.Step()
     xDTaraZ.Respawn.Now()
 end
 
+function xDTaraZ.Respawn.Rejoin()
+    local char = LocalPlayer.Character
+    if not xDTaraZ.Options.AutoRejoin or not (char and char:GetAttribute("EntityState") == 0) then
+        xDTaraZ.Farm.LobbySince = nil
+        return
+    end
+    xDTaraZ.Farm.LobbySince = xDTaraZ.Farm.LobbySince or osClock()
+    if osClock() - xDTaraZ.Farm.LobbySince > xDTaraZ.Config.LobbyRejoin then xDTaraZ.Respawn.Now() end
+end
+
 function xDTaraZ.Respawn.Watch(char)
     xDTaraZ:Connect(char:GetAttributeChangedSignal("EntityState"), function()
         xDTaraZ.Heal.Stats, xDTaraZ.Slide.Skill, xDTaraZ.Combat.Input = nil, nil, nil
@@ -1124,7 +1133,7 @@ function xDTaraZ.Hunt.Step()
     xDTaraZ.Hunt.Jumps += 1
 end
 
-xDTaraZ.Farm = { Bag = nil, Start = nil, Totals = {}, Saved = {}, LobbySince = nil }
+xDTaraZ.Farm = { Bag = nil, Start = nil, Totals = {}, LobbySince = nil }
 
 ---@return table?  your persistent currency bag (gold, ore, crystals)
 function xDTaraZ.Farm.CurrencyBag()
@@ -1162,34 +1171,6 @@ function xDTaraZ.Farm.GetStatus()
     local kills = xDTaraZ.State.Kills - start[3]
     parts[#parts + 1] = string.format("Kills %d (%d/h)", kills, math.floor(kills / hours))
     return table.concat(parts, " | ")
-end
-
----@param on boolean  flips every farming toggle, restores them when turned off
-function xDTaraZ.Farm.SetKaitun(on)
-    local farm, options = xDTaraZ.Farm, xDTaraZ.Library.Options
-    for _, key in ipairs(xDTaraZ.Config.KaitunToggles) do
-        local widget = options[key]
-        if not widget then continue end
-        if on then
-            farm.Saved[key] = widget.Value
-            widget:SetValue(true)
-        elseif farm.Saved[key] ~= nil then
-            widget:SetValue(farm.Saved[key])
-        end
-    end
-    if not on then table.clear(farm.Saved) end
-end
-
-function xDTaraZ.Farm.Step()
-    xDTaraZ.Farm.Sample()
-    if not xDTaraZ.Options.Kaitun then return end
-    local char = LocalPlayer.Character
-    if not (char and char:GetAttribute("EntityState") == 0) then
-        xDTaraZ.Farm.LobbySince = nil
-        return
-    end
-    xDTaraZ.Farm.LobbySince = xDTaraZ.Farm.LobbySince or osClock()
-    if osClock() - xDTaraZ.Farm.LobbySince > xDTaraZ.Config.LobbyRejoin then xDTaraZ.Respawn.Now() end
 end
 
 xDTaraZ.Esp = { Count = 0 }
@@ -1287,11 +1268,6 @@ function xDTaraZ.UI.BuildMain(window)
     xDTaraZ.UI.Labels.Loot = status:AddParagraph({ Title = T("Loot", "ของดรอป"), Content = "-" })
     xDTaraZ.UI.Labels.Esp = status:AddParagraph({ Title = T("ESP", "ESP"), Content = "-" })
 
-    local kaitun = tab:AddRightGroupbox(T("Kaitun", "ไก่ตัน"), "star")
-    kaitun:AddToggle("Kaitun", { Text = T("Kaitun", "ไก่ตัน"), Description = T("One switch: kills, heals, loots the best gear and valuables, respawns and rejoins matches on its own", "เปิดทีเดียว: ฆ่า ฮีล เก็บของดีและของมีค่า เกิดใหม่ และเข้าแมตช์ใหม่เอง"), Risky = true, Callback = function(on)
-        xDTaraZ.Farm.SetKaitun(on)
-    end })
-
     local quick = tab:AddLeftGroupbox(T("Quick", "ด่วน"), "bomb")
     quick:AddButton({ Text = T("Panic - all off", "ฉุกเฉิน ปิดทั้งหมด"), Style = "Danger", Func = xDTaraZ.UI.Detach(function()
         for _, toggle in pairs(Library.Toggles) do toggle:SetValue(false) end
@@ -1341,6 +1317,7 @@ function xDTaraZ.UI.BuildCombat(window)
     life:AddToggle("AutoHeal", { Text = T("Auto heal", "ฮีลอัตโนมัติ"), Description = T("Grabs a med kit from anywhere on the map the moment you get hurt", "ดึงยาจากทุกที่ในแมพมาใช้ทันทีที่เลือดลด"), Risky = true })
     life:AddSlider("HealAt", { Text = T("Heal below", "ฮีลเมื่อเลือดต่ำกว่า"), Min = 10, Max = 99, Default = 70, Rounding = 0, Suffix = "%" })
     life:AddToggle("InstantRespawn", { Text = T("Instant respawn", "เกิดใหม่ทันที"), Description = T("Back in the match the moment you die", "กลับเข้าแมตช์ทันทีที่ตาย") })
+    life:AddToggle("AutoRejoin", { Text = T("Auto rejoin match", "เข้าแมตช์ใหม่อัตโนมัติ"), Description = T("Jumps back into a match when you sit in the lobby", "กลับเข้าแมตช์เองเมื่อค้างอยู่ในล็อบบี้") })
     life:AddButton({ Text = T("Heal Now", "ฮีลตอนนี้"), Style = "Success", Func = xDTaraZ.UI.Detach(function()
         if not xDTaraZ.Heal.Now() then Library:Notify("Heal", "No med on the map or HP is full", 3, "Info") end
     end) }):AddButton({ Text = T("Respawn Now", "เกิดใหม่ตอนนี้"), Func = xDTaraZ.UI.Detach(function()
@@ -1499,7 +1476,10 @@ function xDTaraZ.Boot()
     xDTaraZ.Scheduler.Every("Gear", 0.5, xDTaraZ.Loot.GearStep)
     xDTaraZ.Scheduler.Every("Valuables", 1, xDTaraZ.Loot.ValuablesStep)
     xDTaraZ.Scheduler.Every("Heal", 0.1, xDTaraZ.Heal.Step)
-    xDTaraZ.Scheduler.Every("Farm", 2, xDTaraZ.Farm.Step)
+    xDTaraZ.Scheduler.Every("Farm", 2, function()
+        xDTaraZ.Farm.Sample()
+        xDTaraZ.Respawn.Rejoin()
+    end)
     xDTaraZ.Scheduler.Every("Hunt", 0.5, xDTaraZ.Hunt.Step)
     xDTaraZ.Scheduler.Boot()
 end
