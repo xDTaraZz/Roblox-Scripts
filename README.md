@@ -7,7 +7,7 @@
 **Roblox scripts by xDTaraZ**
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20the%20server-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/FHVfmeSceA)
-[![Games](https://img.shields.io/badge/Games-12-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
+[![Games](https://img.shields.io/badge/Games-13-E8A04C?style=for-the-badge&logo=roblox&logoColor=white)](#-supported-games)
 [![Keyless](https://img.shields.io/badge/Key-None-2EA043?style=for-the-badge)](#-how-to-use)
 
 </div>
@@ -40,6 +40,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 | **[FPS AirDrop Arena](#-fps-airdrop-arena)** | Silent aim, ragebot, hunt, auto heal, loot best gear from anywhere, Kaitun |
 | **[BloxStrike](#-bloxstrike)** | Silent aim, aimbot, triggerbot, gun mods, skin changer, bunny hop, ESP |
 | **[+1 Stone Skipping](#-1-stone-skipping)** | Smart Kaitun, auto throw and train, best stones, auto rebirth, fast hatch, redeem codes |
+| **[Break and Steal an Egg](#-break-and-steal-an-egg)** | Instant steal, break eggs in any zone, upgrades-only filter, auto upgrades, bat troll, Kaitun |
 
 ---
 
@@ -276,6 +277,28 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 - Auto next world *(beta)*
 - Teleport to the throw zone, training zones and eggs
 - Speed, infinite jump, anti AFK, auto rejoin
+
+</details>
+
+---
+
+### 🥚 Break and Steal an Egg
+<details>
+<summary><b>Features</b></summary>
+
+- **Kaitun**: steals, breaks eggs, places, sells, upgrades and claims rewards on its own
+- **Instant steal**: grabs the most valuable animals on the map and brings them home in under a second
+- **Upgrades only**: takes only animals that earn more than your weakest one, so your base never fills with junk
+- Rarity filter and minimum cash per second for stealing
+- **Auto break eggs in any zone**, picks the egg worth the most for the time it takes
+- Auto place best animals, auto sell leftovers with rarities you never want sold
+- Auto buy the best pickaxe you can afford and auto upgrade base, with a cash reserve
+- Auto buy trails and upgrade treadmill *(beta)*
+- Auto claim index, offline and group rewards
+- ESP for animals (rarity, weight, cash per second), eggs (HP, hits) and players (what they carry)
+- Bat a target on loop, bat aura, rob players who carry animals *(beta)*
+- Teleport to every zone, shops, the egg machine and players
+- Speed, infinite jump, noclip, anti AFK, auto rejoin
 
 </details>
 
