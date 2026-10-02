@@ -1,4 +1,4 @@
--- Mario Hub UI · standalone build 2026-09-29
+-- Mario Hub UI · standalone build 2026-10-02
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
@@ -27,6 +27,9 @@ local Config = {
     KeyCache = "mariohub/key.txt",
     DefaultAssets = { logo = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/main/logo.png" },
     FontDir = "mariohub/fonts",
+    HttpTimeout = 8,
+    FontTimeout = 20,
+    PreloadTimeout = 5,
     ThaiFont = {
         Family = "MarioKanit",
         Source = "https://raw.githubusercontent.com/google/fonts/main/ofl/kanit/Kanit-%s.ttf",
@@ -341,10 +344,28 @@ function Util.GuiParent()
     local ok = pcall(function()
         return CoreGui:GetChildren()
     end)
-    return ok and CoreGui or LocalPlayer:WaitForChild("PlayerGui")
+    return ok and CoreGui or LocalPlayer:WaitForChild("PlayerGui", 10) or LocalPlayer:FindFirstChildOfClass("PlayerGui")
 end
 
-function Util.HttpGet(url)
+---@return boolean finished, any ...  false if it errored or ran past the deadline
+function Util.Await(timeout, callback, ...)
+    local box = { done = false }
+    local args = table.pack(...)
+    task.spawn(function()
+        box.values = table.pack(pcall(callback, table.unpack(args, 1, args.n)))
+        box.done = true
+    end)
+    local started = os.clock()
+    while not box.done and os.clock() - started < timeout do
+        task.wait(0.05)
+    end
+    if not box.done or not box.values[1] then
+        return false
+    end
+    return true, table.unpack(box.values, 2, box.values.n)
+end
+
+local function FetchBody(url)
     local ok, body = pcall(game.HttpGet, game, url)
     if ok and type(body) == "string" then
         return body
@@ -355,6 +376,32 @@ function Util.HttpGet(url)
     end
     local sent, response = pcall(requester, { Url = url, Method = "GET" })
     return sent and type(response) == "table" and response.Body or nil
+end
+
+---@return string?  nil on failure or after Config.HttpTimeout
+function Util.HttpGet(url)
+    local finished, body = Util.Await(Config.HttpTimeout, FetchBody, url)
+    return finished and type(body) == "string" and body or nil
+end
+
+---@return string?  nil if the executor can't serve the file
+function Util.CustomAsset(path)
+    if type(getcustomasset) ~= "function" then
+        return nil
+    end
+    local finished, asset = Util.Await(Config.HttpTimeout, getcustomasset, path)
+    return finished and type(asset) == "string" and asset:find("^rbxasset") and asset or nil
+end
+
+local function SafeFile(fn, ...)
+    if type(fn) ~= "function" then
+        return nil
+    end
+    local ok, value = pcall(fn, ...)
+    if not ok then
+        return nil
+    end
+    return value == nil and true or value
 end
 
 function Util.Clipboard(text)
@@ -695,6 +742,9 @@ function Lang.Set(code)
         return
     end
     State.Language = code
+    if code == "TH" then
+        Fonts.LoadThaiAsync()
+    end
     Theme.Prune()
     for inst, binding in pairs(Lang.Bound) do
         Lang.Apply(inst, binding)
@@ -757,48 +807,84 @@ end
 
 function Fonts.FetchFace(weight, name)
     local path = Config.FontDir .. "/kanit-" .. weight .. ".ttf"
-    if not isfile(path) or readfile(path):sub(1, 4) ~= "\0\1\0\0" then
+    local cached = SafeFile(isfile, path) == true and SafeFile(readfile, path)
+    if type(cached) ~= "string" or cached:sub(1, 4) ~= "\0\1\0\0" then
         local body = Util.HttpGet(string.format(Config.ThaiFont.Source, name))
         if type(body) ~= "string" or body:sub(1, 4) ~= "\0\1\0\0" then
             return nil
         end
-        writefile(path, body)
+        SafeFile(writefile, path, body)
+        local check = SafeFile(readfile, path)
+        if type(check) ~= "string" or #check ~= #body then
+            Fonts.Disable("binary write")
+            return nil
+        end
     end
-    local ok, asset = pcall(getcustomasset, path)
-    return ok and string.format('{"name":"W%d","weight":%d,"style":"normal","assetId":"%s"}', weight, weight, asset) or nil
+    local asset = Util.CustomAsset(path)
+    if not asset then
+        Fonts.Disable("getcustomasset ttf")
+        return nil
+    end
+    return string.format('{"name":"W%d","weight":%d,"style":"normal","assetId":"%s"}', weight, weight, asset)
 end
 
--- โหลด Kanit ครั้งแรกแล้วเก็บในเครื่อง รอบต่อไปอ่านไฟล์ทันที
+function Fonts.Disable(reason)
+    Fonts.Broken = true
+    SafeFile(writefile, Config.FontDir .. "/disabled", tostring(reason))
+    warn("[Mario Hub] Thai font off: " .. tostring(reason))
+end
+
 function Fonts.LoadThai()
-    if Fonts.Thai or not Util.FileApi() or type(getcustomasset) ~= "function" then
+    if Fonts.Thai or Fonts.Broken or not Util.FileApi() or type(getcustomasset) ~= "function" then
         return Fonts.Thai ~= nil
+    end
+    if SafeFile(isfile, Config.FontDir .. "/disabled") == true then
+        Fonts.Broken = true
+        return false
     end
     Util.EnsureFolder(Config.FontDir)
     local faces = {}
     for weight, name in pairs(Config.ThaiFont.Weights) do
+        if Fonts.Broken or Library.Unloaded then
+            return false
+        end
         table.insert(faces, Fonts.FetchFace(weight, name))
     end
     if #faces == 0 then
         return false
     end
-    -- engine จำ asset ตาม path ต้องลบ descriptor เก่าก่อนเขียนใหม่
     local descriptor = Config.FontDir .. "/kanit.font"
-    if type(delfile) == "function" and isfile(descriptor) then
-        delfile(descriptor)
+    if SafeFile(isfile, descriptor) == true then
+        SafeFile(delfile, descriptor)
     end
-    writefile(descriptor, '{"name":"' .. Config.ThaiFont.Family .. '","faces":[' .. table.concat(faces, ",") .. "]}")
-    local ok, family = pcall(getcustomasset, descriptor)
-    if not ok then
+    SafeFile(writefile, descriptor, '{"name":"' .. Config.ThaiFont.Family .. '","faces":[' .. table.concat(faces, ",") .. "]}")
+    local family = Util.CustomAsset(descriptor)
+    if not family then
+        Fonts.Disable("getcustomasset family")
         return false
     end
     Fonts.Thai = family
     table.clear(Fonts.Faces)
-    Fonts.Preload()
     if State.Language == "TH" and State.Gui then
         Fonts.ApplyAll()
         Layout.MarkAll()
     end
+    task.spawn(Fonts.Preload)
     return true
+end
+
+function Fonts.LoadThaiAsync()
+    if Fonts.Thai or Fonts.Broken or Fonts.Loading then
+        return
+    end
+    Fonts.Loading = true
+    task.spawn(function()
+        local finished = Util.Await(Config.FontTimeout, Fonts.LoadThai)
+        Fonts.Loading = false
+        if not finished and not Fonts.Thai and not Fonts.Broken and not Library.Unloaded then
+            Fonts.Disable("timeout")
+        end
+    end)
 end
 
 function Fonts.Preload()
@@ -807,7 +893,7 @@ function Fonts.Preload()
     for _, weight in pairs(Fonts.ThaiWeights) do
         table.insert(probes, Draw.New("TextLabel", { Text = "ก", FontFace = Font.new(Fonts.Thai, weight) }))
     end
-    pcall(provider.PreloadAsync, provider, probes)
+    Util.Await(Config.PreloadTimeout, provider.PreloadAsync, provider, probes)
     for _, probe in ipairs(probes) do
         probe:Destroy()
     end
@@ -1001,16 +1087,15 @@ function Assets.Download(name, url)
         return nil
     end
     local path = Config.AssetDir .. "/" .. Util.Sanitize(name) .. ".png"
-    if not isfile(path) then
+    if SafeFile(isfile, path) ~= true then
         local body = Util.HttpGet(url)
         if type(body) ~= "string" or #body < 8 then
             return nil
         end
         Util.EnsureFolder(Config.AssetDir)
-        writefile(path, body)
+        SafeFile(writefile, path, body)
     end
-    local ok, content = pcall(getcustomasset, path)
-    return ok and content or nil
+    return Util.CustomAsset(path)
 end
 
 --@return content id ของรูปที่ผู้ใช้ตั้งทับไว้ หรือ nil ถ้าใช้ของวาดเอง
@@ -1028,9 +1113,8 @@ function Assets.Resolve(name)
         content = source
     elseif type(source) == "string" and source:match("^https?://") then
         content = Assets.Download(key, source)
-    elseif type(source) == "string" and type(getcustomasset) == "function" and isfile and isfile(source) then
-        local ok, custom = pcall(getcustomasset, source)
-        content = ok and custom or nil
+    elseif type(source) == "string" and SafeFile(isfile, source) == true then
+        content = Util.CustomAsset(source)
     end
     Assets.Cache[key] = content or false
     return content
@@ -4043,11 +4127,24 @@ end
 
 -- หน้าโหลด: ฉากด่านย่อส่วน เห็ดวิ่งบนพื้นเป็นแถบความคืบหน้า แต่ละขั้นผูกกับงานจริง (โหลดฟอนต์ / สร้างเมนู)
 Intro.Width, Intro.Height, Intro.Ground = 600, 320, 44
-Intro.MinStep = 0.42
+Intro.MinStep = 0.22
+Intro.StepTimeout = 15
 
 --@param settings { Title, SubTitle, Steps = { { Label, Run } }, OnDone }
 function Intro.Play(settings)
     local screen = Draw.New("Frame", { Name = "Loader", BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = Config.Layer.Intro, Parent = State.Gui })
+    local ok = Util.Try(Intro.Show, settings, screen)
+    screen:Destroy()
+    if Library.Unloaded then
+        return
+    end
+    if not ok and not settings.Ran then
+        Intro.RunSteps(settings, nil)
+    end
+    Util.Try(settings.OnDone)
+end
+
+function Intro.Show(settings, screen)
     Anim.Tween(screen, { BackgroundTransparency = 0.35 }, 0.3)
     local card, scene, scale = Intro.BuildCard(screen)
     Intro.BuildScenery(scene)
@@ -4058,21 +4155,20 @@ function Intro.Play(settings)
     local pill = Intro.Pill(scene, settings.SubTitle)
     local track = Intro.Track(scene)
     Anim.Tween(scale, { Scale = State.UserScale }, 0.45, "Back")
-    Anim.Tween(block, { Position = UDim2.new(0.5, 0, 0, 22) }, 0.6, "Bounce")
-    task.wait(0.65)
+    Anim.Tween(block, { Position = UDim2.new(0.5, 0, 0, 22) }, 0.4, "Bounce")
+    task.wait(0.42)
     Intro.HitBlock(scene, block)
     Intro.DropLetters(letters, pill)
-    Intro.RunSteps(settings.Steps, track)
+    Intro.RunSteps(settings, track)
     if Library.Unloaded then
         return
     end
     Intro.Finale(scene, track)
-    task.wait(0.45)
-    Anim.Tween(scale, { Scale = State.UserScale * 1.06 }, 0.3, "In")
-    Anim.Tween(card, { GroupTransparency = 1 }, 0.3)
-    Anim.Tween(screen, { BackgroundTransparency = 1 }, 0.3).Completed:Wait()
-    screen:Destroy()
-    Util.Try(settings.OnDone)
+    task.wait(0.3)
+    Anim.Tween(scale, { Scale = State.UserScale * 1.06 }, 0.2, "In")
+    Anim.Tween(card, { GroupTransparency = 1 }, 0.2)
+    Anim.Tween(screen, { BackgroundTransparency = 1 }, 0.2)
+    task.wait(0.2)
 end
 
 function Intro.BuildCard(screen)
@@ -4174,22 +4270,32 @@ function Intro.DropLetters(letters, pill)
     Anim.Tween(pill.Label, { TextTransparency = 0 }, 0.3, "Out", 0, false, 0.4)
 end
 
-function Intro.RunSteps(steps, track)
+---@param track table?  nil = run the remaining steps without drawing
+function Intro.RunSteps(settings, track)
+    local steps = settings.Steps
     for index, step in ipairs(steps) do
         if Library.Unloaded then
             return
         end
-        track.Status.Text = Lang.Resolve(step.Label)
+        if step.Started then
+            continue
+        end
+        step.Started = true
+        if track then track.Status.Text = Lang.Resolve(step.Label) end
         local started = os.clock()
         if step.Run then
-            Util.Try(step.Run)
+            Util.Await(Intro.StepTimeout, step.Run)
         end
-        Anim.Tween(track.Progress, { Value = index / #steps }, 0.35, "Out")
+        if not track then
+            continue
+        end
+        Anim.Tween(track.Progress, { Value = index / #steps }, 0.2, "Out")
         local remaining = Intro.MinStep - (os.clock() - started)
         if remaining > 0 then
             task.wait(remaining)
         end
     end
+    settings.Ran = true
 end
 
 function Intro.Finale(scene, track)
@@ -5196,9 +5302,7 @@ function Library:CreateWindow(options)
     Window.DetectTouch(options.Layout)
     Gui.Setup()
     if State.Language == "TH" then
-        Fonts.LoadThai()
-    elseif options.Intro == false then
-        task.spawn(Fonts.LoadThai)
+        Fonts.LoadThaiAsync()
     end
     local window = Window.New(options)
     self.Window = window
@@ -5230,14 +5334,24 @@ function Library:CreateWindow(options)
             Reveal()
             return
         end
+        local built = false
+        task.spawn(function()
+            Build()
+            built = true
+        end)
+        local function WaitBuilt()
+            while not built and not Library.Unloaded do
+                task.wait()
+            end
+        end
         local steps = Lang.Strings.IntroSteps
         task.spawn(Intro.Play, {
             Title = window.Title,
             SubTitle = window.SubTitle,
             Steps = {
-                { Label = { EN = steps.EN[1], TH = steps.TH[1] }, Run = Fonts.LoadThai },
+                { Label = { EN = steps.EN[1], TH = steps.TH[1] } },
                 { Label = { EN = steps.EN[2], TH = steps.TH[2] } },
-                { Label = { EN = steps.EN[3], TH = steps.TH[3] }, Run = Build },
+                { Label = { EN = steps.EN[3], TH = steps.TH[3] }, Run = WaitBuilt },
                 { Label = { EN = steps.EN[4], TH = steps.TH[4] } },
             },
             OnDone = Reveal,
