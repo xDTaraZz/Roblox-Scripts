@@ -60,6 +60,8 @@ xDTaraZ.Config = {
         QuestService = { "AutoClaimQuest" },
         GameService = { "FastRespawn" },
     },
+    SkinMainRows = 4,
+    SkinGroupRows = 3,
     EconomyInterval = 1,
     StatusInterval = 1,
     OpenDelay = 0.6,
@@ -379,10 +381,15 @@ function GameLib.Require(module)
     return nil
 end
 
+---@param parent Instance?  expected folder; a moved module is still found anywhere in ReplicatedStorage
 local function RequireChild(parent, name)
     local child = parent and parent:FindFirstChild(name)
-    if not child or not child:IsA("ModuleScript") then
-        GameLib.Missing[name] = true
+    if not (child and child:IsA("ModuleScript")) then
+        child = ReplicatedStorage:FindFirstChild(name, true)
+    end
+    if not (child and child:IsA("ModuleScript")) then
+        GameLib.Missing[name] = "Absent"
+        warn("[SniperArena] module " .. name .. " not found, features that need it are blocked")
         return nil
     end
     return GameLib.Require(child)
@@ -864,12 +871,21 @@ end
 
 xDTaraZ.Movement = { Booted = false, Dash = nil }
 
-function xDTaraZ.Movement.DashHelper()
-    if xDTaraZ.Movement.Dash ~= nil then return xDTaraZ.Movement.Dash end
+---@return ModuleScript?  dash helper, searched by name if CombatHelper moved
+function xDTaraZ.Movement.FindDash()
     local client = ReplicatedStorage:FindFirstChild("Client")
     local helper = client and client:FindFirstChild("CombatHelper")
     local dash = helper and helper:FindFirstChild("Dash")
-    xDTaraZ.Movement.Dash = dash and dash:IsA("ModuleScript") and GameLib.Require(dash) or false
+    if dash and dash:IsA("ModuleScript") then return dash end
+    helper = ReplicatedStorage:FindFirstChild("CombatHelper", true)
+    dash = helper and helper:FindFirstChild("Dash")
+    return dash and dash:IsA("ModuleScript") and dash or nil
+end
+
+function xDTaraZ.Movement.DashHelper()
+    if xDTaraZ.Movement.Dash ~= nil then return xDTaraZ.Movement.Dash end
+    local dash = xDTaraZ.Movement.FindDash()
+    xDTaraZ.Movement.Dash = dash and GameLib.Require(dash) or false
     return xDTaraZ.Movement.Dash
 end
 
@@ -1644,6 +1660,7 @@ end
 xDTaraZ.Skin = {
     Catalog = {},
     Types = {},
+    Rarities = {},
     Labels = {},
     Chosen = {},
     Saved = setmetatable({}, { __mode = "k" }),
@@ -1674,10 +1691,16 @@ do
             table.insert(xDTaraZ.Skin.Types, kind)
         end
         byFamily[family] = byFamily[family] or {}
-        local rarity = cfg.Rarity or "Common"
+        local rarity = tostring(cfg.Rarity or "Common")
         table.insert(byFamily[family], { key, rarity, type(cfg.Display) == "string" and cfg.Display or key })
+        if not table.find(xDTaraZ.Skin.Rarities, rarity) then table.insert(xDTaraZ.Skin.Rarities, rarity) end
     end
     table.sort(xDTaraZ.Skin.Types)
+    table.sort(xDTaraZ.Skin.Rarities, function(a, b)
+        local ra, rb = xDTaraZ.Skin.RarityRank[a] or 0, xDTaraZ.Skin.RarityRank[b] or 0
+        if ra ~= rb then return ra > rb end
+        return a < b
+    end)
     for _, byFamily in pairs(xDTaraZ.Skin.Catalog) do
         for _, list in pairs(byFamily) do
             table.sort(list, function(a, b)
@@ -1882,15 +1905,6 @@ function xDTaraZ.UI.BuildCombat(window)
     window:AddTabSection(T("Combat", "การต่อสู้"))
     local tab = window:AddTab(T("Combat", "การต่อสู้"), "target", T("Aimbot and firing", "เล็งอัตโนมัติและยิง"))
 
-    local rage = tab:AddLeftGroupbox(T("Rage", "เรจ"), "bomb")
-    rage:AddToggle("Ragebot", { Text = T("Ragebot", "เรจบอท"), Description = T("Shoots every visible enemy on its own, view stays still", "ยิงศัตรูทุกตัวที่มองเห็นเอง กล้องไม่ขยับ"), Risky = true })
-        :AddKeyPicker("RagebotKey", { Default = "None", Mode = "Toggle" })
-    rage:AddToggle("SilentAim", { Text = T("Silent aim", "ไซเลนต์เอม"), Description = T("Shots land on the target inside the FOV, your view never moves", "กระสุนเข้าเป้าในวง FOV กล้องไม่ขยับเลย") })
-        :AddKeyPicker("SilentAimKey", { Default = "None", Mode = "Toggle" })
-    rage:AddSlider("HitChance", { Text = T("Hit chance", "โอกาสยิงโดน"), Min = 0, Max = 100, Default = 100, Suffix = "%", Rounding = 0 })
-    rage:AddSlider("HeadChance", { Text = T("Headshot chance", "โอกาสเข้าหัว"), Min = 0, Max = 100, Default = 100, Suffix = "%", Rounding = 0 })
-    rage:AddToggle("InstantScope", { Text = T("Fast scope", "เปิดสโคปเร็ว"), Description = T("Cuts the wait before the scope is ready", "ลดเวลารอก่อนสโคปพร้อมยิง") })
-
     local aim = tab:AddLeftGroupbox(T("Aimbot", "เล็งอัตโนมัติ"), "crosshair")
     aim:AddToggle("Aimbot", {
         Text = T("Aimbot", "เล็งอัตโนมัติ"),
@@ -1905,6 +1919,15 @@ function xDTaraZ.UI.BuildCombat(window)
     aim:AddToggle("ShowFov", { Text = T("Show FOV circle", "แสดงวงระยะมอง") })
     aim:AddCheckbox("AimWallCheck", { Text = T("Visible only", "เฉพาะที่มองเห็น"), Default = true })
     aim:AddCheckbox("AimTeamCheck", { Text = T("Team check", "เช็คทีม"), Default = true })
+
+    local rage = tab:AddRightGroupbox(T("Rage", "เรจ"), "bomb")
+    rage:AddToggle("Ragebot", { Text = T("Ragebot", "เรจบอท"), Description = T("Shoots every visible enemy on its own, view stays still", "ยิงศัตรูทุกตัวที่มองเห็นเอง กล้องไม่ขยับ"), Risky = true })
+        :AddKeyPicker("RagebotKey", { Default = "None", Mode = "Toggle" })
+    rage:AddToggle("SilentAim", { Text = T("Silent aim", "ไซเลนต์เอม"), Description = T("Shots land on the target inside the FOV, your view never moves", "กระสุนเข้าเป้าในวง FOV กล้องไม่ขยับเลย") })
+        :AddKeyPicker("SilentAimKey", { Default = "None", Mode = "Toggle" })
+    rage:AddSlider("HitChance", { Text = T("Hit chance", "โอกาสยิงโดน"), Min = 0, Max = 100, Default = 100, Suffix = "%", Rounding = 0 })
+    rage:AddSlider("HeadChance", { Text = T("Headshot chance", "โอกาสเข้าหัว"), Min = 0, Max = 100, Default = 100, Suffix = "%", Rounding = 0 })
+    rage:AddToggle("InstantScope", { Text = T("Fast scope", "เปิดสโคปเร็ว"), Description = T("Cuts the wait before the scope is ready", "ลดเวลารอก่อนสโคปพร้อมยิง") })
 
     local fire = tab:AddRightGroupbox(T("Firing", "การยิง"), "swords")
     fire:AddToggle("TriggerBot", { Text = T("Trigger bot", "ยิงอัตโนมัติ"), Description = T("Fires the moment your crosshair is on an enemy", "ยิงทันทีเมื่อเป้าเล็งทับศัตรู"), Risky = true })
@@ -1921,8 +1944,10 @@ function xDTaraZ.UI.BuildPlayer(window)
 
     local util = tab:AddLeftGroupbox(T("Utility", "อรรถประโยชน์"), "gear")
     util:AddToggle("FastRespawn", { Text = T("Fast respawn", "เกิดใหม่เร็ว"), Description = T("Back in the fight the moment you die", "กลับเข้าสนามทันทีที่ตาย") })
-    util:AddToggle("InfiniteDash", { Text = T("Infinite dash", "พุ่งไม่จำกัด"), Description = T("Dash again without waiting (FFA/TDM)", "พุ่งซ้ำได้ไม่ต้องรอ (FFA/TDM)") })
     util:AddToggle("AntiAfk", { Text = T("Anti AFK", "กันหลุด AFK"), Callback = xDTaraZ.UI.StartStop(xDTaraZ.Player.AntiAfk) })
+
+    local move = tab:AddRightGroupbox(T("Movement", "การเคลื่อนที่"), "zap")
+    move:AddToggle("InfiniteDash", { Text = T("Infinite dash", "พุ่งไม่จำกัด"), Description = T("Dash again without waiting (FFA/TDM)", "พุ่งซ้ำได้ไม่ต้องรอ (FFA/TDM)") })
 end
 
 xDTaraZ.UI.SkinKinds = {
@@ -1972,13 +1997,10 @@ function xDTaraZ.UI.BuildSkins(window)
 
     local main = tab:AddLeftGroupbox(T("Skin Changer", "เปลี่ยนสกิน"), "star")
     main:AddToggle("SkinChanger", { Text = T("Skin changer", "เปลี่ยนสกิน"), Description = T("Pick any skin per weapon, only you see it", "เลือกสกินรายอาวุธได้ทุกแบบ เห็นแค่ตัวเอง") })
-    local rarityValues = {}
-    for rarity in pairs(xDTaraZ.Skin.RarityRank) do rarityValues[#rarityValues + 1] = rarity end
-    table.sort(rarityValues, function(a, b) return xDTaraZ.Skin.RarityRank[a] > xDTaraZ.Skin.RarityRank[b] end)
     local filter = main:AddDropdown("SkinRarities", {
         Text = T("Show rarities", "แสดงเฉพาะ rarity"),
         Description = T("Empty shows everything", "ไม่เลือก = แสดงทั้งหมด"),
-        Values = rarityValues,
+        Values = xDTaraZ.Skin.Rarities,
         Multi = true,
         Default = {},
         AllowNull = true,
@@ -1995,8 +2017,15 @@ function xDTaraZ.UI.BuildSkins(window)
         end
     end })
 
-    for index, kind in ipairs(xDTaraZ.Skin.Types) do
-        Util.Try("skins " .. kind, xDTaraZ.UI.BuildSkinGroup, tab, kind, index % 2 == 0)
+    local leftRows, rightRows = xDTaraZ.Config.SkinMainRows, 0
+    for _, kind in ipairs(xDTaraZ.Skin.Types) do
+        local left = leftRows < rightRows
+        Util.Try("skins " .. kind, xDTaraZ.UI.BuildSkinGroup, tab, kind, left)
+        if left then
+            leftRows += xDTaraZ.Config.SkinGroupRows
+        else
+            rightRows += xDTaraZ.Config.SkinGroupRows
+        end
     end
 end
 
@@ -2139,12 +2168,19 @@ function xDTaraZ.UI.Pump()
 end
 
 function xDTaraZ.UI.BlockMissing()
-    local reason = T("Not available on this executor", "ใช้กับ executor นี้ไม่ได้")
+    local unsupported = T("Not available on this executor", "ใช้กับ executor นี้ไม่ได้")
+    local outdated = T("Changed by a game update, wait for a script update", "เกมอัปเดตแล้ว รอสคริปต์อัปเดต")
     for module, features in pairs(xDTaraZ.Config.ModuleFeatures) do
-        if not GameLib.Missing[module] then continue end
+        local missing = GameLib.Missing[module]
+        if not missing then continue end
         for _, idx in ipairs(features) do
-            Library.Compat.Block(idx, reason)
+            Library.Compat.Block(idx, missing == "Absent" and outdated or unsupported)
         end
+    end
+
+    if not xDTaraZ.Movement.FindDash() then
+        warn("[SniperArena] module CombatHelper.Dash not found, Infinite dash is blocked")
+        Library.Compat.Block("InfiniteDash", outdated)
     end
 end
 

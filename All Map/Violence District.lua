@@ -400,33 +400,77 @@ end
 xDTaraZ.GameLib = {}
 local GameLib = xDTaraZ.GameLib
 
-do
-    local remotes = ReplicatedStorage:WaitForChild("Remotes", xDTaraZ.Config.LoadTimeout)
-    local function Remote(folder, name)
-        local parent = remotes and remotes:FindFirstChild(folder)
-        return parent and parent:FindFirstChild(name)
-    end
+GameLib.Folder = ReplicatedStorage:WaitForChild("Remotes", xDTaraZ.Config.LoadTimeout)
 
-    GameLib.Remote = {
-        Repair = Remote("Generator", "RepairEvent"),
-        GenCheck = Remote("Generator", "SkillCheckEvent"),
-        GenResult = Remote("Generator", "SkillCheckResultEvent"),
-        Heal = Remote("Healing", "HealEvent"),
-        HealCheck = Remote("Healing", "SkillCheckEvent"),
-        HealResult = Remote("Healing", "SkillCheckResultEvent"),
-        Unhook = Remote("Carry", "UnHookEvent"),
-        SelfUnhook = Remote("Carry", "SelfUnHookEvent"),
-        Fall = Remote("Mechanics", "Fall"),
-        Carry = Remote("Carry", "CarrySurvivorEvent"),
-        Hook = Remote("Carry", "HookEvent"),
-        HookCommit = Remote("Carry", "HookCommit"),
-        BreakGen = Remote("Generator", "BreakGenEvent"),
-        BreakGenCommit = Remote("Generator", "BreakGenCommit"),
-        Lunge = Remote("Attacks", "Lunge"),
-        Stun = Remote("Pallet", "Jason") and Remote("Pallet", "Jason"):FindFirstChild("Stun"),
-        StunOver = Remote("Pallet", "Jason") and Remote("Pallet", "Jason"):FindFirstChild("Stunover"),
-        Attack = Remote("Attacks", "BasicAttack"),
-    }
+---@return Instance?  remote at the path under Remotes, else the only remote with that name anywhere under it
+function GameLib.FindRemote(...)
+    local root = GameLib.Folder
+    if not root then return nil end
+    local node = root
+    for _, step in ipairs({ ... }) do
+        node = node and node:FindFirstChild(step)
+    end
+    if node then return node end
+
+    local name, found = select(select("#", ...), ...), nil
+    for _, desc in ipairs(root:GetDescendants()) do
+        if desc.Name ~= name or not (desc:IsA("BaseRemoteEvent") or desc:IsA("RemoteFunction")) then continue end
+        if found then return nil end
+        found = desc
+    end
+    return found
+end
+
+GameLib.RemotePaths = {
+    Repair = { "Generator", "RepairEvent" },
+    GenCheck = { "Generator", "SkillCheckEvent" },
+    GenResult = { "Generator", "SkillCheckResultEvent" },
+    Heal = { "Healing", "HealEvent" },
+    HealCheck = { "Healing", "SkillCheckEvent" },
+    HealResult = { "Healing", "SkillCheckResultEvent" },
+    Unhook = { "Carry", "UnHookEvent" },
+    SelfUnhook = { "Carry", "SelfUnHookEvent" },
+    Fall = { "Mechanics", "Fall" },
+    Carry = { "Carry", "CarrySurvivorEvent" },
+    Hook = { "Carry", "HookEvent" },
+    HookCommit = { "Carry", "HookCommit" },
+    BreakGen = { "Generator", "BreakGenEvent" },
+    BreakGenCommit = { "Generator", "BreakGenCommit" },
+    Lunge = { "Attacks", "Lunge" },
+    Stun = { "Pallet", "Jason", "Stun" },
+    StunOver = { "Pallet", "Jason", "Stunover" },
+    Attack = { "Attacks", "BasicAttack" },
+    BuyPerk = { "Shop", "PurchasePerk" },
+    LevelPerk = { "Shop", "LevelUpPerk" },
+    PerkInfo = { "Shop", "GetPerkInfo" },
+}
+
+GameLib.Remote = {}
+for key, path in pairs(GameLib.RemotePaths) do
+    GameLib.Remote[key] = GameLib.FindRemote(table.unpack(path))
+end
+
+GameLib.Needs = {
+    AutoRepair = { "Repair" },
+    PerfectSkillCheck = { "GenCheck", "HealCheck", "GenResult", "HealResult" },
+    AutoHeal = { "Heal" },
+    AutoUnhook = { "Unhook" },
+    AutoSelfUnhook = { "SelfUnhook" },
+    NoFall = { "Fall" },
+    KillAura = { "Lunge", "Attack" },
+    AutoHook = { "Carry", "Hook", "HookCommit" },
+    AutoBreakGens = { "BreakGen", "BreakGenCommit" },
+    AntiStun = { "Stun", "StunOver" },
+    AutoBuyPerks = { "BuyPerk", "PerkInfo" },
+    AutoLevelPerks = { "LevelPerk", "PerkInfo" },
+}
+
+---@return string?  "Folder/Name" of the first remote the toggle needs that is gone
+function GameLib.Missing(idx)
+    for _, key in ipairs(GameLib.Needs[idx] or {}) do
+        if not GameLib.Remote[key] then return table.concat(GameLib.RemotePaths[key], "/") end
+    end
+    return nil
 end
 
 xDTaraZ.Player = { Client = LocalPlayer }
@@ -1295,9 +1339,7 @@ end
 xDTaraZ.Parry = { Last = 0, Count = 0, Clients = setmetatable({}, { __mode = "k" }), Scanned = 0 }
 
 function xDTaraZ.Parry.Remote()
-    local items = ReplicatedStorage.Remotes:FindFirstChild("Items")
-    local dagger = items and items:FindFirstChild("Parrying Dagger")
-    return dagger and dagger:FindFirstChild("parry")
+    return GameLib.FindRemote("Items", "Parrying Dagger", "parry")
 end
 
 function xDTaraZ.Parry.Holding()
@@ -1748,8 +1790,7 @@ end
 xDTaraZ.Shop = { Status = "Off", Maxed = {}, Owned = {}, LevelCost = {}, Bought = 0, Leveled = 0, Busy = false, LastWallet = nil }
 
 function xDTaraZ.Shop.Remote(name)
-    local shop = ReplicatedStorage.Remotes:FindFirstChild("Shop")
-    return shop and shop:FindFirstChild(name)
+    return GameLib.FindRemote("Shop", name)
 end
 
 ---@return string[]  folder names under ReplicatedStorage.<folder>, dev entries skipped
@@ -1969,21 +2010,11 @@ function xDTaraZ.UI.BuildMain(window)
     xDTaraZ.UI.GuardRole(farm:AddDropdown("RoleMode", { Text = T("Role", "บทบาท"), Description = T("Survivor only never gets killer; Prefer killer keeps you in the killer pool", "Survivor only ไม่ถูกสุ่มเป็นฆาตกร / Prefer killer อยู่ในกลุ่มสุ่มฆาตกรเสมอ"), Values = { "Any", "Survivor only", "Prefer killer" }, Default = "Any" }))
     farm:AddSlider("FarmEscapeAfter", { Text = T("Survivor: escape after", "ผู้รอด: หนีหลัง"), Description = T("0 = never escape, stay and farm the whole round", "0 = ไม่หนี อยู่ฟาร์มจนจบรอบ"), Min = 0, Max = 900, Default = 0, Suffix = "s" })
 
-    local status = tab:AddLeftGroupbox(T("Status", "สถานะ"), "star")
+    local status = tab:AddLeftGroupbox(T("Round", "รอบนี้"), "star")
     local labels = xDTaraZ.UI.Labels
     labels.Role = status:AddParagraph({ Title = T("Role", "บทบาท"), Content = "-" })
     labels.Survivor = status:AddParagraph({ Title = T("Survivor", "ผู้รอดชีวิต"), Content = "-" })
     labels.Killer = status:AddParagraph({ Title = T("Killer", "ฆาตกร"), Content = "-" })
-    labels.Esp = status:AddParagraph({ Title = T("ESP", "ESP"), Content = "-" })
-    labels.Shop = status:AddParagraph({ Title = T("Shop", "ร้านค้า"), Content = "-" })
-
-    local panic = tab:AddLeftGroupbox(T("Quick", "ด่วน"), "bomb")
-    panic:AddButton({ Text = T("Panic — all off", "ฉุกเฉิน ปิดทั้งหมด"), Style = "Danger", Func = xDTaraZ.UI.Detach(function()
-        xDTaraZ.UI.FarmSaved = nil
-        for _, toggle in pairs(Library.Toggles) do
-            if toggle.Value == true then toggle:SetValue(false) end
-        end
-    end) })
 
     local discord = tab:AddRightGroupbox(T("Discord", "ดิสคอร์ด"), "link")
     discord:AddLabel(xDTaraZ.Config.Discord)
@@ -1994,6 +2025,18 @@ function xDTaraZ.UI.BuildMain(window)
             Library:Notify(T("Discord", "ดิสคอร์ด"), xDTaraZ.Config.Discord, 6, "Info")
         end
     end) })
+
+    local panic = tab:AddRightGroupbox(T("Quick", "ด่วน"), "bomb")
+    panic:AddButton({ Text = T("Panic — all off", "ฉุกเฉิน ปิดทั้งหมด"), Style = "Danger", Func = xDTaraZ.UI.Detach(function()
+        xDTaraZ.UI.FarmSaved = nil
+        for _, toggle in pairs(Library.Toggles) do
+            if toggle.Value == true then toggle:SetValue(false) end
+        end
+    end) })
+
+    local activity = tab:AddRightGroupbox(T("Activity", "กิจกรรม"), "eye")
+    labels.Esp = activity:AddParagraph({ Title = T("ESP", "ESP"), Content = "-" })
+    labels.Shop = activity:AddParagraph({ Title = T("Shop", "ร้านค้า"), Content = "-" })
 end
 
 xDTaraZ.UI.FarmKeys = {
@@ -2063,9 +2106,11 @@ function xDTaraZ.UI.BuildKiller(window)
     hunt:AddToggle("KillAura", { Text = T("Auto slash", "ฟันอัตโนมัติ"), Description = T("Rage jumps behind anyone in range, Legit only swings at whoever is in front of you", "Rage วาร์ปไปฟันทุกคนในระยะ / Legit ฟันเฉพาะคนตรงหน้า"), Risky = true }):AddKeyPicker("KillAuraKey", { Default = "None", Mode = "Toggle" })
     hunt:AddToggle("SmartHitbox", { Text = T("Reach Assist", "ช่วยเพิ่มระยะฟัน"), Description = T("Legit swings still land on targets a few studs out of reach", "โหมด Legit ฟันโดนแม้เป้าอยู่เกินระยะนิดหน่อย"), Risky = true })
     hunt:AddDropdown("SlashMode", { Text = T("Slash mode", "โหมดฟัน"), Values = { "Rage", "Legit" }, Default = "Rage" })
-    hunt:AddToggle("AutoHook", { Text = T("Auto carry + hook", "แบกและแขวนอัตโนมัติ"), Description = T("Picks up anyone downed and hooks them", "แบกคนล้มแล้วแขวนตะขอให้"), Risky = true })
-    hunt:AddToggle("AutoBreakGens", { Text = T("Auto kick generators", "เตะเครื่องปั่นไฟอัตโนมัติ"), Description = T("Kicks the most repaired generator when nobody is in range", "เตะเครื่องที่ซ่อมไปเยอะสุดตอนไม่มีเป้า"), Risky = true })
     hunt:AddSlider("AuraRange", { Text = T("Range", "ระยะ"), Min = 10, Max = 500, Default = 500, Suffix = "m" })
+
+    local chores = tab:AddRightGroupbox(T("Hooks & Generators", "ตะขอและเครื่องปั่นไฟ"), "gear")
+    chores:AddToggle("AutoHook", { Text = T("Auto carry + hook", "แบกและแขวนอัตโนมัติ"), Description = T("Picks up anyone downed and hooks them", "แบกคนล้มแล้วแขวนตะขอให้"), Risky = true })
+    chores:AddToggle("AutoBreakGens", { Text = T("Auto kick generators", "เตะเครื่องปั่นไฟอัตโนมัติ"), Description = T("Kicks the most repaired generator when nobody is in range", "เตะเครื่องที่ซ่อมไปเยอะสุดตอนไม่มีเป้า"), Risky = true })
 
     local defense = tab:AddRightGroupbox(T("Defense", "ป้องกัน"), "shield")
     defense:AddToggle("AntiStun", { Text = T("Anti pallet stun (beta)", "กันพาเลทสตัน (beta)") })
@@ -2077,7 +2122,7 @@ end
 
 function xDTaraZ.UI.BuildPlayer(window)
     window:AddTabSection(T("Player", "ผู้เล่น"))
-    local tab = window:AddTab(T("Player", "ผู้เล่น"), "player", T("Movement and world", "การเคลื่อนที่และโลก"))
+    local tab = window:AddTab(T("Player", "ผู้เล่น"), "player", T("Movement, world and teleport", "การเคลื่อนที่ โลก และวาร์ป"))
 
     local move = tab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "zap")
     move:AddToggle("Speed", { Text = T("Speed", "วิ่งเร็ว"), Risky = true }):AddKeyPicker("SpeedKey", { Default = "None", Mode = "Toggle" })
@@ -2094,6 +2139,8 @@ function xDTaraZ.UI.BuildPlayer(window)
     xDTaraZ.UI.NeedCap("AntiShake", "Connections")
     world:AddToggle("NoFog", { Text = T("No fog", "ไม่มีหมอก") })
     world:AddToggle("AntiAfk", { Text = T("Anti AFK", "กันหลุด AFK"), Callback = xDTaraZ.UI.Detach(xDTaraZ.Player.AntiAfk.Arm) })
+
+    xDTaraZ.UI.BuildTeleport(tab)
 end
 
 function xDTaraZ.UI.BuildShop(window)
@@ -2123,16 +2170,15 @@ function xDTaraZ.UI.BuildShop(window)
     end) })
 end
 
-function xDTaraZ.UI.BuildTeleport(window)
-    local tab = window:AddTab(T("Teleport", "วาร์ป"), "pipe", T("Jump anywhere on the map", "วาร์ปไปทุกจุดในแมพ"))
-    local box = tab:AddLeftGroupbox(T("Teleport", "วาร์ป"), "pipe")
+---@param tab table  Player tab, the teleport group sits on its right side
+function xDTaraZ.UI.BuildTeleport(tab)
+    local box = tab:AddRightGroupbox(T("Teleport", "วาร์ป"), "pipe")
     local places = box:AddDropdown("TeleportTarget", { Text = T("Destination", "ปลายทาง"), Values = xDTaraZ.UI.List(xDTaraZ.Teleport.Places), Default = "Nearest Generator", Searchable = true })
     box:AddButton({ Text = T("Teleport Now", "วาร์ปตอนนี้"), Style = "Primary", Func = xDTaraZ.UI.Detach(function()
         if not xDTaraZ.Teleport.Go(places.Value) then
             Library:Notify(T("Teleport", "วาร์ป"), T("Destination not found this round", "ไม่พบปลายทางในรอบนี้"), 3, "Warning")
         end
-    end) })
-    box:AddButton({ Text = T("Refresh list", "รีเฟรชรายการ"), Func = xDTaraZ.UI.Detach(function()
+    end) }):AddButton({ Text = T("Refresh", "รีเฟรช"), Func = xDTaraZ.UI.Detach(function()
         places:SetValues(xDTaraZ.Teleport.Places())
     end) })
 end
@@ -2140,7 +2186,7 @@ end
 function xDTaraZ.UI.BuildVisuals(window)
     window:AddTabSection(T("Visuals", "การมองเห็น"))
     local tab = window:AddVisualsTab({ Provider = xDTaraZ.Esp.Targets, Preview = true })
-    local objects = tab:AddRightGroupbox(T("Objects", "วัตถุ"), "eye")
+    local objects = tab:AddLeftGroupbox(T("Objects", "วัตถุ"), "eye")
     objects:AddToggle("EspGenerators", { Text = T("Generators + progress", "เครื่องปั่นไฟ + ความคืบหน้า") })
     objects:AddToggle("EspHooks", { Text = T("Hooks", "ตะขอ") })
     objects:AddToggle("EspGates", { Text = T("Exit gates", "ประตูทางออก") })
@@ -2182,7 +2228,7 @@ end
 
 function xDTaraZ.UI.Build()
     local window = Library.Window
-    for _, section in ipairs({ "BuildMain", "BuildSurvivor", "BuildKiller", "BuildPlayer", "BuildTeleport", "BuildShop", "BuildVisuals" }) do
+    for _, section in ipairs({ "BuildMain", "BuildSurvivor", "BuildKiller", "BuildPlayer", "BuildShop", "BuildVisuals" }) do
         Util.Try("ui " .. section, xDTaraZ.UI[section], window)
     end
     window:AddTabSection(T("Other", "อื่นๆ"))
@@ -2191,6 +2237,20 @@ function xDTaraZ.UI.Build()
     for key in pairs(xDTaraZ.Options) do
         local widget = Library.Options[key] or Library.Toggles[key]
         if widget then xDTaraZ.UI.Bind(widget, key) end
+    end
+    Util.Try("ui gate", xDTaraZ.UI.GateRemotes)
+end
+
+---Toggles whose game remote is gone refuse to turn on and say why, instead of erroring every tick.
+function xDTaraZ.UI.GateRemotes()
+    if not Library.Compat then return end
+    local reason = T("Not found after a game update", "หาไม่เจอหลังเกมอัปเดต")
+    for idx in pairs(GameLib.Needs) do
+        local missing = GameLib.Missing(idx)
+        if missing and Library.Toggles[idx] then
+            Library.Compat.Block(idx, reason)
+            warn("[ViolenceDistrict] " .. idx .. " off, missing remote " .. missing)
+        end
     end
 end
 

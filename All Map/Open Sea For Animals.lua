@@ -163,10 +163,10 @@ xDTaraZ.Config = {
     ClaimInterval = 30,
     UpgradeInterval = 3,
     SellInterval = 2,
-    Codes = { "Release" },
+    Codes = { "Release", "SORRYFORRESTARTGUYSTPBUG3", "MASTERY", "GHOULUPDATE" },
     PlaytimeSlots = 12,
     PlaceEggTries = 3,
-    UpgradeNames = { "Carry", "MovementSpeed", "PlotUpgrade" },
+    FallbackUpgrades = { "Carry", "MovementSpeed", "PlotUpgrade" },
     NoclipParts = { "Head", "Torso", "UpperTorso", "LowerTorso", "HumanoidRootPart" },
 }
 
@@ -187,6 +187,8 @@ xDTaraZ.State = {
     PlotFull = nil,
     Trained = false,
     SpeedPinned = false,
+    UpgradeNames = {},
+    UpgradesChanged = false,
     Opt = {
         AutoLoot = false,
         LootKeep = {},
@@ -212,6 +214,7 @@ xDTaraZ.State = {
 }
 
 local Config, State = xDTaraZ.Config, xDTaraZ.State
+State.UpgradeNames = table.clone(Config.FallbackUpgrades)
 
 xDTaraZ.GameLib = {}
 local GameLib = xDTaraZ.GameLib
@@ -279,6 +282,42 @@ do
         AutoRebirth = { "Knit" },
         AutoClaim = { "Knit" },
     }
+end
+
+GameLib.Remotes = {
+    AutoLoot = { WaveService = { "Start", "Finished" } },
+    AutoHatch = { EggService = { "HatchEgg", "PlaceEgg" }, PlotService = { "GetPlayerPlot" } },
+    AutoEquipBest = { AnimalService = { "EquipBest" } },
+    AutoSellEggs = { InventoryService = { "SellEgg" } },
+    AutoSellBrainrots = { InventoryService = { "SellAllBrainrots" } },
+    AutoUpgrade = { UpgradesService = { "Upgrade" } },
+    AutoTrain = { TrainingService = { "StartTraining", "StopTraining" } },
+    AutoBuyTool = { TrainingService = { "BuyTrainTool", "EquipTrainTool" } },
+    AutoRebirth = { RebirthService = { "Rebirth" } },
+    AutoClaim = { DailyRewardService = { "ClaimReward" }, PlaytimeRewardService = { "ClaimGift" } },
+}
+
+---@return Instance?  Knit Services folder, wherever the package version put it
+function GameLib.FindServices()
+    local packages = ReplicatedStorage:FindFirstChild("Packages")
+    for _, node in ipairs(packages and packages:GetDescendants() or {}) do
+        if node.Name == "Services" and node.Parent and node.Parent.Name:lower() == "knit" then return node end
+    end
+    return nil
+end
+GameLib.ServiceFolder = GameLib.FindServices()
+
+---@return string?  "Service.Method" the feature calls that the game no longer has
+function GameLib.MissingRemote(idx)
+    local folder = GameLib.ServiceFolder
+    if not folder then return nil end
+    for service, methods in pairs(GameLib.Remotes[idx] or {}) do
+        local node = folder:FindFirstChild(service)
+        for _, method in ipairs(methods) do
+            if not (node and node:FindFirstChild(method, true)) then return service .. "." .. method end
+        end
+    end
+    return nil
 end
 
 ---@return string?  first game module the feature needs that did not load
@@ -653,10 +692,19 @@ function xDTaraZ.Sell.BrainrotsNow()
     xDTaraZ.Util.Service("InventoryService"):SellAllBrainrots()
 end
 
+---@param profile table  replicated data; unknown upgrade names are appended for the UI pump
+function xDTaraZ.Progress.LearnUpgrades(profile)
+    for name, level in pairs(profile.Upgrades or {}) do
+        if type(name) ~= "string" or type(level) ~= "number" or table.find(State.UpgradeNames, name) then continue end
+        table.insert(State.UpgradeNames, name)
+        State.UpgradesChanged = true
+    end
+end
+
 ---@return number  upgrades bought
 function xDTaraZ.Progress.UpgradeNow()
     local upgrades, bought = xDTaraZ.Util.Service("UpgradesService"), 0
-    for _, name in ipairs(Config.UpgradeNames) do
+    for _, name in ipairs(State.UpgradeNames) do
         if State.Opt.UpgradePick[name] then
             local ok, price = pcall(GameLib.Upgrades.GetPrice, name, xDTaraZ.Data.Get().Upgrades[name])
             if ok and price and xDTaraZ.Data.Cash() - price >= State.Opt.CashReserve then
@@ -885,6 +933,7 @@ xDTaraZ.Scheduler.Requests = {
 function xDTaraZ.Scheduler.Summarize()
     local profile = xDTaraZ.Data.Get()
     local cash = profile.Currencies.Cash
+    xDTaraZ.Progress.LearnUpgrades(profile)
     State.StartCash = State.StartCash or cash
     State.Summary = ("Cash %s (+%s)\nItems looted %d · Carry %d · Rebirth %d\nInventory %d/%d"):format(
         xDTaraZ.Util.Abbreviate(cash), xDTaraZ.Util.Abbreviate(cash - State.StartCash),
@@ -994,7 +1043,7 @@ local function BuildInterface()
     local T = function(en, th) return Library:T(en, th) end
     local opt = State.Opt
 
-    local keepValues = {}
+    local keepValues, upgradeDrop = {}, nil
     xDTaraZ.Util.Try(function()
         for _, name in ipairs(xDTaraZ.Util.RarityNames()) do keepValues[#keepValues + 1] = name end
         for _, name in ipairs(xDTaraZ.Util.MutationNames()) do keepValues[#keepValues + 1] = name end
@@ -1055,11 +1104,16 @@ local function BuildInterface()
             T("Collects the best eggs and brainrots from every wave without leaving your base", "เก็บไข่และ brainrot ที่ดีที่สุดทุกคลื่น โดยไม่ต้องออกจากฐาน"),
             xDTaraZ.Loot.SetEnabled)
         lootBox:AddButton({ Text = T("Loot Once", "เก็บหนึ่งรอบ"), Style = "Primary", Func = Request("LootOnce", "AutoLoot") })
-        MultiSelect(lootBox, "LootKeep", T("Only Collect", "เก็บเฉพาะ"),
-            T("Empty takes the best item, otherwise only these rarities or mutations", "เว้นว่าง = เอาชิ้นดีสุดเสมอ ถ้าเลือกไว้จะเก็บเฉพาะ rarity หรือ mutation ที่เลือก"),
-            keepValues)
 
-        local kaitunBox = mainTab:AddRightGroupbox("Kaitun")
+        local discordBox = mainTab:AddRightGroupbox(T("Discord", "ดิสคอร์ด"), "link")
+        discordBox:AddLabel(Config.Discord)
+        discordBox:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ Discord"), Style = "Primary", Func = function()
+            local copy = setclipboard or toclipboard
+            if copy then copy(Config.Discord) end
+            Notify(copy and "Discord link copied" or Config.Discord)
+        end })
+
+        local kaitunBox = mainTab:AddRightGroupbox(T("Kaitun", "ไก่ตัน"))
         kaitunBox:AddToggle("Kaitun", {
             Text = T("Kaitun (All-in-one)", "ไก่ตัน (ทำทุกอย่าง)"),
             Description = T("Loot, sell, upgrades, rebirth and rewards together", "เก็บของ ขาย อัปเกรด รีเบิร์ธ และรับรางวัลพร้อมกัน"),
@@ -1072,13 +1126,10 @@ local function BuildInterface()
             end,
         }):AddKeyPicker("KaitunKey", { Default = "None", Mode = "Toggle" })
 
-        local discordBox = mainTab:AddRightGroupbox("Discord", "link")
-        discordBox:AddLabel(Config.Discord)
-        discordBox:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ Discord"), Style = "Primary", Func = function()
-            local copy = setclipboard or toclipboard
-            if copy then copy(Config.Discord) end
-            Notify(copy and "Discord link copied" or Config.Discord)
-        end })
+        local filterBox = mainTab:AddRightGroupbox(T("Loot Filter", "ตัวกรองของ"))
+        MultiSelect(filterBox, "LootKeep", T("Only Collect", "เก็บเฉพาะ"),
+            T("Empty takes the best item, otherwise only these rarities or mutations", "เว้นว่าง = เอาชิ้นดีสุดเสมอ ถ้าเลือกไว้จะเก็บเฉพาะ rarity หรือ mutation ที่เลือก"),
+            keepValues)
 
         return statusLabel
     end
@@ -1091,7 +1142,7 @@ local function BuildInterface()
         sellBox:AddButton({ Text = T("Sell Eggs Now", "ขายไข่เดี๋ยวนี้"), Style = "Primary", Func = Request("SellEggs", "AutoSellEggs") })
         MultiSelect(sellBox, "SellKeep", T("Keep", "เก็บไว้"), T("Rarities and mutations that are never sold", "rarity และ mutation ที่จะไม่ขาย"), keepValues)
 
-        local brainrotBox = sellTab:AddRightGroupbox(T("Brainrots", "Brainrots"))
+        local brainrotBox = sellTab:AddLeftGroupbox(T("Brainrots", "Brainrots"))
         brainrotBox:AddToggle("AutoSellBrainrots", {
             Text = T("Auto Sell Brainrots", "ขาย brainrot อัตโนมัติ"),
             Description = T("Sells all brainrots in your inventory", "ขาย brainrot ทั้งหมดในกระเป๋า"),
@@ -1100,9 +1151,11 @@ local function BuildInterface()
             Callback = function(value) opt.AutoSellBrainrots = value end,
         }):AddKeyPicker("AutoSellBrainrotsKey", { Default = "None", Mode = "Toggle" })
         brainrotBox:AddButton({ Text = T("Sell Brainrots Now", "ขาย brainrot เดี๋ยวนี้"), Func = Request("SellBrainrots", "AutoSellBrainrots") })
-        Feature(brainrotBox, "AutoHatch", T("Auto Hatch", "ฟักไข่อัตโนมัติ"), T("Hatches your most valuable eggs on your plot and places the best animals", "ฟักไข่ที่มีค่าที่สุดบนพื้นที่ แล้ววางสัตว์ตัวที่ดีที่สุด"))
-        brainrotBox:AddButton({ Text = T("Hatch Now", "ฟักเดี๋ยวนี้"), Func = Request("HatchNow", "AutoHatch") })
-        Feature(brainrotBox, "AutoEquipBest", T("Auto Place Best", "วางตัวดีสุดอัตโนมัติ"), T("Keeps your best animals placed on your plot", "วางสัตว์ตัวที่ดีที่สุดบนพื้นที่เสมอ"))
+
+        local hatchBox = sellTab:AddRightGroupbox(T("Hatching", "ฟักไข่"))
+        Feature(hatchBox, "AutoHatch", T("Auto Hatch", "ฟักไข่อัตโนมัติ"), T("Hatches your most valuable eggs on your plot and places the best animals", "ฟักไข่ที่มีค่าที่สุดบนพื้นที่ แล้ววางสัตว์ตัวที่ดีที่สุด"))
+        hatchBox:AddButton({ Text = T("Hatch Now", "ฟักเดี๋ยวนี้"), Func = Request("HatchNow", "AutoHatch") })
+        Feature(hatchBox, "AutoEquipBest", T("Auto Place Best", "วางตัวดีสุดอัตโนมัติ"), T("Keeps your best animals placed on your plot", "วางสัตว์ตัวที่ดีที่สุดบนพื้นที่เสมอ"))
     end
 
     local function BuildProgress(window)
@@ -1112,8 +1165,9 @@ local function BuildInterface()
         local upgradeBox = progressTab:AddLeftGroupbox(T("Upgrades", "อัปเกรด"))
         Feature(upgradeBox, "AutoUpgrade", T("Auto Upgrade", "อัปเกรดอัตโนมัติ"), T("Buys the selected upgrades whenever you can afford them", "ซื้ออัปเกรดที่เลือกทุกครั้งที่เงินพอ"))
         upgradeBox:AddButton({ Text = T("Upgrade Now", "อัปเกรดเดี๋ยวนี้"), Style = "Primary", Func = Request("UpgradeNow", "AutoUpgrade") })
-        MultiSelect(upgradeBox, "UpgradePick", T("Upgrades", "อัปเกรด"), T("Carry lets you bring back more items per wave", "Carry ทำให้ขนของกลับได้มากขึ้นต่อคลื่น"), Config.UpgradeNames, Config.UpgradeNames)
-        opt.UpgradePick = { Carry = true, MovementSpeed = true, PlotUpgrade = true }
+        upgradeDrop = MultiSelect(upgradeBox, "UpgradePick", T("Upgrades", "อัปเกรด"), T("Carry lets you bring back more items per wave", "Carry ทำให้ขนของกลับได้มากขึ้นต่อคลื่น"), table.clone(State.UpgradeNames), table.clone(State.UpgradeNames))
+        opt.UpgradePick = {}
+        for _, name in ipairs(State.UpgradeNames) do opt.UpgradePick[name] = true end
         upgradeBox:AddInput("CashReserve", {
             Text = T("Keep Cash", "กันเงินไว้"),
             Description = T("Never spend below this amount", "ไม่ใช้เงินจนต่ำกว่าจำนวนนี้"),
@@ -1168,15 +1222,17 @@ local function BuildInterface()
             Rounding = 0,
             Callback = function(value) opt.SpeedValue = tonumber(value) or opt.SpeedValue end,
         })
-        Feature(moveBox, "InfJump", T("Infinite Jump", "กระโดดไม่จำกัด"))
-        Feature(moveBox, "Noclip", T("Noclip", "ทะลุวัตถุ"), nil, function(value)
+
+        local bodyBox = playerTab:AddRightGroupbox(T("Jump and Noclip", "กระโดดและทะลุวัตถุ"))
+        Feature(bodyBox, "InfJump", T("Infinite Jump", "กระโดดไม่จำกัด"))
+        Feature(bodyBox, "Noclip", T("Noclip", "ทะลุวัตถุ"), nil, function(value)
             if not value then xDTaraZ.Movement.RestoreCollision() end
         end)
     end
 
     local function BuildSettings(window)
         local settingsTab = window:AddSettingsTab()
-        local sessionBox = settingsTab:AddLeftGroupbox(T("Session", "เซสชัน"))
+        local sessionBox = settingsTab:AddRightGroupbox(T("Session", "เซสชัน"))
         Toggle(sessionBox, "AntiAfk", T("Anti AFK", "กันหลุด AFK"), T("Stay in the server while idle", "อยู่ในเซิร์ฟต่อได้แม้ไม่ได้ขยับ"))
         sessionBox:AddButton({ Text = T("Rejoin", "เข้าเซิร์ฟเดิมใหม่"), Func = function()
             TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
@@ -1190,8 +1246,16 @@ local function BuildInterface()
             if missing and Options[idx] then
                 warn("[OpenSea] " .. idx .. " disabled, module missing: " .. missing)
                 Library.Compat.Block(idx, T("Not available on this executor", "ใช้กับ executor นี้ไม่ได้"))
+                continue
+            end
+
+            local gone = GameLib.MissingRemote(idx)
+            if gone and Options[idx] then
+                warn("[OpenSea] " .. idx .. " disabled, remote missing: " .. gone)
+                Library.Compat.Block(idx, T("The game changed, waiting for a script update", "เกมอัปเดต รอสคริปต์อัปเดต"))
             end
         end
+        if not GameLib.ServiceFolder then warn("[OpenSea] knit Services folder not found, remote check skipped") end
         if not GameLib.Knit then State.Summary = "Game data is not available on this executor" end
     end
 
@@ -1207,6 +1271,15 @@ local function BuildInterface()
         end
 
         if statusLabel then statusLabel:SetText(State.Summary) end
+        if State.UpgradesChanged and upgradeDrop then
+            State.UpgradesChanged = false
+            local picked = table.clone(upgradeDrop.Value or {})
+            for _, name in ipairs(State.UpgradeNames) do
+                if picked[name] == nil and not table.find(upgradeDrop.Values, name) then picked[name] = true end
+            end
+            upgradeDrop:SetValues(table.clone(State.UpgradeNames))
+            upgradeDrop:SetValue(picked)
+        end
     end
 
     local function BuildTabs()

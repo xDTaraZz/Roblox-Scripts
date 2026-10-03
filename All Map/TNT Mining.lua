@@ -172,6 +172,22 @@ xDTaraZ.Config = {
     MineStandOffset = 3,
     RejoinDelay = 5,
     RateWindow = 60,
+    Needs = {
+        AutoMine = { "Blocks", "Areas", "AreaRenderer", "Mine.Collectible", ":PlaceBomb", ":IgniteBomb", ":LeaveMine", ":CollectBlocks", ":GetBombExplosionRadius" },
+        AutoSell = { ":SellBlocks" },
+        AutoCollect = { "Mine.Collectible", ":CollectBlocks" },
+        SecretAlert = { "Blocks" },
+        AutoClick = { ":ApplyDataUpdate" },
+        AutoRebirth = { "Rebirth", ":PerformRebirth" },
+        AutoBomb = { "Bombs", ":BuyBomb", ":EquipBomb", ":OwnsBomb" },
+        AutoUpgrade = { "Upgrades", ":BuyUpgrade" },
+        AutoArea = { "Areas", ":PurchaseArea" },
+        AutoLuck = { "Upgrades.MineLuck", ":BuyUpgrade" },
+        AutoHatch = { "Areas", ":HatchPetEgg" },
+        AutoEquipPets = { ":EquipBestPets" },
+        AutoSellPets = { "Pets", ":SellPets", ":GetPetDamagePerClickMultiplier" },
+        AutoClaim = { "Areas", ":IsAreaIndexComplete", ":ClaimIndexReward" },
+    },
 }
 
 xDTaraZ.State = {
@@ -256,6 +272,11 @@ function xDTaraZ.GameLib.Require(path)
         module = module and module:FindFirstChild(name)
     end
     if not module then
+        local root = ReplicatedStorage:FindFirstChild(path:match("^[^.]+"))
+        local found = root and root:FindFirstChild(path:match("[^.]+$"), true)
+        module = found and found:IsA("ModuleScript") and found or nil
+    end
+    if not module then
         warn("[TNTMining] missing game module", path)
         return nil
     end
@@ -304,6 +325,34 @@ end
 
 local GameLib = xDTaraZ.GameLib
 
+---@param need string  GameLib field path, or ":Method" on the player session
+---@return boolean     false only when it is known to be gone
+function xDTaraZ.GameLib.Has(need, session)
+    local method = need:match("^:(.+)")
+    if method then return session == nil or type(session[method]) == "function" end
+    local node = GameLib
+    for part in need:gmatch("[^.]+") do
+        node = type(node) == "table" and node[part] or nil
+    end
+    return node ~= nil
+end
+
+---@return table  option idx -> missing needs
+function xDTaraZ.GameLib.Missing()
+    local ok, session = pcall(function() return GameLib.Session.GetClient() end)
+    if not ok then session = nil end
+    local missing = {}
+    for idx, needs in pairs(Config.Needs) do
+        for _, need in ipairs(needs) do
+            if not xDTaraZ.GameLib.Has(need, session) then
+                missing[idx] = missing[idx] or {}
+                table.insert(missing[idx], need)
+            end
+        end
+    end
+    return missing
+end
+
 xDTaraZ.AreaOrder = GameLib.Areas and GameLib.Areas.GetOrderedNames() or {}
 
 xDTaraZ.BombOrder = {}
@@ -327,8 +376,6 @@ do
         return (GameLib.Upgrades[a].LayoutOrder or 0) < (GameLib.Upgrades[b].LayoutOrder or 0)
     end)
 end
-
-xDTaraZ.BlockSize = ReplicatedStorage.Assets.Models.BlockTemplate.Root.Size.X
 
 local SUFFIXES = { "", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc" }
 
@@ -423,9 +470,13 @@ function xDTaraZ:Humanoid()
 end
 
 function xDTaraZ:AreaModel(areaName)
-    for _, area in ipairs(Workspace.Map.Areas:GetChildren()) do
+    local map = Workspace:FindFirstChild("Map")
+    local areas = map and map:FindFirstChild("Areas") or Workspace:FindFirstChild("Areas", true)
+    if not areas then return nil end
+    for _, area in ipairs(areas:GetChildren()) do
         if area:GetAttribute("AreaName") == areaName then return area end
     end
+    return nil
 end
 
 xDTaraZ.Mine = {}
@@ -553,6 +604,7 @@ function xDTaraZ.Mine.WaitServerId(bomb)
         if not tostring(bomb.Id):match("^P") then return bomb.Id end
         task.wait()
     end
+    return nil
 end
 
 ---@return number  drops collected
@@ -1012,7 +1064,7 @@ function xDTaraZ.Scheduler.Stop()
     if State.Opt.LowGraphics then xDTaraZ.Client.SetLowGraphics(false) end
 
     local hum = xDTaraZ:Humanoid()
-    if hum and State.Opt.SpeedOn and GameLib.Upgrades then hum.WalkSpeed = GameLib.Upgrades.WalkSpeed.BaseValue end
+    if hum and State.Opt.SpeedOn and GameLib.Upgrades and GameLib.Upgrades.WalkSpeed then hum.WalkSpeed = GameLib.Upgrades.WalkSpeed.BaseValue end
 end
 
 local function BuildInterface()
@@ -1049,6 +1101,14 @@ local function BuildInterface()
             Library.Compat.Block(key, reason)
         end
         Library:Notify("TNT Mining", "This executor can't read the game's data, so farming is off. Movement still works.", 10, "Error")
+    end
+
+    local function BlockMissing()
+        if not GameLib.Ready then return end
+        for idx, needs in pairs(xDTaraZ.GameLib.Missing()) do
+            warn("[TNTMining]", idx, "blocked, missing:", table.concat(needs, ", "))
+            Library.Compat.Block(idx, T("Not available after a game update", "ใช้ไม่ได้หลังเกมอัปเดต"))
+        end
     end
 
     local function Request(name)
@@ -1123,19 +1183,20 @@ local function BuildInterface()
         Toggle(mineBox, "SecretAlert", T("Secret Block Alert", "แจ้งเตือนบล็อก Secret"), T("Notifies you when a secret block spawns in your mine", "แจ้งเมื่อมีบล็อก Secret เกิดในเหมือง"))
         Toggle(mineBox, "TargetShards", T("Prioritize Egg Shards", "เน้นเศษไข่"), T("Goes for egg shards first", "ไล่เก็บเศษไข่ก่อน"))
 
+        local sellBox = tab:AddRightGroupbox(T("Sell", "ขาย"), "coin")
+        Feature(sellBox, "AutoSell", T("Auto Sell", "ขายอัตโนมัติ"), T("Sells blocks right after every blast, from anywhere. Favorited blocks are kept", "ขายบล็อกทันทีหลังระเบิดทุกครั้ง ขายได้จากทุกที่ บล็อกที่กดชอบจะเก็บไว้"))
+        sellBox:AddButton({ Text = T("Sell All Now", "ขายทั้งหมดเดี๋ยวนี้"), Style = "Primary", Func = Request("SellNow") })
+
+        local dropBox = tab:AddRightGroupbox(T("Drops", "ของดรอป"), "bomb")
         featureNames.AutoCollect = T("Auto Collect", "เก็บของอัตโนมัติ")
-        mineBox:AddToggle("AutoCollect", {
+        dropBox:AddToggle("AutoCollect", {
             Text = featureNames.AutoCollect,
             Description = T("Instantly picks up every drop in the mine from anywhere, even when you bomb by hand", "เก็บของดรอปทั้งเหมืองทันทีจากทุกที่ แม้วางระเบิดเอง"),
             Risky = true,
             Default = false,
             Callback = function(value) opt.AutoCollect = value end,
         }):AddKeyPicker("AutoCollectKey", { Default = "None", Mode = "Toggle" })
-        mineBox:AddButton({ Text = T("Collect Drops Now", "เก็บของดรอปเดี๋ยวนี้"), Func = Request("CollectNow") })
-
-        local sellBox = tab:AddRightGroupbox(T("Sell", "ขาย"), "coin")
-        Feature(sellBox, "AutoSell", T("Auto Sell", "ขายอัตโนมัติ"), T("Sells blocks right after every blast, from anywhere. Favorited blocks are kept", "ขายบล็อกทันทีหลังระเบิดทุกครั้ง ขายได้จากทุกที่ บล็อกที่กดชอบจะเก็บไว้"))
-        sellBox:AddButton({ Text = T("Sell All Now", "ขายทั้งหมดเดี๋ยวนี้"), Style = "Primary", Func = Request("SellNow") })
+        dropBox:AddButton({ Text = T("Collect Drops Now", "เก็บของดรอปเดี๋ยวนี้"), Func = Request("CollectNow") })
     end
 
     local function BuildUpgrades(window)
@@ -1158,12 +1219,19 @@ local function BuildInterface()
         shopBox:AddButton({ Text = T("Buy Mine Luck Now", "ซื้อโชคเหมืองเดี๋ยวนี้"), Func = Request("LuckNow") })
 
         local upgradeBox = tab:AddLeftGroupbox(T("Upgrades", "อัปเกรด"), "gear")
-        opt.Upgrades = { MaxHeldBombs = true, MaxActiveBombs = true }
+        local upgradeDefault = {}
+        opt.Upgrades = {}
+        for _, name in ipairs({ "MaxHeldBombs", "MaxActiveBombs" }) do
+            if GameLib.Upgrades and GameLib.Upgrades[name] then
+                table.insert(upgradeDefault, name)
+                opt.Upgrades[name] = true
+            end
+        end
         upgradeBox:AddDropdown("Upgrades", {
             Text = T("Upgrades To Buy", "อัปเกรดที่จะซื้อ"),
             Values = xDTaraZ.UpgradeNames,
             Multi = true,
-            Default = { "MaxHeldBombs", "MaxActiveBombs" },
+            Default = upgradeDefault,
             Callback = function(selected) opt.Upgrades = selected end,
         })
         Feature(upgradeBox, "AutoUpgrade", T("Auto Buy Upgrades", "ซื้ออัปเกรดอัตโนมัติ"), T("Buys the selected upgrades whenever possible", "ซื้ออัปเกรดที่เลือกทุกครั้งที่ซื้อได้"))
@@ -1173,13 +1241,15 @@ local function BuildInterface()
     local function BuildPets(window)
         local tab = window:AddTab(T("Pets & Rewards", "สัตว์เลี้ยงและรางวัล"), "star", T("Eggs, pets and free rewards", "ไข่ สัตว์เลี้ยง และรางวัลฟรี"))
 
+        local hatchBox = tab:AddLeftGroupbox(T("Eggs", "ไข่"), "mushroom")
+        Feature(hatchBox, "AutoHatch", T("Auto Hatch", "ฟักไข่อัตโนมัติ"), T("Hatches the best egg you can afford with egg shards", "ฟักไข่ที่ดีที่สุดที่เศษไข่พอ"))
+        hatchBox:AddButton({ Text = T("Hatch Now", "ฟักเดี๋ยวนี้"), Func = Request("HatchNow") })
+
         local petBox = tab:AddLeftGroupbox(T("Pets", "สัตว์เลี้ยง"), "mushroom")
-        Feature(petBox, "AutoHatch", T("Auto Hatch", "ฟักไข่อัตโนมัติ"), T("Hatches the best egg you can afford with egg shards", "ฟักไข่ที่ดีที่สุดที่เศษไข่พอ"))
-        petBox:AddButton({ Text = T("Hatch Now", "ฟักเดี๋ยวนี้"), Func = Request("HatchNow") })
         Feature(petBox, "AutoEquipPets", T("Auto Equip Best Pets", "ใส่สัตว์เลี้ยงดีสุดอัตโนมัติ"), T("Always uses your strongest pets", "ใช้สัตว์เลี้ยงที่แรงที่สุดเสมอ"))
         petBox:AddButton({ Text = T("Equip Best Pets Now", "ใส่สัตว์เลี้ยงดีสุดเดี๋ยวนี้"), Func = Request("EquipPetsNow") })
 
-        local petSellBox = tab:AddLeftGroupbox(T("Sell Pets", "ขายสัตว์เลี้ยง"), "coin")
+        local petSellBox = tab:AddRightGroupbox(T("Sell Pets", "ขายสัตว์เลี้ยง"), "coin")
         Feature(petSellBox, "AutoSellPets", T("Auto Sell Pets", "ขายสัตว์เลี้ยงอัตโนมัติ"), T("Keeps your strongest pets and sells the rest so hatching never stops", "เก็บตัวที่แรงที่สุดไว้ ขายที่เหลือ ฟักไข่ได้ไม่มีวันเต็ม"))
         petSellBox:AddSlider("KeepPets", {
             Text = T("Keep Best Pets", "จำนวนตัวดีสุดที่เก็บไว้"),
@@ -1219,12 +1289,14 @@ local function BuildInterface()
                 State.Requests.Speed = true
             end,
         })
-        Feature(moveBox, "InfJump", T("Infinite Jump", "กระโดดไม่จำกัด"))
+
+        local jumpBox = tab:AddRightGroupbox(T("Jump", "กระโดด"), "star")
+        Feature(jumpBox, "InfJump", T("Infinite Jump", "กระโดดไม่จำกัด"))
     end
 
     local function BuildSettings(window)
         local tab = window:AddSettingsTab()
-        local sessionBox = tab:AddLeftGroupbox(T("Session", "เซสชัน"), "gear")
+        local sessionBox = tab:AddRightGroupbox(T("Session", "เซสชัน"), "gear")
         Toggle(sessionBox, "AutoRejoin", T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), T("Rejoins by itself after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"))
         Toggle(sessionBox, "LowGraphics", T("FPS Boost", "เพิ่ม FPS"), T("Turns off 3D rendering to save CPU and GPU", "ปิดการแสดงผล 3D ประหยัด CPU/GPU"), xDTaraZ.Client.SetLowGraphics)
     end
@@ -1236,6 +1308,7 @@ local function BuildInterface()
             xDTaraZ.Try(build, window)
         end
         xDTaraZ.Try(BlockWithoutGameData)
+        xDTaraZ.Try(BlockMissing)
 
         Library:Every(1, function()
             ReportHalts()

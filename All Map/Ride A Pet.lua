@@ -357,11 +357,27 @@ local function Need(parent, name)
     return child
 end
 
+---@return Instance?  remote with this name anywhere under ReplicatedStorage.Remotes
+local function SearchRemote(name)
+    local root = ReplicatedStorage:FindFirstChild("Remotes")
+    for _, node in ipairs(root and root:GetDescendants() or {}) do
+        if node.Name == name and (node:IsA("RemoteEvent") or node:IsA("RemoteFunction")) then return node end
+    end
+    return nil
+end
+
 ---@return Instance?  remote, nil and gated as "Net.<name>" when it is gone
 local function NeedRemote(folder, name)
     local remote = Need(folder, name)
-    if not remote then GameLib.Missing["Net." .. name] = true end
-    return remote
+    if remote then return remote end
+
+    remote = SearchRemote(name)
+    if remote then
+        table.remove(State.Missing, table.find(State.Missing, name))
+        return remote
+    end
+    GameLib.Missing["Net." .. name] = true
+    return nil
 end
 
 local GameRemotes = Need(Need(ReplicatedStorage, "Remotes"), "Game")
@@ -463,6 +479,7 @@ function xDTaraZ.BuildLists()
     for index, rarity in ipairs(xDTaraZ.Rarities) do
         xDTaraZ.RarityRank[rarity] = index
     end
+    xDTaraZ.HuntDefault = table.find(xDTaraZ.Rarities, "Mythic") and "Mythic" or xDTaraZ.Rarities[math.max(#xDTaraZ.Rarities - 1, 1)]
 
     for name in pairs(GameLib.Foods) do
         xDTaraZ.FoodNames[#xDTaraZ.FoodNames + 1] = name
@@ -598,7 +615,7 @@ function xDTaraZ.Eggs.Wanted(eggName)
     if not info then return false end
     local opts = xDTaraZ.Options
     if opts.EggHunter then
-        local floor = xDTaraZ.RarityRank[opts.HuntMinRarity or "Mythic"] or 1
+        local floor = xDTaraZ.RarityRank[opts.HuntMinRarity or xDTaraZ.HuntDefault] or 1
         if (xDTaraZ.RarityRank[info.Rarity] or 1) < floor then return false end
     end
     local rarities = opts.EggRarities
@@ -1150,6 +1167,15 @@ end
 
 xDTaraZ.Esp = {}
 
+---@return Color3  preset colour, or a hue by rank for rarities added later
+function xDTaraZ.Esp.Color(rarity)
+    local preset = Config.RarityColors[rarity]
+    if preset then return preset end
+    local rank = xDTaraZ.RarityRank[rarity]
+    if not rank then return Color3.new(1, 1, 1) end
+    return Color3.fromHSV((rank / math.max(#xDTaraZ.Rarities, 1)) * 0.85, 0.55, 1)
+end
+
 function xDTaraZ.Esp.Clear()
     for key, entry in pairs(State.EspBoards) do
         entry.Board:Destroy()
@@ -1176,7 +1202,7 @@ function xDTaraZ.Esp.Entry(model, info)
     label.Font = Enum.Font.GothamBold
     label.TextSize = 14
     label.TextStrokeTransparency = 0.3
-    label.TextColor3 = Config.RarityColors[info.Rarity] or Color3.new(1, 1, 1)
+    label.TextColor3 = xDTaraZ.Esp.Color(info.Rarity)
     label.Parent = board
     xDTaraZ.Util.ParentGui(board)
 
@@ -1333,7 +1359,7 @@ function xDTaraZ.Server.HuntHop()
     end
     local queue = queue_on_teleport or queueonteleport or (syn and syn.queue_on_teleport)
     if queue and xDTaraZ.Options.EggHunter then
-        queue(string.format("getgenv().RideAPetHunt = { Hops = %d, Rarity = %q } ", hops, xDTaraZ.Options.HuntMinRarity or "Mythic") .. Config.ReloadSource)
+        queue(string.format("getgenv().RideAPetHunt = { Hops = %d, Rarity = %q } ", hops, xDTaraZ.Options.HuntMinRarity or xDTaraZ.HuntDefault) .. Config.ReloadSource)
     end
     task.delay(Config.HopReset, function()
         State.Hopping = false
@@ -1486,23 +1512,28 @@ function xDTaraZ.UI.Values(source)
     return ok and type(list) == "table" and list or {}
 end
 
----@return boolean  every game module the option needs was loaded
-function xDTaraZ.UI.Ready(idx)
+---@return string?  first module or remote the option needs that is missing
+function xDTaraZ.UI.MissingFor(idx)
     for _, name in ipairs(xDTaraZ.UI.Needs[idx] or {}) do
-        if GameLib.Missing[name] then return false end
+        if GameLib.Missing[name] then return name end
     end
-    return true
+    return nil
 end
 
 function xDTaraZ.UI.Gate()
     local blocked = 0
     for idx in pairs(xDTaraZ.UI.Needs) do
-        if not Library.Options[idx] or xDTaraZ.UI.Ready(idx) then continue end
+        local missing = xDTaraZ.UI.MissingFor(idx)
+        if not Library.Options[idx] or not missing then continue end
         blocked += 1
-        Library.Compat.Block(idx, T("Not available on this executor", "ใช้กับ executor นี้ไม่ได้"))
+        local bare = missing:gsub("^Net%.", "")
+        local gone = missing ~= bare or table.find(State.Missing, bare) ~= nil
+        warn(Config.Tag, idx .. " blocked, missing " .. missing)
+        Library.Compat.Block(idx, gone and T("The game changed, waiting for a script update", "เกมอัปเดต รอสคริปต์อัปเดต")
+            or T("Not available on this executor", "ใช้กับ executor นี้ไม่ได้"))
     end
     if blocked > 0 then
-        Library:Notify("Mario Hub", T(blocked .. " features are not available on this executor", blocked .. " ฟีเจอร์ใช้กับ executor นี้ไม่ได้"), 8, "Warning")
+        Library:Notify("Mario Hub", T(blocked .. " features are turned off for now", "ปิดไว้ก่อน " .. blocked .. " ฟีเจอร์"), 8, "Warning")
     end
 end
 
@@ -1532,21 +1563,7 @@ function xDTaraZ.UI.Home(window)
     xDTaraZ.UI.CashLabel = status:AddLabel("...")
     xDTaraZ.UI.EggLabel = status:AddLabel("...")
 
-    local kaitun = tab:AddLeftGroupbox(T("Kaitun", "ไก่ตัน"), "star")
-    kaitun:AddToggle("Kaitun", {
-        Text = T("Kaitun", "ไก่ตัน"),
-        Description = T("Plays the whole account for you, from eggs to rebirth", "เล่นแทนทั้งบัญชี ตั้งแต่ไข่จนถึงรีเบิร์ธ"),
-        Default = false,
-        Callback = function(on)
-            for _, idx in ipairs(xDTaraZ.UI.KaitunSet) do
-                local option = Library.Options[idx]
-                if option then option:SetValue(on) end
-            end
-        end,
-    })
-    xDTaraZ.UI.Toggle(kaitun, "SmartSpend", "Save For Rebirth", "เก็บเงินไว้รีเบิร์ธ", T("Holds luck upgrades until rebirth is paid for", "รอซื้ออัปโชคจนกว่าจะรีเบิร์ธได้"))
-
-    local quick = tab:AddRightGroupbox(T("Quick", "ด่วน"), "bomb")
+    local quick = tab:AddLeftGroupbox(T("Quick", "ด่วน"), "bomb")
     quick:AddButton({ Text = T("Panic - All Off", "ฉุกเฉิน ปิดทั้งหมด"), Style = "Danger", Func = function()
         for idx, toggle in pairs(Library.Toggles) do
             if toggle.Value == true and not tostring(idx):find("^Mario") then toggle:SetValue(false) end
@@ -1562,6 +1579,20 @@ function xDTaraZ.UI.Home(window)
             Library:Notify("Discord", Config.Discord, 6, "Info")
         end
     end })
+
+    local kaitun = tab:AddRightGroupbox(T("Kaitun", "ไก่ตัน"), "star")
+    kaitun:AddToggle("Kaitun", {
+        Text = T("Kaitun", "ไก่ตัน"),
+        Description = T("Plays the whole account for you, from eggs to rebirth", "เล่นแทนทั้งบัญชี ตั้งแต่ไข่จนถึงรีเบิร์ธ"),
+        Default = false,
+        Callback = function(on)
+            for _, idx in ipairs(xDTaraZ.UI.KaitunSet) do
+                local option = Library.Options[idx]
+                if option then option:SetValue(on) end
+            end
+        end,
+    })
+    xDTaraZ.UI.Toggle(kaitun, "SmartSpend", "Save For Rebirth", "เก็บเงินไว้รีเบิร์ธ", T("Holds luck upgrades until rebirth is paid for", "รอซื้ออัปโชคจนกว่าจะรีเบิร์ธได้"))
 end
 
 function xDTaraZ.UI.EggFarm(window)
@@ -1575,11 +1606,6 @@ function xDTaraZ.UI.EggFarm(window)
     end) })
     farm:AddButton({ Text = T("Teleport To Best Egg", "วาร์ปไปไข่ที่ดีที่สุด"), Func = xDTaraZ.Teleport.BestEgg })
 
-    local hunter = tab:AddLeftGroupbox(T("Rare Egg Hunter", "ล่าไข่หายาก"), "star")
-    xDTaraZ.UI.Toggle(hunter, "EggHunter", "Rare Egg Hunter", "ล่าไข่หายาก", T("Grabs only top rarity eggs and hops servers until it finds them", "เก็บเฉพาะไข่ระดับสูง ไม่มีก็ย้ายเซิร์ฟหาเอง"), true)
-    xDTaraZ.UI.Bind("HuntMinRarity", hunter:AddDropdown("HuntMinRarity", { Text = T("Minimum Rarity", "ความหายากขั้นต่ำ"), Values = xDTaraZ.Rarities, Default = "Mythic" }))
-    hunter:AddButton({ Text = T("Hop Server Now", "ย้ายเซิร์ฟเดี๋ยวนี้"), Style = "Warning", Func = xDTaraZ.UI.Detach(xDTaraZ.Server.Hop) })
-
     local filters = tab:AddRightGroupbox(T("Egg Filters", "ตัวกรองไข่"), "target")
     local rarities = xDTaraZ.UI.Bind("EggRarities", filters:AddDropdown("EggRarities", { Text = T("Rarities (empty = all)", "ความหายาก (ว่าง = ทั้งหมด)"), Values = xDTaraZ.Rarities, Multi = true, Default = {} }))
     local eggNames = xDTaraZ.UI.Bind("EggNames", filters:AddDropdown("EggNames", { Text = T("Eggs (empty = all)", "ไข่ (ว่าง = ทั้งหมด)"), Values = xDTaraZ.EggNames, Multi = true, Searchable = true, Default = {} }))
@@ -1589,15 +1615,22 @@ function xDTaraZ.UI.EggFarm(window)
         eggNames:SetValues(xDTaraZ.EggNames)
         rarities:SetValues(xDTaraZ.Rarities)
     end })
+
+    local hunter = tab:AddRightGroupbox(T("Rare Egg Hunter", "ล่าไข่หายาก"), "star")
+    xDTaraZ.UI.Toggle(hunter, "EggHunter", "Rare Egg Hunter", "ล่าไข่หายาก", T("Grabs only top rarity eggs and hops servers until it finds them", "เก็บเฉพาะไข่ระดับสูง ไม่มีก็ย้ายเซิร์ฟหาเอง"), true)
+    xDTaraZ.UI.Bind("HuntMinRarity", hunter:AddDropdown("HuntMinRarity", { Text = T("Minimum Rarity", "ความหายากขั้นต่ำ"), Values = xDTaraZ.Rarities, Default = xDTaraZ.HuntDefault }))
+    hunter:AddButton({ Text = T("Hop Server Now", "ย้ายเซิร์ฟเดี๋ยวนี้"), Style = "Warning", Func = xDTaraZ.UI.Detach(xDTaraZ.Server.Hop) })
 end
 
 function xDTaraZ.UI.Hatching(window)
     local tab = window:AddTab(T("Hatch", "ฟักไข่"), "flower", T("Nests and hatching", "รังและการฟัก"))
-    local hatch = tab:AddLeftGroupbox(T("Hatching", "ฟักไข่"), "flower")
-    xDTaraZ.UI.Toggle(hatch, "AutoPlaceEggs", "Auto Place Eggs", "วางไข่ลงรังอัตโนมัติ", T("Puts your best eggs into free nests", "เอาไข่ที่ดีที่สุดลงรังที่ว่าง"))
+    local place = tab:AddLeftGroupbox(T("Place Eggs", "วางไข่"), "flower")
+    xDTaraZ.UI.Toggle(place, "AutoPlaceEggs", "Auto Place Eggs", "วางไข่ลงรังอัตโนมัติ", T("Puts your best eggs into free nests", "เอาไข่ที่ดีที่สุดลงรังที่ว่าง"))
+    xDTaraZ.UI.Toggle(place, "FastestFirst", "Fastest Eggs First", "ไข่ที่ฟักเร็วก่อน", T("Off = best luck first", "ปิด = ไข่โชคดีสุดก่อน"))
+    place:AddButton({ Text = T("Place Eggs Now", "วางไข่เดี๋ยวนี้"), Func = xDTaraZ.UI.Detach(xDTaraZ.Hatch.PlaceNow) })
+
+    local hatch = tab:AddRightGroupbox(T("Hatching", "ฟักไข่"), "star")
     xDTaraZ.UI.Toggle(hatch, "AutoHatch", "Auto Hatch", "ฟักอัตโนมัติ", T("Hatches eggs from anywhere as soon as they are ready", "ฟักไข่จากที่ไหนก็ได้ทันทีที่พร้อม"))
-    xDTaraZ.UI.Toggle(hatch, "FastestFirst", "Fastest Eggs First", "ไข่ที่ฟักเร็วก่อน", T("Off = best luck first", "ปิด = ไข่โชคดีสุดก่อน"))
-    hatch:AddButton({ Text = T("Place Eggs Now", "วางไข่เดี๋ยวนี้"), Func = xDTaraZ.UI.Detach(xDTaraZ.Hatch.PlaceNow) })
     hatch:AddButton({ Text = T("Hatch Now", "ฟักเดี๋ยวนี้"), Style = "Primary", Func = xDTaraZ.UI.Detach(function() xDTaraZ.Hatch.HatchNow(true) end) })
 
     local nests = tab:AddRightGroupbox(T("Nests", "รัง"), "castle")
@@ -1652,9 +1685,18 @@ function xDTaraZ.UI.PlayerTab(window)
     xDTaraZ.UI.KeyToggle(move, "JumpOn", "Jump Power", "กระโดดสูง")
     xDTaraZ.UI.Bind("JumpPower", move:AddSlider("JumpPower", { Text = T("Jump Power", "แรงกระโดด"), Min = 50, Max = 300, Default = Config.JumpPower, Rounding = 0 }))
     xDTaraZ.UI.Toggle(move, "InfJump", "Infinite Jump", "กระโดดไม่จำกัด")
-    xDTaraZ.UI.KeyToggle(move, "NoClip", "Noclip", "เดินทะลุ")
-    xDTaraZ.UI.KeyToggle(move, "Fly", "Fly", "บิน")
-    xDTaraZ.UI.Bind("FlySpeed", move:AddSlider("FlySpeed", { Text = T("Fly Speed", "ความเร็วบิน"), Min = 20, Max = 500, Default = Config.FlySpeed, Rounding = 0 }))
+
+    local troll = tab:AddLeftGroupbox(T("Troll", "ป่วน"), "troll")
+    troll:AddDropdown("TrollTarget", { Text = T("Target", "เป้าหมาย"), SpecialType = "Player", Searchable = true })
+    xDTaraZ.UI.KeyToggle(troll, "Fling", "Fling", "เหวี่ยงกระเด็น", T("Pauses egg farming while on", "หยุดฟาร์มไข่ชั่วคราวระหว่างเปิด"), true)
+    xDTaraZ.UI.KeyToggle(troll, "Stick", "Stick To Player", "เกาะติดผู้เล่น", T("Pauses egg farming while on", "หยุดฟาร์มไข่ชั่วคราวระหว่างเปิด"))
+    troll:AddButton({ Text = T("Spectate", "ส่องดู"), Func = function() xDTaraZ.Troll.Spectate(xDTaraZ.Troll.TargetName()) end })
+    troll:AddButton({ Text = T("Stop Spectate", "เลิกส่อง"), Func = function() xDTaraZ.Troll.Spectate(nil) end })
+
+    local fly = tab:AddRightGroupbox(T("Fly and Noclip", "บินและเดินทะลุ"), "pipe")
+    xDTaraZ.UI.KeyToggle(fly, "NoClip", "Noclip", "เดินทะลุ")
+    xDTaraZ.UI.KeyToggle(fly, "Fly", "Fly", "บิน")
+    xDTaraZ.UI.Bind("FlySpeed", fly:AddSlider("FlySpeed", { Text = T("Fly Speed", "ความเร็วบิน"), Min = 20, Max = 500, Default = Config.FlySpeed, Rounding = 0 }))
 
     local misc = tab:AddRightGroupbox(T("Utility", "อรรถประโยชน์"), "gear")
     xDTaraZ.UI.Toggle(misc, "AntiAfk", "Anti AFK", "กันหลุด AFK")
@@ -1664,13 +1706,6 @@ function xDTaraZ.UI.PlayerTab(window)
     local esp = tab:AddRightGroupbox(T("Egg ESP", "มองเห็นไข่"), "eye")
     xDTaraZ.UI.KeyToggle(esp, "EggEsp", "Egg ESP", "มองเห็นไข่", T("Shows eggs through walls with rarity and distance", "แสดงไข่ทะลุกำแพง พร้อมความหายากและระยะ"))
     xDTaraZ.UI.Bind("EspMinRarity", esp:AddDropdown("EspMinRarity", { Text = T("Minimum Rarity", "ความหายากขั้นต่ำ"), Values = xDTaraZ.Rarities, Default = xDTaraZ.Rarities[1] }))
-
-    local troll = tab:AddLeftGroupbox(T("Troll", "ป่วน"), "troll")
-    troll:AddDropdown("TrollTarget", { Text = T("Target", "เป้าหมาย"), SpecialType = "Player", Searchable = true })
-    xDTaraZ.UI.KeyToggle(troll, "Fling", "Fling", "เหวี่ยงกระเด็น", T("Pauses egg farming while on", "หยุดฟาร์มไข่ชั่วคราวระหว่างเปิด"), true)
-    xDTaraZ.UI.KeyToggle(troll, "Stick", "Stick To Player", "เกาะติดผู้เล่น", T("Pauses egg farming while on", "หยุดฟาร์มไข่ชั่วคราวระหว่างเปิด"))
-    troll:AddButton({ Text = T("Spectate", "ส่องดู"), Func = function() xDTaraZ.Troll.Spectate(xDTaraZ.Troll.TargetName()) end })
-    troll:AddButton({ Text = T("Stop Spectate", "เลิกส่อง"), Func = function() xDTaraZ.Troll.Spectate(nil) end })
 end
 
 function xDTaraZ.UI.Build()

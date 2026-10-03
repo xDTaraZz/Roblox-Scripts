@@ -156,6 +156,7 @@ xDTaraZ.Config = {
     RejoinDelay = 5,
     RejoinRetry = 30,
     WebhookColor = 0xE8A04C,
+    GroupId = 33017480,
     SaveFolder = "Anime Dice",
     LoadTimeout = 10,
     AlertTries = 20,
@@ -163,7 +164,7 @@ xDTaraZ.Config = {
     JobFailLimit = 5,
     JobFailWindow = 10,
     StatusInterval = 1,
-    RollInterval = 0.05,
+    RollLead = 0.1,
     GradeDelay = 0.3,
     TraitDelay = 0.3,
     FuseDelay = 0.55,
@@ -216,6 +217,7 @@ xDTaraZ.Options = {
     FlySpeed = 60,
 
     AutoRoll = false,
+    RollInterval = 0.02,
 
     AutoCollect = false,
     CollectInterval = 1,
@@ -467,6 +469,7 @@ do
 
     local rewards = GameLib.Find(features, "Rewards")
     GameLib.Daily = GameLib.Require(rewards and rewards:FindFirstChild("DailyRewardConfig", true))
+    GameLib.Group = GameLib.Require(rewards and rewards:FindFirstChild("GroupRewardConfig", true))
     GameLib.DataClient = GameLib.Require(GameLib.Find(ReplicatedStorage, "Packages.Data.Client"))
 end
 
@@ -569,12 +572,28 @@ function GameLib.ShopNames()
     return names
 end
 
-xDTaraZ.Net = {}
+xDTaraZ.Net = { Cache = {} }
 local Network = ReplicatedStorage:WaitForChild("Network", xDTaraZ.Config.LoadTimeout)
+
+---@return Instance?  remote whose name and parent match the path tail, anywhere under Network
+function xDTaraZ.Net.Search(path)
+    if not Network then return nil end
+    local parts = string.split(path, ".")
+    local name, parent = parts[#parts], parts[#parts - 1]
+    for _, node in ipairs(Network:GetDescendants()) do
+        if node.Name == name and (not parent or (node.Parent and node.Parent.Name == parent)) then return node end
+    end
+    return nil
+end
 
 ---@return Instance?  remote at a dotted path under Network
 function xDTaraZ.Net.Get(path)
-    return GameLib.Find(Network, path)
+    local cached = xDTaraZ.Net.Cache[path]
+    if cached and cached.Parent then return cached end
+
+    local remote = GameLib.Find(Network, path) or xDTaraZ.Net.Search(path)
+    xDTaraZ.Net.Cache[path] = remote
+    return remote
 end
 
 function xDTaraZ.Net.Fire(path, ...)
@@ -956,7 +975,15 @@ function xDTaraZ.Move.Rebind()
     end
 end
 
-xDTaraZ.Roll = { Status = "Off", Session = 0, LastRolls = nil, StorageFull = false }
+xDTaraZ.Roll = { Status = "Off", Session = 0, LastRolls = nil, StorageFull = false, NextAt = 0 }
+
+---@return number  seconds the server holds a roll back after an accepted one
+function xDTaraZ.Roll.Duration()
+    local buffs = GameLib.Buffs
+    if not buffs then return 0 end
+    local ok, duration = pcall(buffs.GetBuff, "Roll Duration")
+    return ok and tonumber(duration) or 0
+end
 
 ---@return boolean, number, number  room left for a roll, units held, units the server allows
 function xDTaraZ.Roll.Room()
@@ -1012,7 +1039,11 @@ function xDTaraZ.Roll.Step()
         return
     end
     xDTaraZ.Roll.Status = "Rolling"
-    xDTaraZ.Roll.Once()
+    if osClock() < xDTaraZ.Roll.NextAt then return end
+    local ok, reply = xDTaraZ.Roll.Once()
+    if ok and reply ~= nil then
+        xDTaraZ.Roll.NextAt = osClock() + math.max(xDTaraZ.Roll.Duration() - xDTaraZ.Config.RollLead, 0)
+    end
 end
 
 function xDTaraZ.Roll.GetStatus()
@@ -1237,8 +1268,18 @@ end
 
 xDTaraZ.Dice = { Status = "Off" }
 
+---@return string, number  free starter dice (cheapest in the shop) and its luck
+function xDTaraZ.Dice.Starter()
+    local name, price, luck = "Basic", math.huge, 1
+    for diceName, info in pairs(GameLib.Dice and GameLib.Dice.GetAll() or {}) do
+        local cost = tonumber(info.price) or 0
+        if cost < price then name, price, luck = diceName, cost, tonumber(info.luck) or 1 end
+    end
+    return name, luck
+end
+
 function xDTaraZ.Dice.OwnedSet()
-    local owned = { Basic = true }
+    local owned = { [xDTaraZ.Dice.Starter()] = true }
     for key, value in pairs(xDTaraZ.Data.Table("OwnedDice")) do
         if type(key) == "number" then owned[value] = true elseif value then owned[key] = true end
     end
@@ -1248,7 +1289,7 @@ end
 ---@return string, number  best owned dice and its luck
 function xDTaraZ.Dice.BestOwned()
     local owned = xDTaraZ.Dice.OwnedSet()
-    local bestName, bestLuck = "Basic", 1
+    local bestName, bestLuck = xDTaraZ.Dice.Starter()
     for name, info in pairs(GameLib.Dice and GameLib.Dice.GetAll() or {}) do
         local luck = tonumber(info.luck) or 0
         if owned[name] and luck > bestLuck then bestName, bestLuck = name, luck end
@@ -2011,7 +2052,8 @@ end
 
 function xDTaraZ.Rewards.InGroup()
     if xDTaraZ.Rewards.Member == nil then
-        local ok, member = pcall(LocalPlayer.IsInGroup, LocalPlayer, xDTaraZ.Config.GroupId)
+        local groupId = GameLib.Group and tonumber(GameLib.Group.GroupId) or xDTaraZ.Config.GroupId
+        local ok, member = pcall(LocalPlayer.IsInGroup, LocalPlayer, groupId)
         xDTaraZ.Rewards.Member = ok and member == true
     end
     return xDTaraZ.Rewards.Member
@@ -2034,7 +2076,18 @@ xDTaraZ.Kaitun = { Status = "Off", Members = {
     "AutoBuyDice", "AutoEquipBestDice", "AutoBuyUpgrades", "AutoSell", "AutoRebirth", "AutoGrade",
     "AutoTrait", "AutoTower", "AutoPotion", "AutoSpin", "AutoTicketShop", "AutoDaily", "AutoGroup",
     "AutoOffline", "AutoQuest", "AutoGear", "AutoClearStorage",
-}, SellDefault = { "Common", "Uncommon" } }
+} }
+
+---@param fromTop boolean  take the rarest end instead of the commonest
+---@return string[]        up to count names from a list sorted commonest first
+function xDTaraZ.Kaitun.Slice(list, count, fromTop)
+    local picked = {}
+    local first = fromTop and math.max(#list - count + 1, 1) or 1
+    for index = first, math.min(first + count - 1, #list) do
+        table.insert(picked, list[index])
+    end
+    return picked
+end
 
 function xDTaraZ.Kaitun.SetMembers(on)
     local toggles = xDTaraZ.Library and xDTaraZ.Library.Toggles or {}
@@ -2051,11 +2104,14 @@ function xDTaraZ.Kaitun.Start()
         if options[idx] then options[idx]:SetValue(Util.SetFromList(value)) end
         xDTaraZ.Options[idx] = value
     end
-    Default("TicketShopItems", { "Gems" })
-    Default("SellRarities", xDTaraZ.Kaitun.SellDefault)
-    Default("LockMutations", { "Diamond", "Ruby", "Rainbow" })
-    Default("NotifyRarities", { "Secret I", "Secret II", "Heavenly", "Exclusive" })
-    Default("NotifyMutations", { "Ruby", "Rainbow" })
+    local slice = xDTaraZ.Kaitun.Slice
+    local lists = xDTaraZ.UI.Lists
+    local rarities, mutations = lists.Rarities, lists.Mutations
+    if table.find(GameLib.ShopNames(), "Gems") then Default("TicketShopItems", { "Gems" }) end
+    Default("SellRarities", slice(rarities, 2))
+    Default("LockMutations", slice(mutations, 3, true))
+    Default("NotifyRarities", slice(rarities, 4, true))
+    Default("NotifyMutations", slice(mutations, 2, true))
     if options.LevelTarget then options.LevelTarget:SetValue(200) end
     xDTaraZ.Options.LevelTarget = 200
     xDTaraZ.Kaitun.SetMembers(true)
@@ -2071,7 +2127,7 @@ function xDTaraZ.Kaitun.GetStatus()
     return string.format("R%d · %s", xDTaraZ.Data.Rebirth(), xDTaraZ.Economy.GetStatus())
 end
 
-xDTaraZ.UI = { Labels = {} }
+xDTaraZ.UI = { Labels = {}, Lists = { Rarities = {}, Mutations = {} } }
 local Library, T
 
 function xDTaraZ.UI.Detach(fn)
@@ -2099,6 +2155,12 @@ end
 function xDTaraZ.UI.Values(source, ...)
     local ok, list = pcall(source, ...)
     return ok and type(list) == "table" and list or {}
+end
+
+---@param fallback number  index used when the game renamed or removed the preferred value
+function xDTaraZ.UI.Prefer(values, preferred, fallback)
+    if table.find(values, preferred) then return preferred end
+    return values[math.clamp(fallback, 1, math.max(#values, 1))]
 end
 
 function xDTaraZ.UI.MultiDropdown(group, idx, text, desc, values)
@@ -2140,23 +2202,60 @@ xDTaraZ.UI.Needs = {
     RareNotify = { "DataClient", "Entry" },
 }
 
----@return string?  first game module the option needs that could not be loaded
+xDTaraZ.UI.Remotes = {
+    AutoRoll = { "RollService.RF.RollDice" },
+    AutoCollect = { "PlotService.RE.CollectBalance" },
+    EquipBestUnitsAuto = { "PlotService.RE.EquipBest", "PlotService.RE.InteractSlot", "UnitService.RF.Equip" },
+    AutoLevelUp = { "PlotService.RE.LevelUpSlot" },
+    AutoTower = { "Towers.RF.PlayTower", "Towers.RF.CompleteTowerFloor", "Towers.RF.CancelTower" },
+    AutoSell = { "SellService.RF.SellInventory" },
+    AutoClearStorage = { "SellService.RF.SellInventory" },
+    AutoBuyDice = { "DiceShopService.RE.BuyDice" },
+    AutoEquipBestDice = { "DiceShopService.RE.EquipDice" },
+    AutoBuyUpgrades = { "RE.BuyUpgrade" },
+    AutoRebirth = { "RebirthService.RE.Rebirth" },
+    AutoGrade = { "GradeService.RE.Roll" },
+    AutoTrait = { "TraitService.RE.Roll" },
+    AutoFuse = { "FusingService.RE.Fuse" },
+    AutoGear = { "GearService.RE.Equip" },
+    AutoLock = { "UnitService.RE.SetLocked" },
+    AutoPotion = { "BoostService.RE.Use" },
+    AutoSpin = { "SpinService.RE.Use" },
+    AutoTicketShop = { "QuestService.RE.Buy" },
+    AutoQuest = { "QuestService.RE.Claim" },
+    AutoDaily = { "DailyRewardService.RE.Claim" },
+    AutoGroup = { "GroupRewardService.RE.Claim" },
+    AutoOffline = { "OfflineEarningsService.RE.Claim" },
+}
+
+---@return string?, boolean  first missing module or remote, true when it is a remote
 function xDTaraZ.UI.MissingFor(idx)
     for _, key in ipairs(xDTaraZ.UI.Needs[idx] or {}) do
-        if GameLib[key] == nil then return key end
+        if GameLib[key] == nil then return key, false end
     end
-    return nil
+    for _, path in ipairs(xDTaraZ.UI.Remotes[idx] or {}) do
+        if not xDTaraZ.Net.Get(path) then return path, true end
+    end
+    return nil, false
 end
 
 function xDTaraZ.UI.Gate()
     local blocked = 0
-    for idx in pairs(xDTaraZ.UI.Needs) do
-        if not Library.Options[idx] or not xDTaraZ.UI.MissingFor(idx) then continue end
+    local seen = {}
+    for idx in pairs(xDTaraZ.UI.Needs) do seen[idx] = true end
+    for idx in pairs(xDTaraZ.UI.Remotes) do seen[idx] = true end
+
+    for idx in pairs(seen) do
+        local missing, isRemote = xDTaraZ.UI.MissingFor(idx)
+        if not Library.Options[idx] or not missing then continue end
         blocked += 1
-        Library.Compat.Block(idx, T("Not available on this executor", "ใช้กับ executor นี้ไม่ได้"))
+        warn("[AnimeDice] " .. idx .. " blocked, missing " .. (isRemote and "remote " or "module ") .. missing)
+        local reason = isRemote and T("The game changed, waiting for a script update", "เกมอัปเดต รอสคริปต์อัปเดต")
+            or T("Not available on this executor", "ใช้กับ executor นี้ไม่ได้")
+        Library.Compat.Block(idx, reason)
     end
     if blocked == 0 then return end
-    Library:Notify("Mario Hub", T(blocked .. " features are not available on this executor", blocked .. " ฟีเจอร์ใช้กับ executor นี้ไม่ได้"), 8, "Warning")
+    Library:Notify("Mario Hub", T(blocked .. " features are turned off for now", "ปิดไว้ก่อน " .. blocked .. " ฟีเจอร์"), 8, "Warning")
 end
 
 function xDTaraZ.UI.DrainHalted()
@@ -2202,15 +2301,6 @@ function xDTaraZ.UI.BuildMain(window)
     local stats = tab:AddLeftGroupbox(T("Session Stats", "สถิติรอบนี้"), "flag")
     xDTaraZ.UI.Labels.Stats = stats:AddParagraph({ Title = T("This session", "รอบนี้"), Content = "-" })
 
-    local master = tab:AddRightGroupbox(T("Kaitun", "ไคตุน"), "qblock")
-    master:AddToggle("Kaitun", {
-        Text = T("Kaitun (full auto)", "ไคตุน (อัตโนมัติทั้งหมด)"),
-        Description = T("Rolls, levels, upgrades, grades, climbs towers and rebirths on its own", "ทอย อัปเลเวล อัปเกรด รีเกรด ไต่หอคอย และรีเบิร์ธเองทั้งหมด"),
-        Callback = xDTaraZ.UI.StartStop(xDTaraZ.Kaitun),
-    }):AddKeyPicker("KaitunKey", { Default = "None", Mode = "Toggle" })
-    xDTaraZ.UI.Labels.Kaitun = master:AddParagraph({ Title = T("Progress", "ความคืบหน้า"), Content = "-" })
-    master:AddButton({ Text = T("Panic - all off", "ฉุกเฉิน ปิดทั้งหมด"), Style = "Danger", Func = xDTaraZ.UI.Detach(xDTaraZ.UI.Panic) })
-
     local discord = tab:AddRightGroupbox(T("Discord", "ดิสคอร์ด"), "link")
     discord:AddLabel(xDTaraZ.Config.Discord)
     discord:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ดิสคอร์ด"), Func = xDTaraZ.UI.Detach(function()
@@ -2220,6 +2310,15 @@ function xDTaraZ.UI.BuildMain(window)
             Library:Notify(T("Discord", "ดิสคอร์ด"), xDTaraZ.Config.Discord, 6, "Info")
         end
     end) })
+
+    local master = tab:AddRightGroupbox(T("Kaitun", "ไคตุน"), "qblock")
+    master:AddToggle("Kaitun", {
+        Text = T("Kaitun (full auto)", "ไคตุน (อัตโนมัติทั้งหมด)"),
+        Description = T("Rolls, levels, upgrades, grades, climbs towers and rebirths on its own", "ทอย อัปเลเวล อัปเกรด รีเกรด ไต่หอคอย และรีเบิร์ธเองทั้งหมด"),
+        Callback = xDTaraZ.UI.StartStop(xDTaraZ.Kaitun),
+    }):AddKeyPicker("KaitunKey", { Default = "None", Mode = "Toggle" })
+    xDTaraZ.UI.Labels.Kaitun = master:AddParagraph({ Title = T("Progress", "ความคืบหน้า"), Content = "-" })
+    master:AddButton({ Text = T("Panic - all off", "ฉุกเฉิน ปิดทั้งหมด"), Style = "Danger", Func = xDTaraZ.UI.Detach(xDTaraZ.UI.Panic) })
 end
 
 function xDTaraZ.UI.BuildFarm(window)
@@ -2229,12 +2328,11 @@ function xDTaraZ.UI.BuildFarm(window)
     local roll = tab:AddLeftGroupbox(T("Rolling", "การทอย"), "star")
     roll:AddToggle("AutoRoll", { Text = T("Fast roll", "ทอยเร็ว"), Description = T("Rolls non-stop with no roll animation", "ทอยต่อเนื่องไม่มีแอนิเมชัน") })
         :AddKeyPicker("AutoRollKey", { Default = "None", Mode = "Toggle" })
+    roll:AddSlider("RollInterval", { Text = T("Roll interval", "ความถี่ทอย"), Min = 0.02, Max = 0.5, Default = 0.02, Rounding = 2, Suffix = "s" })
     roll:AddButton({ Text = T("Roll Once", "ทอย 1 ครั้ง"), Func = xDTaraZ.UI.Detach(function() xDTaraZ.Roll.Once() end) })
     roll:AddButton({ Text = T("Reset roll counter", "รีเซ็ตตัวนับการทอย"), Func = xDTaraZ.UI.Detach(xDTaraZ.Roll.ResetCounter) })
 
-    local plot = tab:AddRightGroupbox(T("Plot", "ฐาน"), "castle")
-    plot:AddToggle("AutoCollect", { Text = T("Auto collect", "เก็บเงินอัตโนมัติ") })
-    plot:AddSlider("CollectInterval", { Text = T("Collect interval", "ความถี่เก็บเงิน"), Min = 0.5, Max = 60, Default = 1, Rounding = 1, Suffix = "s" })
+    local plot = tab:AddLeftGroupbox(T("Placement", "วางตัว"), "castle")
     plot:AddToggle("EquipBestUnitsAuto", { Text = T("Auto equip best", "วางตัวดีสุดอัตโนมัติ") })
     plot:AddDropdown("PlacementMode", {
         Text = T("Pick units by", "เลือกตัวตาม"),
@@ -2243,12 +2341,16 @@ function xDTaraZ.UI.BuildFarm(window)
         Default = "Potential",
     })
     plot:AddSlider("EquipInterval", { Text = T("Equip interval", "ความถี่วางตัว"), Min = 1, Max = 120, Default = 5, Rounding = 0, Suffix = "s" })
-    plot:AddButton({ Text = T("Collect Now", "เก็บเงินตอนนี้"), Func = xDTaraZ.UI.Detach(xDTaraZ.Plot.CollectNow) })
     plot:AddButton({ Text = T("Equip Best Now", "วางตัวดีสุดตอนนี้"), Func = xDTaraZ.UI.Detach(xDTaraZ.Plot.EquipBest) })
 
-    local level = tab:AddLeftGroupbox(T("Level Up", "อัปเลเวล"), "oneup")
+    local collect = tab:AddRightGroupbox(T("Collect", "เก็บเงิน"), "coin")
+    collect:AddToggle("AutoCollect", { Text = T("Auto collect", "เก็บเงินอัตโนมัติ") })
+    collect:AddSlider("CollectInterval", { Text = T("Collect interval", "ความถี่เก็บเงิน"), Min = 0.5, Max = 60, Default = 1, Rounding = 1, Suffix = "s" })
+    collect:AddButton({ Text = T("Collect Now", "เก็บเงินตอนนี้"), Func = xDTaraZ.UI.Detach(xDTaraZ.Plot.CollectNow) })
+
+    local level = tab:AddRightGroupbox(T("Level Up", "อัปเลเวล"), "oneup")
     level:AddToggle("AutoLevelUp", { Text = T("Auto level up", "อัปเลเวลอัตโนมัติ"), Description = T("Levels plotted units when you can afford it", "อัปเลเวลตัวบนฐานเมื่อเงินพอ") })
-    level:AddDropdown("LevelMinRarity", { Text = T("Minimum rarity (plotted units)", "rarity ขั้นต่ำ (ตัวบนฐาน)"), Values = rarities, Default = "Common", Searchable = true })
+    level:AddDropdown("LevelMinRarity", { Text = T("Minimum rarity (plotted units)", "rarity ขั้นต่ำ (ตัวบนฐาน)"), Values = rarities, Default = xDTaraZ.UI.Prefer(rarities, "Common", 1), Searchable = true })
     level:AddSlider("LevelTarget", { Text = T("Target level", "เลเวลเป้าหมาย"), Min = 2, Max = 200, Default = 10, Rounding = 0 })
     level:AddSlider("LevelPayback", { Text = T("Max payback time", "คืนทุนไม่เกิน"), Description = T("Buys levels that pay back fast without delaying dice or rebirth", "อัปเฉพาะเลเวลที่คืนทุนเร็ว ไม่ทำให้เต๋า/รีเบิร์ธช้าลง"), Min = 10, Max = 3600, Default = 180, Rounding = 0, Suffix = "s" })
     level:AddButton({ Text = T("Run a pass", "อัปเลเวล 1 รอบ"), Func = xDTaraZ.UI.Detach(function()
@@ -2265,7 +2367,7 @@ function xDTaraZ.UI.BuildEconomy(window)
     dice:AddToggle("AutoEquipBestDice", { Text = T("Equip best owned dice", "ใส่เต๋าดีสุดที่มี") })
     dice:AddButton({ Text = T("Equip Best Now", "ใส่เต๋าดีสุดตอนนี้"), Func = xDTaraZ.UI.Detach(xDTaraZ.Dice.EquipBest) })
 
-    local upgrade = tab:AddLeftGroupbox(T("Upgrades", "อัปเกรด"), "star")
+    local upgrade = tab:AddRightGroupbox(T("Upgrades", "อัปเกรด"), "star")
     upgrade:AddToggle("AutoBuyUpgrades", { Text = T("Auto upgrades", "อัปเกรดอัตโนมัติ") })
     xDTaraZ.UI.MultiDropdown(upgrade, "UpgradeFilter", T("Branches to upgrade", "สายที่จะอัปเกรด"),
         T("Empty buys every branch", "ไม่เลือก = ซื้อทุกสาย"), xDTaraZ.UI.Values(xDTaraZ.Upgrade.Branches))
@@ -2274,17 +2376,19 @@ function xDTaraZ.UI.BuildEconomy(window)
         xDTaraZ.UI.Notify(T("Upgrades", "อัปเกรด"), xDTaraZ.Upgrade.BuyAll() .. " bought", "Success")
     end) })
 
-    local sell = tab:AddRightGroupbox(T("Sell", "ขาย"), "coin")
+    local sell = tab:AddLeftGroupbox(T("Sell", "ขาย"), "coin")
     sell:AddToggle("AutoSell", { Text = T("Auto sell", "ขายอัตโนมัติ"), Description = T("Never sells units on your plot or tower team", "ไม่ขายตัวที่อยู่บนฐานหรือในทีมหอคอย") })
     xDTaraZ.UI.MultiDropdown(sell, "SellRarities", T("Rarities to sell", "rarity ที่จะขาย"), nil, rarities)
     xDTaraZ.UI.MultiDropdown(sell, "SellKeepMutations", T("Mutations to keep", "mutation ที่เก็บไว้"), nil, xDTaraZ.UI.Values(GameLib.MutationNames))
     sell:AddSlider("KeepPerRarity", { Text = T("Keep best per rarity", "เก็บตัวดีสุดต่อ rarity"), Min = 0, Max = 20, Default = 0, Rounding = 0 })
     sell:AddSlider("SellInterval", { Text = T("Interval", "ความถี่"), Min = 0.5, Max = 60, Default = 2, Rounding = 1, Suffix = "s" })
-    sell:AddToggle("AutoClearStorage", { Text = T("Auto clear full storage", "เคลียร์กระเป๋าเมื่อเต็ม"), Description = T("Sells your weakest spare units so rolling never stops", "ขายตัวสำรองที่อ่อนสุดเพื่อให้ทอยได้ไม่หยุด") })
-    sell:AddDropdown("ClearKeepRarity", { Text = T("Never clear rarity and above", "ไม่เคลียร์ rarity นี้ขึ้นไป"), Values = rarities, Default = "Mythical", Searchable = true })
     sell:AddButton({ Text = T("Sell Now", "ขายตอนนี้"), Style = "Warning", Func = xDTaraZ.UI.Detach(function()
         xDTaraZ.UI.Notify(T("Sell", "ขาย"), xDTaraZ.Sell.SellNow(), "Coin")
     end) })
+
+    local storage = tab:AddRightGroupbox(T("Full Storage", "กระเป๋าเต็ม"), "bomb")
+    storage:AddToggle("AutoClearStorage", { Text = T("Auto clear full storage", "เคลียร์กระเป๋าเมื่อเต็ม"), Description = T("Sells your weakest spare units so rolling never stops", "ขายตัวสำรองที่อ่อนสุดเพื่อให้ทอยได้ไม่หยุด") })
+    storage:AddDropdown("ClearKeepRarity", { Text = T("Never clear rarity and above", "ไม่เคลียร์ rarity นี้ขึ้นไป"), Values = rarities, Default = xDTaraZ.UI.Prefer(rarities, "Mythical", math.ceil(#rarities / 2)), Searchable = true })
 
     local rebirth = tab:AddRightGroupbox(T("Rebirth", "รีเบิร์ธ"), "flag")
     rebirth:AddToggle("AutoRebirth", { Text = T("Auto rebirth", "รีเบิร์ธอัตโนมัติ"), Description = T("Rebirths the moment you can afford it", "รีเบิร์ธทันทีที่เงินถึง") })
@@ -2298,22 +2402,23 @@ function xDTaraZ.UI.BuildUnits(window)
     local tab = window:AddTab(T("Units", "ตัวละคร"), "heart", T("Grades, traits, fusing", "เกรด trait หลอมรวม"))
     local rarities = xDTaraZ.UI.Values(GameLib.UnitRarities)
     local mutations = xDTaraZ.UI.Values(GameLib.MutationNames)
+    local grades, traits = xDTaraZ.UI.Values(GameLib.GradeNames), xDTaraZ.UI.Values(GameLib.TraitNames)
 
     local grade = tab:AddLeftGroupbox(T("Grades", "เกรด"), "star")
     grade:AddToggle("AutoGrade", { Text = T("Auto grade", "รีเกรดอัตโนมัติ"), Description = T("Rerolls units on your plot and tower team up to the minimum", "รีเกรดตัวบนฐานและในทีมหอคอยจนถึงขั้นต่ำ") })
-    grade:AddDropdown("GradeTarget", { Text = T("Minimum grade", "เกรดขั้นต่ำ"), Values = xDTaraZ.UI.Values(GameLib.GradeNames), Default = "S" })
+    grade:AddDropdown("GradeTarget", { Text = T("Minimum grade", "เกรดขั้นต่ำ"), Values = grades, Default = xDTaraZ.UI.Prefer(grades, "S", math.ceil(#grades / 2)) })
     grade:AddToggle("GradeOverwrite", { Text = T("Overwrite protected tiers (S+)", "ยอมทับเกรดที่ป้องกันไว้ (S+)"), Risky = true })
     grade:AddButton({ Text = T("Grade Once", "รีเกรด 1 ครั้ง"), Func = xDTaraZ.UI.Detach(xDTaraZ.Grade.RollOne) })
 
     local trait = tab:AddLeftGroupbox(T("Traits", "trait"), "shell")
     trait:AddToggle("AutoTrait", { Text = T("Auto trait", "รี trait อัตโนมัติ"), Description = T("Rerolls units on your plot and tower team up to the minimum", "รี trait ตัวบนฐานและในทีมหอคอยจนถึงขั้นต่ำ") })
-    trait:AddDropdown("TraitTarget", { Text = T("Minimum trait", "trait ขั้นต่ำ"), Values = xDTaraZ.UI.Values(GameLib.TraitNames), Default = "Samurai", Searchable = true })
+    trait:AddDropdown("TraitTarget", { Text = T("Minimum trait", "trait ขั้นต่ำ"), Values = traits, Default = xDTaraZ.UI.Prefer(traits, "Samurai", math.ceil(#traits / 2)), Searchable = true })
     trait:AddToggle("TraitOverwrite", { Text = T("Overwrite protected tiers (Samurai/Shogun)", "ยอมทับ trait ที่ป้องกันไว้ (Samurai/Shogun)"), Risky = true })
     trait:AddButton({ Text = T("Trait Once", "รี trait 1 ครั้ง"), Func = xDTaraZ.UI.Detach(xDTaraZ.Trait.RollOne) })
 
     local lock = tab:AddRightGroupbox(T("Auto Lock", "ล็อกอัตโนมัติ"), "key")
     lock:AddToggle("AutoLock", { Text = T("Auto lock rare units", "ล็อกตัวหายากอัตโนมัติ"), Description = T("Locked units are never sold or fused", "ตัวที่ล็อกจะไม่ถูกขายหรือหลอม") })
-    lock:AddDropdown("LockRarity", { Text = T("Lock rarity and above", "ล็อก rarity นี้ขึ้นไป"), Values = rarities, Default = "Secret I", Searchable = true })
+    lock:AddDropdown("LockRarity", { Text = T("Lock rarity and above", "ล็อก rarity นี้ขึ้นไป"), Values = rarities, Default = xDTaraZ.UI.Prefer(rarities, "Secret I", #rarities - 3), Searchable = true })
     xDTaraZ.UI.MultiDropdown(lock, "LockMutations", T("Lock mutations", "ล็อก mutation"), nil, mutations)
 
     local gear = tab:AddRightGroupbox(T("Gear", "อุปกรณ์"), "shield")
@@ -2341,10 +2446,13 @@ function xDTaraZ.UI.BuildTower(window)
         Default = labels[1],
         Callback = function(label) xDTaraZ.Options.TowerName = xDTaraZ.Tower.NameFromLabel(label) end,
     })
-    group:AddSlider("TowerStopFloor", { Text = T("Stop at floor", "หยุดที่ชั้น"), Min = 1, Max = 500, Default = 100, Rounding = 0 })
-    group:AddToggle("TowerReequip", { Text = T("Re-equip before each run", "จัดทีมใหม่ก่อนทุกรอบ") })
     group:AddToggle("TowerSmart", { Text = T("Auto Difficulty", "ปรับความยากอัตโนมัติ"), Description = T("Moves up after a full clear and down when the team falls early", "ขึ้นหอยากขึ้นเมื่อผ่านหมด ลดลงเมื่อแพ้เร็ว") })
-    group:AddButton({ Text = T("Equip best team", "จัดทีมดีสุด"), Func = xDTaraZ.UI.Detach(xDTaraZ.Tower.EquipTeam) })
+    if labels[1] then xDTaraZ.Options.TowerName = xDTaraZ.Tower.NameFromLabel(labels[1]) end
+
+    local run = tab:AddRightGroupbox(T("Run Settings", "ตั้งค่ารอบ"), "flag")
+    run:AddSlider("TowerStopFloor", { Text = T("Stop at floor", "หยุดที่ชั้น"), Min = 1, Max = 500, Default = 100, Rounding = 0 })
+    run:AddToggle("TowerReequip", { Text = T("Re-equip before each run", "จัดทีมใหม่ก่อนทุกรอบ") })
+    run:AddButton({ Text = T("Equip best team", "จัดทีมดีสุด"), Func = xDTaraZ.UI.Detach(xDTaraZ.Tower.EquipTeam) })
 end
 
 function xDTaraZ.UI.BuildItems(window)
@@ -2402,20 +2510,22 @@ function xDTaraZ.UI.BuildPlayer(window)
     move:AddToggle("InfiniteJump", { Text = T("Infinite jump", "กระโดดไม่จำกัด"), Callback = xDTaraZ.UI.Detach(function(on)
         if on then xDTaraZ.Move.JumpStart() else xDTaraZ.Move.JumpStop() end
     end) })
-    move:AddToggle("NoClip", { Text = T("No clip", "ทะลุกำแพง"), Callback = xDTaraZ.UI.Detach(function(on)
-        if on then xDTaraZ.Move.NoClipStart() else xDTaraZ.Move.NoClipStop() end
-    end) }):AddKeyPicker("NoClipKey", { Default = "None", Mode = "Toggle" })
-    move:AddToggle("Fly", { Text = T("Fly", "บิน"), Callback = xDTaraZ.UI.Detach(function(on)
-        if on then xDTaraZ.Move.FlyStart() else xDTaraZ.Move.FlyStop() end
-    end) }):AddKeyPicker("FlyKey", { Default = "None", Mode = "Toggle" })
-    move:AddSlider("FlySpeed", { Text = T("Fly speed", "ความเร็วบิน"), Min = 20, Max = 300, Default = 60, Rounding = 0 })
 
-    local util = tab:AddRightGroupbox(T("Utility", "อรรถประโยชน์"), "star")
+    local util = tab:AddLeftGroupbox(T("Utility", "อรรถประโยชน์"), "star")
     util:AddToggle("AntiAfk", { Text = T("Anti-AFK", "กันหลุด AFK"), Callback = xDTaraZ.UI.StartStop(xDTaraZ.AntiAfk) })
     util:AddToggle("AutoRejoin", { Text = T("Auto rejoin", "รีจอยน์อัตโนมัติ"), Description = T("Rejoins after a disconnect and resumes Kaitun", "เข้าเกมใหม่เมื่อหลุดและทำไคตุนต่อ"), Callback = xDTaraZ.UI.StartStop(xDTaraZ.Rejoin) })
     util:AddToggle("DisableCutscene", { Text = T("Disable cutscenes", "ปิดคัตซีน"), Description = T("Skips roll and fuse reveal cutscenes", "ข้ามคัตซีนตอนทอยและหลอม"), Callback = function(on)
         if not on then xDTaraZ.Cutscene.Restore() end
     end })
+
+    local air = tab:AddRightGroupbox(T("Fly and No Clip", "บินและทะลุกำแพง"), "pipe")
+    air:AddToggle("NoClip", { Text = T("No clip", "ทะลุกำแพง"), Callback = xDTaraZ.UI.Detach(function(on)
+        if on then xDTaraZ.Move.NoClipStart() else xDTaraZ.Move.NoClipStop() end
+    end) }):AddKeyPicker("NoClipKey", { Default = "None", Mode = "Toggle" })
+    air:AddToggle("Fly", { Text = T("Fly", "บิน"), Callback = xDTaraZ.UI.Detach(function(on)
+        if on then xDTaraZ.Move.FlyStart() else xDTaraZ.Move.FlyStop() end
+    end) }):AddKeyPicker("FlyKey", { Default = "None", Mode = "Toggle" })
+    air:AddSlider("FlySpeed", { Text = T("Fly speed", "ความเร็วบิน"), Min = 20, Max = 300, Default = 60, Rounding = 0 })
 
     local alerts = tab:AddRightGroupbox(T("Rare Alerts", "แจ้งเตือนของหายาก"), "bell")
     alerts:AddToggle("RareNotify", { Text = T("Alert on rare pulls", "แจ้งเตือนเมื่อได้ของหายาก") })
@@ -2423,7 +2533,8 @@ function xDTaraZ.UI.BuildPlayer(window)
     xDTaraZ.UI.MultiDropdown(alerts, "NotifyMutations", T("Mutations", "mutation"), nil, xDTaraZ.UI.Values(GameLib.MutationNames))
     alerts:AddInput("WebhookUrl", { Text = T("Discord webhook", "Discord webhook"), Default = "", Placeholder = T("Optional webhook URL", "ลิงก์ webhook (ไม่ใส่ก็ได้)"), Finished = true })
     alerts:AddButton({ Text = T("Send test alert", "ทดสอบแจ้งเตือน"), Func = xDTaraZ.UI.Detach(function()
-        xDTaraZ.Watch.Alert({ Name = "Test", Rarity = "Heavenly", Mutation = "Rainbow" })
+        local rarities, mutations = xDTaraZ.UI.Lists.Rarities, xDTaraZ.UI.Lists.Mutations
+        xDTaraZ.Watch.Alert({ Name = "Test", Rarity = rarities[#rarities] or "?", Mutation = mutations[#mutations] })
     end) })
 end
 
@@ -2456,6 +2567,7 @@ end
 
 function xDTaraZ.UI.Build()
     local window = Library.Window
+    xDTaraZ.UI.Lists = { Rarities = xDTaraZ.UI.Values(GameLib.UnitRarities), Mutations = xDTaraZ.UI.Values(GameLib.MutationNames) }
     local layout = {
         { T("Main", "หลัก"), "Main", xDTaraZ.UI.BuildMain },
         { T("Farming", "ฟาร์ม"), "Farm", xDTaraZ.UI.BuildFarm },
@@ -2524,7 +2636,7 @@ function xDTaraZ.Boot()
 
     local options, config = xDTaraZ.Options, xDTaraZ.Config
     local every = xDTaraZ.Scheduler.Every
-    every("Roll", config.RollInterval, xDTaraZ.Roll.Step, { "AutoRoll" })
+    every("Roll", function() return options.RollInterval end, xDTaraZ.Roll.Step, { "AutoRoll" })
     every("Collect", function() return options.CollectInterval end, xDTaraZ.Plot.CollectStep, { "AutoCollect" })
     every("Equip", function() return options.EquipInterval end, xDTaraZ.Plot.EquipStep, { "EquipBestUnitsAuto" })
     every("Economy", 1, xDTaraZ.Economy.Step, { "AutoBuyDice", "AutoEquipBestDice", "AutoRebirth", "AutoBuyUpgrades", "AutoLevelUp" })

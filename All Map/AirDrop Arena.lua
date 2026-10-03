@@ -171,6 +171,7 @@ xDTaraZ.Config = {
     FovColor = Color3.fromRGB(232, 160, 76),
     CombatToggles = { "SilentAim", "Ragebot", "Aimbot", "ShowFov" },
     ConfigFeatures = { "AutoGear", "AutoValuables", "AutoAirDrop", "AutoHeal" },
+    RemoteFeatures = { "SilentAim", "Ragebot", "AutoGear", "AutoValuables", "AutoAirDrop", "AutoHeal", "InstantRespawn", "AutoRejoin" },
     GunToggles = { "RapidFire", "NoSpread", "NoRecoil", "InstantAds" },
     LootEspToggles = { "LootEspAirDrop", "LootEspCrate", "LootEspItem" },
     GunScanInterval = 8,
@@ -186,7 +187,6 @@ xDTaraZ.Config = {
     HuntIdle = 0.6,
     HuntDistance = 15,
     HuntLift = 10,
-    TrackedCurrency = { "Gold", "Ore", "Crystal" },
     GearSlots = {
         [4] = { "Primary", 1 },
         [5] = { "Pistol", 4 },
@@ -414,13 +414,24 @@ function GameLib.Require(module)
     return nil
 end
 
+---@param root Instance?  expected parent, the rest of ReplicatedStorage is searched when it moved
+---@return Instance?       nil after a warning that names it
+function GameLib.Find(root, name, class)
+    local found = root and root:FindFirstChild(name, true)
+    if not (found and found:IsA(class)) then found = ReplicatedStorage:FindFirstChild(name, true) end
+    if found and found:IsA(class) then return found end
+    GameLib.Missing[name] = "Absent"
+    warn("[AirDropArena] " .. class .. " " .. name .. " not found, features that need it are blocked")
+    return nil
+end
+
 do
     local timeout = xDTaraZ.Config.LoadTimeout
     local remotes = ReplicatedStorage:WaitForChild("RemoteEvent", timeout)
     local scripts = ReplicatedStorage:WaitForChild("Scripts", timeout)
-    GameLib.Main = remotes and remotes:WaitForChild("Main", timeout)
-    GameLib.ProtoId = GameLib.Require(scripts and scripts:FindFirstChild("ProtoId", true)) or {}
-    GameLib.Configs = GameLib.Require(scripts and scripts:FindFirstChild("ConfigManager", true)) or {}
+    GameLib.Main = remotes and remotes:WaitForChild("Main", timeout) or GameLib.Find(remotes, "Main", "RemoteEvent")
+    GameLib.ProtoId = GameLib.Require(GameLib.Find(scripts, "ProtoId", "ModuleScript")) or {}
+    GameLib.Configs = GameLib.Require(GameLib.Find(scripts, "ConfigManager", "ModuleScript")) or {}
 end
 
 xDTaraZ.Proto = setmetatable({}, {
@@ -1459,8 +1470,14 @@ function xDTaraZ.Farm.GetStatus()
     local start = xDTaraZ.Farm.Start
     if not start then return "-" end
     local hours = math.max(osClock() - start[1], 60) / 3600
-    local parts = {}
-    for _, name in ipairs(xDTaraZ.Config.TrackedCurrency) do
+    local seen, names, parts = {}, {}, {}
+    for _, totals in ipairs({ xDTaraZ.Farm.Totals, start[2] }) do
+        for name in pairs(totals) do
+            if not seen[name] then seen[name] = true table.insert(names, name) end
+        end
+    end
+    table.sort(names)
+    for _, name in ipairs(names) do
         local gained = (xDTaraZ.Farm.Totals[name] or 0) - (start[2][name] or 0)
         parts[#parts + 1] = string.format("%s +%d (%d/h)", name, gained, math.floor(gained / hours))
     end
@@ -1623,8 +1640,6 @@ function xDTaraZ.UI.BuildMain(window)
     xDTaraZ.UI.Labels.Farm = status:AddParagraph({ Title = T("Farm", "ฟาร์ม"), Content = "-" })
     xDTaraZ.UI.Labels.Heal = status:AddParagraph({ Title = T("Health", "เลือด"), Content = "-" })
     xDTaraZ.UI.Labels.Combat = status:AddParagraph({ Title = T("Combat", "การต่อสู้"), Content = "-" })
-    xDTaraZ.UI.Labels.Loot = status:AddParagraph({ Title = T("Loot", "ของดรอป"), Content = "-" })
-    xDTaraZ.UI.Labels.Esp = status:AddParagraph({ Title = T("ESP", "ESP"), Content = "-" })
 
     local quick = tab:AddLeftGroupbox(T("Quick", "ด่วน"), "bomb")
     quick:AddButton({ Text = T("Panic - all off", "ฉุกเฉิน ปิดทั้งหมด"), Style = "Danger", Func = xDTaraZ.UI.Detach(function()
@@ -1642,6 +1657,10 @@ function xDTaraZ.UI.BuildMain(window)
             Library:Notify(T("Discord", "ดิสคอร์ด"), xDTaraZ.Config.Discord, 6, "Info")
         end
     end) })
+
+    local live = tab:AddRightGroupbox(T("Loot and ESP", "ของดรอปและ ESP"), "coin")
+    xDTaraZ.UI.Labels.Loot = live:AddParagraph({ Title = T("Loot", "ของดรอป"), Content = "-" })
+    xDTaraZ.UI.Labels.Esp = live:AddParagraph({ Title = T("ESP", "ESP"), Content = "-" })
 end
 
 function xDTaraZ.UI.BuildCombat(window)
@@ -1705,7 +1724,7 @@ function xDTaraZ.UI.BuildLoot(window)
         xDTaraZ.UI.Report("Loot", xDTaraZ.Loot.TakeUpgrades(), "Took %d upgrades", "Nothing better on the map")
     end) })
 
-    local money = tab:AddLeftGroupbox(T("Valuables", "ของมีค่า"), "coin")
+    local money = tab:AddRightGroupbox(T("Valuables", "ของมีค่า"), "coin")
     money:AddToggle("AutoValuables", { Text = T("Auto loot valuables", "เก็บของมีค่าอัตโนมัติ"), Description = T("Takes ore, crystals and gold from every crate on the map", "เก็บแร่ คริสตัล และทองจากกล่องทุกใบในแมพ"), Risky = true })
     money:AddButton({ Text = T("Loot Valuables Now", "เก็บของมีค่าตอนนี้"), Style = "Primary", Func = xDTaraZ.UI.Detach(function()
         xDTaraZ.UI.Report("Loot", xDTaraZ.Loot.TakeValuables(), "Took %d valuables", "No valuables on the map")
@@ -1727,7 +1746,9 @@ function xDTaraZ.UI.BuildVisuals(window)
     esp:AddToggle("LootEspAirDrop", { Text = T("Air drops", "แอร์ดรอป") })
     esp:AddToggle("LootEspCrate", { Text = T("Crates", "กล่อง") })
     esp:AddToggle("LootEspItem", { Text = T("Items", "ไอเทม") })
-    esp:AddSlider("LootEspRange", { Text = T("Range", "ระยะ"), Min = 50, Max = 2000, Default = 400, Suffix = "m" })
+
+    local range = tab:AddRightGroupbox(T("Range", "ระยะ"), "eye")
+    range:AddSlider("LootEspRange", { Text = T("Range", "ระยะ"), Min = 50, Max = 2000, Default = 400, Suffix = "m" })
 end
 
 function xDTaraZ.UI.BuildMisc(window)
@@ -1735,16 +1756,20 @@ function xDTaraZ.UI.BuildMisc(window)
     local tab = window:AddTab(T("Player", "ผู้เล่น"), "oneup", T("Movement, world, server", "การเคลื่อนที่ โลก เซิร์ฟเวอร์"))
 
     local move = tab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "zap")
-    move:AddToggle("SuperSlide", { Text = T("Slide boost", "สไลด์ไกล"), Description = T("Faster and longer slides", "สไลด์เร็วและไกลขึ้น") })
-    move:AddSlider("SlideSpeed", { Text = T("Slide speed", "ความเร็วสไลด์"), Min = 60, Max = 300, Default = 120, Rounding = 0 })
     move:AddToggle("Speed", { Text = T("Speed", "วิ่งเร็ว") }):AddKeyPicker("SpeedKey", { Default = "None", Mode = "Toggle" })
     move:AddSlider("SpeedValue", { Text = T("Speed", "ความเร็ว"), Min = 16, Max = 120, Default = 40, Rounding = 0 })
-    move:AddToggle("Fly", { Text = T("Fly", "บิน"), Description = T("Space up, Ctrl down", "Space ขึ้น Ctrl ลง"), Callback = function(on)
-        if not on then xDTaraZ.Movement.StopFly() end
-    end }):AddKeyPicker("FlyKey", { Default = "None", Mode = "Toggle" })
-    move:AddSlider("FlySpeed", { Text = T("Fly speed", "ความเร็วบิน"), Min = 20, Max = 200, Default = 60, Rounding = 0 })
     move:AddToggle("InfiniteJump", { Text = T("Infinite jump", "กระโดดไม่จำกัด") })
     move:AddToggle("Noclip", { Text = T("Noclip", "ทะลุกำแพง") }):AddKeyPicker("NoclipKey", { Default = "None", Mode = "Toggle" })
+
+    local fly = tab:AddLeftGroupbox(T("Fly", "บิน"), "star")
+    fly:AddToggle("Fly", { Text = T("Fly", "บิน"), Description = T("Space up, Ctrl down", "Space ขึ้น Ctrl ลง"), Callback = function(on)
+        if not on then xDTaraZ.Movement.StopFly() end
+    end }):AddKeyPicker("FlyKey", { Default = "None", Mode = "Toggle" })
+    fly:AddSlider("FlySpeed", { Text = T("Fly speed", "ความเร็วบิน"), Min = 20, Max = 200, Default = 60, Rounding = 0 })
+
+    local slide = tab:AddRightGroupbox(T("Slide", "สไลด์"), "zap")
+    slide:AddToggle("SuperSlide", { Text = T("Slide boost", "สไลด์ไกล"), Description = T("Faster and longer slides", "สไลด์เร็วและไกลขึ้น") })
+    slide:AddSlider("SlideSpeed", { Text = T("Slide speed", "ความเร็วสไลด์"), Min = 60, Max = 300, Default = 120, Rounding = 0 })
     Library.Compat.NeedCap("SuperSlide", "Gc")
 
     local world = tab:AddRightGroupbox(T("World", "โลก"), "globe")
@@ -1797,14 +1822,21 @@ function xDTaraZ.UI.HookOnDemand()
 end
 
 function xDTaraZ.UI.GuardConfigFeatures()
+    local unsupported = T("Not available on this executor", "ใช้กับ executor นี้ไม่ได้")
+    local outdated = T("Changed by a game update, wait for a script update", "เกมอัปเดตแล้ว รอสคริปต์อัปเดต")
     local missing = GameLib.Missing.ConfigManager
-    local reason = T("Not available on this executor", "ใช้กับ executor นี้ไม่ได้")
     for _, idx in ipairs(xDTaraZ.Config.ConfigFeatures) do
         if missing then
-            Library.Compat.Block(idx, reason)
+            Library.Compat.Block(idx, missing == "Absent" and outdated or unsupported)
         else
             Library.Compat.NeedCap(idx, "Gc")
         end
+    end
+
+    if GameLib.Main then return end
+    for _, idx in ipairs(xDTaraZ.Config.RemoteFeatures) do
+        local option = Library.Options[idx]
+        if option and not option.Blocked then Library.Compat.Block(option, outdated) end
     end
 end
 

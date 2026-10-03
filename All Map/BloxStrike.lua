@@ -173,11 +173,15 @@ xDTaraZ.Config = {
     FailWindow = 10,
     CombatToggles = { "Aimbot", "Triggerbot", "Ragebot", "AimbotShowFov", "SilentShowFov" },
     ModuleFeatures = {
-        Net = { "SilentAim", "AutoRebuy" },
+        Net = { "SilentAim", "Ragebot", "AutoRebuy" },
         Character = { "BunnyHop" },
         Weapons = { "FullAuto", "RapidFire", "WeaponSpeed" },
+        Skins = { "SkinChanger" },
     },
-    Codes = { "FREEDOM", "MICHAELSRETURN", "HAPPYBDAYYUUTO", "GAMEBROKE318", "OHNEPIXEL", "NEBULA", "REACTORDELAY", "BUTTERFLYCASE", "TRADEUPS" },
+    Codes = {
+        "1MGROUPMEMBERS", "MYFAULTYALL", "RIANOMINATED2026", "LORE", "DUST_II", "MICHAELSRETURN",
+        "FREEDOM", "HAPPYBDAYYUUTO", "GAMEBROKE318", "OHNEPIXEL", "NEBULA", "REACTORDELAY", "BUTTERFLYCASE", "TRADEUPS",
+    },
     BoneParts = {
         Head = { "Head" },
         Torso = { "UpperTorso", "Torso", "HumanoidRootPart" },
@@ -191,6 +195,7 @@ xDTaraZ.Config = {
     SkinKinds = { Melee = "Knives", Glove = "Gloves", Grenade = "Grenades", C4 = "Gear", ["Zeus x27"] = "Gear" },
     SkinOrder = { "Pistol", "SMG", "Rifle", "Sniper", "Heavy", "Shotgun", "Machine Gun", "Knives", "Gloves", "Grenades", "Gear" },
     SkinRanks = { Forbidden = 9, Special = 8, Red = 7, Pink = 6, Purple = 5, Blue = 4, LightBlue = 3, Gray = 2, White = 1 },
+    SkinMainRows = 5,
     SkinArms = { ["Left Arm"] = true, ["Right Arm"] = true },
     GloveKey = "@Glove",
     FovColors = {
@@ -370,7 +375,21 @@ function xDTaraZ:Connect(signal, handler)
     return conn
 end
 
-xDTaraZ.GameLib = {}
+xDTaraZ.GameLib = { Missing = {} }
+
+---@param parent Instance?     where it lives today
+---@param home string          parent name a moved copy must still have
+---@return Instance?           nil after a warning that names it
+function xDTaraZ.GameLib.Find(parent, name, class, home)
+    local found = parent and parent:FindFirstChild(name)
+    if found and found:IsA(class) then return found end
+    for _, desc in ipairs(ReplicatedStorage:GetDescendants()) do
+        if desc.Name == name and desc:IsA(class) and desc.Parent and desc.Parent.Name == home then return desc end
+    end
+    xDTaraZ.GameLib.Missing[name] = "Absent"
+    warn("[BloxStrike] " .. home .. "." .. name .. " not found, features that need it are blocked")
+    return nil
+end
 
 ---@return any  module, or nil when this executor can't require it (never throws)
 function xDTaraZ.GameLib.Require(inst)
@@ -397,10 +416,11 @@ do
     local security = database and database:FindFirstChild("Security")
     local custom = database and database:FindFirstChild("Custom")
     local controllers = ReplicatedStorage:FindFirstChild("Controllers")
-    xDTaraZ.GameLib.Net = xDTaraZ.GameLib.Require(security and security:FindFirstChild("Remotes"))
-    xDTaraZ.GameLib.Character = xDTaraZ.GameLib.Require(controllers and controllers:FindFirstChild("CharacterController"))
-    xDTaraZ.GameLib.Camera = xDTaraZ.GameLib.Require(controllers and controllers:FindFirstChild("CameraController"))
-    xDTaraZ.GameLib.WeaponFolder = custom and custom:FindFirstChild("Weapons")
+    local find = xDTaraZ.GameLib.Find
+    xDTaraZ.GameLib.Net = xDTaraZ.GameLib.Require(find(security, "Remotes", "ModuleScript", "Security"))
+    xDTaraZ.GameLib.Character = xDTaraZ.GameLib.Require(find(controllers, "CharacterController", "ModuleScript", "Controllers"))
+    xDTaraZ.GameLib.Camera = xDTaraZ.GameLib.Require(find(controllers, "CameraController", "ModuleScript", "Controllers"))
+    xDTaraZ.GameLib.WeaponFolder = find(custom, "Weapons", "Folder", "Custom")
 end
 
 xDTaraZ.Weapons = {}
@@ -1613,6 +1633,18 @@ function xDTaraZ.UI.SkinGroup(tab, category, side)
     end
 end
 
+---@param heights table  rows used per side so far, updated in place
+function xDTaraZ.UI.PlaceSkinGroup(tab, category, heights)
+    local side = heights.Left <= heights.Right and "Left" or "Right"
+    local rows = 1
+    for _, weapon in ipairs(xDTaraZ.Skins.Items(category)) do
+        if weapon ~= "-" then rows += 1 end
+    end
+    if rows == 1 then return end
+    heights[side] += rows
+    xDTaraZ.Util.Try("skins " .. category, xDTaraZ.UI.SkinGroup, tab, category, side)
+end
+
 function xDTaraZ.UI.SyncSkins()
     for _, category in ipairs(xDTaraZ.Skins.Categories()) do
         for _, weapon in ipairs(xDTaraZ.Skins.Items(category)) do
@@ -1641,18 +1673,18 @@ function xDTaraZ.UI.BuildSkins(window)
         xDTaraZ.UI.SyncSkins()
     end) })
 
-    local gear = { Knives = "Right", Gloves = "Left", Grenades = "Right", Gear = "Left" }
+    local gear = { Knives = true, Gloves = true, Grenades = true, Gear = true }
+    local heights = { Left = xDTaraZ.Config.SkinMainRows, Right = 0 }
     for _, category in ipairs({ "Knives", "Gloves", "Grenades", "Gear" }) do
-        xDTaraZ.Util.Try("skins " .. category, xDTaraZ.UI.SkinGroup, tab, category, gear[category])
+        xDTaraZ.UI.PlaceSkinGroup(tab, category, heights)
     end
 
     local guns = window:AddTab(T("Gun Skins", "สกินปืน"), "crosshair", T("Skins for every gun", "สกินปืนทุกกระบอก"))
-    local side = "Left"
+    heights = { Left = 0, Right = 0 }
     local ok, categories = pcall(xDTaraZ.Skins.Categories)
     for _, category in ipairs(ok and categories or {}) do
         if gear[category] then continue end
-        xDTaraZ.Util.Try("skins " .. category, xDTaraZ.UI.SkinGroup, guns, category, side)
-        side = side == "Left" and "Right" or "Left"
+        xDTaraZ.UI.PlaceSkinGroup(guns, category, heights)
     end
 end
 
@@ -1671,7 +1703,7 @@ function xDTaraZ.UI.BuildMisc(window)
         table.clear(xDTaraZ.State.Bought)
     end) })
 
-    local codes = tab:AddRightGroupbox(T("Codes", "โค้ด"), "key")
+    local codes = tab:AddLeftGroupbox(T("Codes", "โค้ด"), "key")
     codes:AddButton({ Text = T("Redeem All Codes", "แลกโค้ดทั้งหมด"), Style = "Primary", Func = xDTaraZ.UI.Detach(function()
         local sent = xDTaraZ.Economy.RedeemAll()
         Library:Notify("Codes", "Sent " .. sent .. " codes (level 5+ needed)", 4, "Coin")
@@ -1775,16 +1807,22 @@ function xDTaraZ.UI.WarnPartialRecoil()
 end
 
 function xDTaraZ.UI.BlockMissing()
+    local absent = xDTaraZ.GameLib.Missing
     local missing = {
-        Net = xDTaraZ.GameLib.Net == nil,
-        Character = xDTaraZ.GameLib.Character == nil,
-        Weapons = next(xDTaraZ.Weapons) == nil,
+        Net = xDTaraZ.GameLib.Net == nil and (absent.Remotes or true),
+        Character = xDTaraZ.GameLib.Character == nil and (absent.CharacterController or true),
+        Weapons = next(xDTaraZ.Weapons) == nil and (absent.Weapons or true),
+        Skins = xDTaraZ.Skins.Folder() == nil and "Absent",
     }
-    local reason = T("Not available on this executor", "ใช้กับ executor นี้ไม่ได้")
+    if missing.Skins then warn("[BloxStrike] Assets.Skins not found, the skin changer is blocked") end
+
+    local unsupported = T("Not available on this executor", "ใช้กับ executor นี้ไม่ได้")
+    local outdated = T("Changed by a game update, wait for a script update", "เกมอัปเดตแล้ว รอสคริปต์อัปเดต")
     for source, features in pairs(xDTaraZ.Config.ModuleFeatures) do
-        if not missing[source] then continue end
+        local why = missing[source]
+        if not why then continue end
         for _, idx in ipairs(features) do
-            Library.Compat.Block(idx, reason)
+            Library.Compat.Block(idx, why == "Absent" and outdated or unsupported)
         end
     end
 end

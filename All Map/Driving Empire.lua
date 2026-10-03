@@ -190,16 +190,17 @@ xDTaraZ.Config = {
         Vector3.new(7322.1, 197.8, -2811.6),
     },
     PlaceSeeds = {
-        ["Job: Outlaw"] = Vector3.new(135.2, 21.5, -1852.0),
-        ["Job: Police"] = Vector3.new(148.2, 21.5, -1991.5),
+        ["Job: Criminal"] = Vector3.new(135.2, 21.5, -1852.0),
+        ["Job: Security"] = Vector3.new(148.2, 21.5, -1991.5),
         ["Job: Delivery"] = Vector3.new(122.5, 21.8, -1922.7),
         ["Job: Security HQ"] = Vector3.new(-109.8, 25.1, -956.8),
         ["Spawn Dealership"] = Vector3.new(-482, 14, -1767),
     },
     Codes = {
-        "UWU", "RECORD", "USA250", "10KITS", "MARCH2026", "HAPPY2026", "CALL911", "GOBBLEGOBBLE",
+        "RAMBO", "AIRDROP", "UWU", "RECORD", "USA250", "10KITS", "MARCH2026", "HAPPY2026", "CALL911", "GOBBLEGOBBLE",
         "SPOOKY", "VEGAS2025", "WHOOPS", "RDCNASCAR25", "2MLIKES", "NASCAR100M", "CUSTOMIZATION2025",
         "200KMEMBERS", "NEWYEAR2025", "ZOOM", "HAPPYXMAS",
+        "1MILLIONLIKES", "1MILCASH",
     },
     CodeDelay = 1.5,
 }
@@ -363,6 +364,24 @@ function GameLib.Find(root, ...)
     return node
 end
 
+---@return Instance?  module at the path, else the first ModuleScript with that name anywhere under root
+function GameLib.Locate(root, ...)
+    local found = GameLib.Find(root, ...)
+    if found or not root then return found end
+    local name = select(select("#", ...), ...)
+    for _, desc in ipairs(root:GetDescendants()) do
+        if desc.Name == name and desc:IsA("ModuleScript") then return desc end
+    end
+    return nil
+end
+
+---@return RemoteEvent?  by name in the Remotes folder, else anywhere in ReplicatedStorage
+function GameLib.Remote(name)
+    local remote = GameLib.RemoteFolder and GameLib.RemoteFolder:FindFirstChild(name)
+    remote = remote or ReplicatedStorage:FindFirstChild(name, true)
+    return remote and remote:IsA("RemoteEvent") and remote or nil
+end
+
 ---Plain require first; identity-3 executors get "Cannot require a non-RobloxScript module", so retry once from a fresh identity-2 thread.
 ---@return table?  module, nil when this executor cannot load it
 function GameLib.Require(module)
@@ -390,19 +409,31 @@ end
 do
     local modules = ReplicatedStorage:WaitForChild("Modules", Config.LoadTimeout)
     GameLib.RemoteFolder = ReplicatedStorage:WaitForChild("Remotes", Config.LoadTimeout)
-    GameLib.Remotes = GameLib.Require(GameLib.Find(modules, "Shared", "Remotes"))
-    GameLib.Data = GameLib.Require(GameLib.Find(modules, "Shared", "Data"))
-    GameLib.JobsController = GameLib.Require(GameLib.Find(modules, "Client", "Jobs", "JobsController"))
-    GameLib.VehicleController = GameLib.Require(GameLib.Find(modules, "Client", "Vehicles", "VehicleController"))
-    GameLib.TeleportGuard = GameLib.Require(GameLib.Find(modules, "Client", "Exploit", "VehicleTeleportDetectionController"))
-    GameLib.PlayRewardUtil = GameLib.Require(GameLib.Find(modules, "Shared", "PlayRewards", "PlayRewardUtil"))
+    GameLib.Remotes = GameLib.Require(GameLib.Locate(modules, "Shared", "Remotes"))
+    GameLib.Data = GameLib.Require(GameLib.Locate(modules, "Shared", "Data"))
+    GameLib.JobsController = GameLib.Require(GameLib.Locate(modules, "Client", "Jobs", "JobsController"))
+    GameLib.JobsConstants = GameLib.Require(GameLib.Locate(modules, "Shared", "Jobs", "JobsConstants"))
+    GameLib.VehicleController = GameLib.Require(GameLib.Locate(modules, "Client", "Vehicles", "VehicleController"))
+    GameLib.TeleportGuard = GameLib.Require(GameLib.Locate(modules, "Client", "Exploit", "VehicleTeleportDetectionController"))
+    GameLib.PlayRewardUtil = GameLib.Require(GameLib.Locate(modules, "Shared", "PlayRewards", "PlayRewardUtil"))
+
+    GameLib.VehicleEvent = GameLib.Remote("VehicleEvent")
+    GameLib.CodeRemote = GameLib.Remote("Code")
+    GameLib.AtmFolder = GameLib.Find(workspace, "Game", "Jobs", "CriminalATMSpawners") or workspace:FindFirstChild("CriminalATMSpawners", true)
 end
 
 GameLib.Needs = {
-    AtmFarm = { "Remotes", "JobsController" },
-    DriveFarm = { "VehicleController", "TeleportGuard", "JobsController" },
+    AtmFarm = { "Remotes", "JobsController", "AtmFolder" },
+    DriveFarm = { "VehicleController", "TeleportGuard", "JobsController", "VehicleEvent" },
     AutoPlaytime = { "Remotes", "PlayRewardUtil" },
     AutoClaimMisc = { "Remotes" },
+    EspAtm = { "AtmFolder" },
+}
+
+GameLib.Parts = {
+    VehicleEvent = "remote VehicleEvent",
+    CodeRemote = "remote Code",
+    AtmFolder = "folder CriminalATMSpawners",
 }
 
 ---@return string?  first game module the feature needs that did not load
@@ -411,6 +442,16 @@ function GameLib.Missing(idx)
         if not GameLib[name] then return name end
     end
     return nil
+end
+
+---@return Instance[]  ATM spawners, empty when the folder is gone
+function GameLib.AtmSpawners()
+    local folder = GameLib.AtmFolder
+    if not folder or not folder.Parent then
+        folder = GameLib.Find(workspace, "Game", "Jobs", "CriminalATMSpawners")
+        GameLib.AtmFolder = folder
+    end
+    return folder and folder:GetChildren() or {}
 end
 
 function xDTaraZ.Player.Character()
@@ -462,7 +503,9 @@ function xDTaraZ.Vehicle.Owned()
     if not stats then
         return owned
     end
-    for _, entry in ipairs(stats.Vehicles:GetChildren()) do
+    local vehicles = stats:FindFirstChild("Vehicles")
+    if not vehicles then return owned end
+    for _, entry in ipairs(vehicles:GetChildren()) do
         if entry.Value == true then
             table.insert(owned, entry.Name)
         end
@@ -472,10 +515,10 @@ function xDTaraZ.Vehicle.Owned()
 end
 
 function xDTaraZ.Vehicle.Spawn(vehicleId)
-    if not vehicleId then
+    if not vehicleId or not GameLib.VehicleEvent then
         return nil
     end
-    GameLib.RemoteFolder.VehicleEvent:FireServer("Spawn", vehicleId)
+    GameLib.VehicleEvent:FireServer("Spawn", vehicleId)
     local deadline = os.clock() + Config.SpawnWait
     repeat
         task.wait(0.25)
@@ -484,7 +527,8 @@ function xDTaraZ.Vehicle.Spawn(vehicleId)
 end
 
 function xDTaraZ.Vehicle.Despawn()
-    GameLib.RemoteFolder.VehicleEvent:FireServer("Despawn")
+    if not GameLib.VehicleEvent then return end
+    GameLib.VehicleEvent:FireServer("Despawn")
 end
 
 ---@return boolean  moved the car, or the character when on foot
@@ -530,6 +574,25 @@ end
 
 function xDTaraZ.Jobs.Current()
     return LocalPlayer:GetAttribute("JobId")
+end
+
+---@return string[]  job ids the game defines plus any job pad on the map, sorted
+function xDTaraZ.Jobs.List()
+    local seen, list = {}, {}
+    local function Add(jobId)
+        if type(jobId) ~= "string" or seen[jobId] then return end
+        seen[jobId] = true
+        list[#list + 1] = jobId
+    end
+    local constants = GameLib.JobsConstants
+    for _, jobId in pairs(constants and constants.JobIds or {}) do
+        Add(jobId)
+    end
+    for _, pad in ipairs(CollectionService:GetTagged("JobPad")) do
+        Add(pad:GetAttribute("JobId"))
+    end
+    table.sort(list)
+    return list
 end
 
 function xDTaraZ.Jobs.Start(jobId)
@@ -594,7 +657,7 @@ function xDTaraZ.Atm.SpawnerCount()
 end
 
 local function RecordStreamedSpawners()
-    for _, spawner in ipairs(workspace.Game.Jobs.CriminalATMSpawners:GetChildren()) do
+    for _, spawner in ipairs(GameLib.AtmSpawners()) do
         local id = spawner:GetAttribute("ComponentServerId")
         if id then
             State.Spawners[id] = spawner.Position
@@ -627,7 +690,7 @@ function xDTaraZ.Atm.Sweep()
 end
 
 local function FindAtm(spawnerId)
-    for _, spawner in ipairs(workspace.Game.Jobs.CriminalATMSpawners:GetChildren()) do
+    for _, spawner in ipairs(GameLib.AtmSpawners()) do
         if spawner:GetAttribute("ComponentServerId") == spawnerId then
             return spawner:FindFirstChild("CriminalATM")
         end
@@ -816,7 +879,7 @@ function xDTaraZ.Atm.NearestAvailable()
     local root = xDTaraZ.Player.Root()
     if not root then return nil end
     local best, bestDistance
-    for _, spawner in ipairs(workspace.Game.Jobs.CriminalATMSpawners:GetChildren()) do
+    for _, spawner in ipairs(GameLib.AtmSpawners()) do
         local atm = spawner:FindFirstChild("CriminalATM")
         if xDTaraZ.Atm.IsAvailable(atm) then
             local distance = (spawner.Position - root.Position).Magnitude
@@ -845,7 +908,7 @@ function xDTaraZ.Drive.FindRoad()
     local road = State.DriveRoad
     if road and road.Part.Parent then return road end
     local best, bestLength = nil, Config.DriveRoadMin
-    for _, part in ipairs(workspace.Map:GetDescendants()) do
+    for _, part in ipairs((workspace:FindFirstChild("Map") or workspace):GetDescendants()) do
         if not part:IsA("BasePart") or part.Material ~= Enum.Material.Asphalt or not part.CanCollide then continue end
         local size = part.Size
         local length, width = math.max(size.X, size.Z), math.min(size.X, size.Z)
@@ -966,18 +1029,20 @@ end
 
 function xDTaraZ.Rewards.Redeemed()
     local stats = xDTaraZ.Util.Stats()
-    local ok, decoded = pcall(HttpService.JSONDecode, HttpService, stats and stats.Codes.Value or "")
+    local codes = stats and stats:FindFirstChild("Codes")
+    local ok, decoded = pcall(HttpService.JSONDecode, HttpService, codes and codes.Value or "")
     return ok and type(decoded) == "table" and decoded or {}
 end
 
 ---@return number, number  new codes redeemed, cash gained
 function xDTaraZ.Rewards.RedeemCodes(codes)
+    if not GameLib.CodeRemote then return 0, 0 end
     local redeemedBefore = xDTaraZ.Rewards.Redeemed()
     local cashBefore = xDTaraZ.Util.Cash()
     local success = 0
     for _, code in ipairs(codes) do
         if not redeemedBefore[code] then
-            GameLib.RemoteFolder.Code:FireServer(code)
+            GameLib.CodeRemote:FireServer(code)
             task.wait(Config.CodeDelay)
             if xDTaraZ.Rewards.Redeemed()[code] then
                 success += 1
@@ -996,13 +1061,21 @@ function xDTaraZ.Teleport.Destinations()
             table.insert(names, name)
         end
     end
+    local padCount = {}
+    for _, pad in ipairs(CollectionService:GetTagged("JobPad")) do
+        local jobId = pad:GetAttribute("JobId")
+        if jobId and pad:IsA("BasePart") then
+            padCount[jobId] = (padCount[jobId] or 0) + 1
+            Add(padCount[jobId] == 1 and "Job: " .. jobId or ("Job: %s %d"):format(jobId, padCount[jobId]), pad.Position)
+        end
+    end
     for name, position in pairs(Config.PlaceSeeds) do
         Add(name, position)
     end
     for index, position in ipairs(xDTaraZ.Atm.DropOffPositions()) do
         Add(("Criminal Drop-off %d"):format(index), position)
     end
-    local heist = workspace.Game.Heists:FindFirstChild("BankHeist")
+    local heist = GameLib.Find(workspace, "Game", "Heists", "BankHeist")
     local heistStart = heist and heist:FindFirstChild("HeistStartTeleport", true)
     if heistStart then
         Add("Bank Heist", heistStart.Position)
@@ -1155,7 +1228,7 @@ function xDTaraZ.Esp.Refresh()
         return root and math.floor((position - root.Position).Magnitude) or 0
     end
     if opt.EspAtm then
-        for _, spawner in ipairs(workspace.Game.Jobs.CriminalATMSpawners:GetChildren()) do
+        for _, spawner in ipairs(GameLib.AtmSpawners()) do
             local atm = spawner:FindFirstChild("CriminalATM")
             if xDTaraZ.Atm.IsAvailable(atm) then
                 local key = "atm" .. tostring(spawner:GetAttribute("ComponentServerId"))
@@ -1372,7 +1445,6 @@ function xDTaraZ.UI.Spawn(action)
     end
 end
 
----@param onChange function?  runs after State.Opt is updated
 function xDTaraZ.UI.StartDrive()
     local started, reason = xDTaraZ.Drive.Start()
     if started then return end
@@ -1381,6 +1453,7 @@ function xDTaraZ.UI.StartDrive()
     xDTaraZ.UI.Notify(reason or "Could not start driving", "Warning")
 end
 
+---@param onChange function?  runs after State.Opt is updated
 function xDTaraZ.UI.Toggle(group, key, text, description, onChange, risky)
     return group:AddToggle(key, {
         Text = text,
@@ -1442,8 +1515,6 @@ function xDTaraZ.UI.BuildAtm(farmTab)
         State.BankOnStop = wasOn and not on and xDTaraZ.Atm.Crimes() >= Config.CashOutCrimes
         wasOn = on
     end, true):AddKeyPicker("AtmFarmKey", { Default = "None", Mode = "Toggle" })
-    xDTaraZ.UI.Toggle(atmBox, "HopWhenEmpty", T("Server Hop When Empty", "ย้ายเซิร์ฟเมื่อ ATM หมด"), T("Moves to a new server once every ATM is taken", "ย้ายไปเซิร์ฟใหม่เมื่อ ATM ถูกปล้นหมดแล้ว"))
-    xDTaraZ.UI.Toggle(atmBox, "AvoidCops", T("Avoid Police", "หลบตำรวจ"), T("Skips ATMs with police standing close", "ข้าม ATM ที่มีตำรวจอยู่ใกล้"))
     xDTaraZ.UI.Slider(atmBox, "CashOutCrimes", T("Cash Out At Robberies", "ส่งเงินเมื่อปล้นครบ"), T("Banks the loot after this many robberies (higher = more risk)", "ส่งเงินหลังปล้นครบจำนวนนี้ (ยิ่งมากยิ่งเสี่ยง)"), 5, 30)
 
     atmBox:AddButton({ Text = T("Rob Nearest ATM", "ปล้น ATM ที่ใกล้ที่สุด"), Style = "Primary", Func = xDTaraZ.UI.Spawn(function()
@@ -1456,6 +1527,12 @@ function xDTaraZ.UI.BuildAtm(farmTab)
     atmBox:AddButton({ Text = T("Scan Map For ATMs", "สแกนหา ATM ทั้งแมพ"), Func = xDTaraZ.UI.Spawn(function()
         xDTaraZ.UI.Notify(("Found %d ATM spots"):format(xDTaraZ.Atm.Sweep()))
     end) })
+end
+
+function xDTaraZ.UI.BuildAtmSafety(farmTab)
+    local safetyBox = farmTab:AddRightGroupbox(T("ATM Safety", "ความปลอดภัย ATM"))
+    xDTaraZ.UI.Toggle(safetyBox, "HopWhenEmpty", T("Server Hop When Empty", "ย้ายเซิร์ฟเมื่อ ATM หมด"), T("Moves to a new server once every ATM is taken", "ย้ายไปเซิร์ฟใหม่เมื่อ ATM ถูกปล้นหมดแล้ว"))
+    xDTaraZ.UI.Toggle(safetyBox, "AvoidCops", T("Avoid Police", "หลบตำรวจ"), T("Skips ATMs with police standing close", "ข้าม ATM ที่มีตำรวจอยู่ใกล้"))
 end
 
 function xDTaraZ.UI.BuildFarm(window)
@@ -1475,10 +1552,12 @@ function xDTaraZ.UI.BuildFarm(window)
         xDTaraZ.UI.Notify(copied and "Discord link copied" or Config.Discord)
     end })
 
+    xDTaraZ.UI.BuildAtmSafety(farmTab)
+
     local jobBox = farmTab:AddRightGroupbox(T("Jobs", "อาชีพ"))
-    jobBox:AddDropdown("JobPick", {
+    local jobDropdown = jobBox:AddDropdown("JobPick", {
         Text = T("Switch Job", "เปลี่ยนอาชีพ"),
-        Values = { "Criminal", "Security", "Delivery" },
+        Values = xDTaraZ.Jobs.List(),
         Default = 1,
         Callback = function(value)
             State.Opt.JobPick = value
@@ -1487,6 +1566,9 @@ function xDTaraZ.UI.BuildFarm(window)
     jobBox:AddButton({ Text = T("Start Job", "เริ่มงาน"), Style = "Primary", Func = xDTaraZ.UI.Spawn(function()
         xDTaraZ.UI.Notify(xDTaraZ.Jobs.Start(State.Opt.JobPick or "Criminal") and "Job started" or "Could not start job")
     end) }):AddButton({ Text = T("Quit Job", "ออกจากงาน"), Func = xDTaraZ.UI.Spawn(xDTaraZ.Jobs.Leave) })
+        :AddButton({ Text = T("Refresh", "รีเฟรช"), Func = function()
+            jobDropdown:SetValues(xDTaraZ.Jobs.List())
+        end })
 
     local driveBox = farmTab:AddRightGroupbox(T("Drive Farm", "ฟาร์มขับรถ"))
     xDTaraZ.UI.Toggle(driveBox, "DriveFarm", T("Auto Drive", "ขับรถอัตโนมัติ"), T("Drives nonstop for passive cash", "ขับไม่หยุดเพื่อรับเงินจากการขับ"), function(on)
@@ -1503,6 +1585,10 @@ function xDTaraZ.UI.BuildRewards(window)
 
     local codeBox = rewardTab:AddLeftGroupbox(T("Codes", "โค้ด"))
     codeBox:AddButton({ Text = T("Redeem All Codes", "ใช้โค้ดทั้งหมด"), Style = "Primary", Func = xDTaraZ.UI.Spawn(function()
+        if not GameLib.CodeRemote then
+            xDTaraZ.UI.Notify("The code box was not found in this game version", "Warning")
+            return
+        end
         local count, cash = xDTaraZ.Rewards.RedeemCodes(Config.Codes)
         xDTaraZ.UI.Notify(("Redeemed %d new codes (+$%s)"):format(count, xDTaraZ.Util.Commas(cash)))
     end) })
@@ -1550,9 +1636,9 @@ function xDTaraZ.UI.BuildVehicle(window)
     carBox:AddButton({ Text = T("Spawn Car", "เรียกรถ"), Style = "Primary", Func = xDTaraZ.UI.Spawn(function()
         xDTaraZ.UI.Notify(xDTaraZ.Vehicle.Spawn(State.Opt.DriveCar) and "Car spawned" or "Spawn failed")
     end) }):AddButton({ Text = T("Despawn", "เก็บรถ"), Func = xDTaraZ.UI.Spawn(xDTaraZ.Vehicle.Despawn) })
-    carBox:AddButton({ Text = T("Refresh Garage", "รีเฟรชโรงรถ"), Func = function()
-        carDropdown:SetValues(xDTaraZ.Vehicle.Owned())
-    end })
+        :AddButton({ Text = T("Refresh", "รีเฟรช"), Func = function()
+            carDropdown:SetValues(xDTaraZ.Vehicle.Owned())
+        end })
 
     local tuneBox = carTab:AddRightGroupbox(T("Performance", "สมรรถนะ"))
     xDTaraZ.UI.Slider(tuneBox, "CarSpeed", T("Car Speed Boost", "เร่งความเร็วรถ"), T("Holds this speed while pressing W (0 = off)", "คงความเร็วนี้ขณะกด W (0 = ปิด)"), 0, 600)
@@ -1615,8 +1701,10 @@ function xDTaraZ.UI.BuildPlayer(window)
     end):AddKeyPicker("SpeedEnabledKey", { Default = "None", Mode = "Toggle" })
     xDTaraZ.UI.Slider(moveBox, "WalkSpeed", T("Walk Speed", "ความเร็วเดิน"), nil, 16, 200)
     xDTaraZ.UI.Slider(moveBox, "JumpPower", T("Jump Power", "แรงกระโดด"), nil, 50, 300)
-    xDTaraZ.UI.Toggle(moveBox, "Noclip", T("Noclip", "ทะลุวัตถุ"), T("Walk through walls", "เดินทะลุกำแพง"), xDTaraZ.Movement.SetNoclip)
-    xDTaraZ.UI.Toggle(moveBox, "InfiniteJump", T("Infinite Jump", "กระโดดไม่จำกัด"), T("Jump again in mid air", "กระโดดซ้ำกลางอากาศได้"))
+
+    local abilityBox = playerTab:AddRightGroupbox(T("Abilities", "ความสามารถ"))
+    xDTaraZ.UI.Toggle(abilityBox, "Noclip", T("Noclip", "ทะลุวัตถุ"), T("Walk through walls", "เดินทะลุกำแพง"), xDTaraZ.Movement.SetNoclip)
+    xDTaraZ.UI.Toggle(abilityBox, "InfiniteJump", T("Infinite Jump", "กระโดดไม่จำกัด"), T("Jump again in mid air", "กระโดดซ้ำกลางอากาศได้"))
 
     local worldBox = playerTab:AddRightGroupbox(T("World", "โลก"))
     xDTaraZ.UI.Toggle(worldBox, "Fullbright", T("Fullbright", "สว่างเต็มจอ"), T("Always daylight", "กลางวันตลอด"), xDTaraZ.Movement.SetFullbright)
@@ -1624,32 +1712,38 @@ end
 
 function xDTaraZ.UI.BuildVisuals(window)
     local visualTab = window:AddTab(T("Visuals", "ภาพ"), "eye", T("ESP", "ESP"))
-    local espBox = visualTab:AddLeftGroupbox(T("ESP", "ESP"))
+    local espBox = visualTab:AddLeftGroupbox(T("Robbery", "การปล้น"))
     xDTaraZ.UI.Toggle(espBox, "EspAtm", T("ATMs", "ATM"), T("Shows every ATM you can rob with its rarity", "โชว์ ATM ที่ปล้นได้ทุกตู้พร้อมระดับ"))
-    xDTaraZ.UI.Toggle(espBox, "EspCops", T("Players By Job", "ผู้เล่นตามอาชีพ"), T("Blue = police, red = outlaw, orange = delivery", "น้ำเงิน = ตำรวจ, แดง = โจร, ส้ม = ส่งของ"))
     xDTaraZ.UI.Toggle(espBox, "EspDropOff", T("Drop-off Points", "จุดส่งเงิน"), T("Where outlaws cash out", "จุดที่โจรไปส่งเงิน"))
+
+    local peopleBox = visualTab:AddRightGroupbox(T("Players", "ผู้เล่น"))
+    xDTaraZ.UI.Toggle(peopleBox, "EspCops", T("Players By Job", "ผู้เล่นตามอาชีพ"), T("Blue = police, red = outlaw, orange = delivery", "น้ำเงิน = ตำรวจ, แดง = โจร, ส้ม = ส่งของ"))
 end
 
 function xDTaraZ.UI.BuildSettings(window)
     local settingsTab = window:AddSettingsTab()
-    local sessionBox = settingsTab:AddLeftGroupbox(T("Session", "เซสชัน"))
+    local sessionBox = settingsTab:AddRightGroupbox(T("Session", "เซสชัน"))
     xDTaraZ.UI.Toggle(sessionBox, "AntiAfk", T("Anti AFK", "กันหลุด AFK"), T("Never get kicked for idling", "ไม่โดนเตะเพราะยืนนิ่ง"))
     xDTaraZ.UI.Toggle(sessionBox, "AutoRejoin", T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), T("Rejoins after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"))
     sessionBox:AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), Func = xDTaraZ.UI.Spawn(xDTaraZ.Session.Hop) })
 end
 
----Features whose game module did not load refuse to turn on and say why, instead of erroring every tick.
+---Features whose game module or remote is missing refuse to turn on and say why, instead of erroring every tick.
 function xDTaraZ.UI.GateModules()
-    local reason = T("Not available on this executor", "ใช้กับ executor นี้ไม่ได้")
+    local noExecutor = T("Not available on this executor", "ใช้กับ executor นี้ไม่ได้")
+    local changed = T("Not found after a game update", "หาไม่เจอหลังเกมอัปเดต")
     local en, th = {}, {}
     for idx in pairs(GameLib.Needs) do
         local option = Library.Options[idx]
-        if option and GameLib.Missing(idx) then
-            Library.Compat.Block(option, reason)
+        local missing = option and GameLib.Missing(idx)
+        if missing then
+            Library.Compat.Block(option, GameLib.Parts[missing] and changed or noExecutor)
+            warn("[Driving Empire] " .. idx .. " off, missing " .. (GameLib.Parts[missing] or "module " .. missing))
             en[#en + 1] = option.Info.Text.EN
             table.insert(th, option.Info.Text.TH)
         end
     end
+    if not GameLib.CodeRemote then warn("[Driving Empire] Redeem off, missing remote Code") end
     if #en == 0 then return end
 
     Library:Notify("Driving Empire", T("Not available on this executor: " .. table.concat(en, ", "), "ใช้กับ executor นี้ไม่ได้: " .. table.concat(th, ", ")), 8, "Warning")

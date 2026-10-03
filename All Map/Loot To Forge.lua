@@ -182,6 +182,7 @@ xDTaraZ.Config = {
     },
     GearTypes = { "Weapon", "Armor", "Hat" },
     EnchantPriority = { "Poison_3", "Thunder_3", "Ice_3", "Fire_3", "Poison_2", "Thunder_2", "Ice_2", "Fire_2" },
+    RuneMinTier = 2,
     EnchantRefill = 50,
     ForgeCountMax = 30,
     HuntBatch = 40,
@@ -216,7 +217,27 @@ xDTaraZ.Config = {
     KillDamage = 1e30,
     RaceRollDelay = 0.45,
     RejoinDelay = 5,
-    Codes = { "30000CCU", "20000CCU" },
+    CodeReplyWait = 1.5,
+    Codes = { "100000CCU", "50000CCU", "30000CCU", "20000CCU" },
+    Needs = {
+        CollectOre = { "Remote.Stage.StageFinishedRF", "Remote.Stage.GetOreRF", "Remote.Stage.ClaimedAllOreRE", "Config.Stage.Helper", "Config.Ore.Config" },
+        SuperLootAura = { "Remote.SuperLoot.KillSuperLootRE", "Remote.SuperLoot.RefreshSuperLootRE", "Remote.Stage.GetOreRF" },
+        AutoWorldBoss = { "Remote.WorldBoss.IntoWorldBossFight", "Remote.WorldBoss.ExitWorldBossFight", "Remote.WorldBoss.BossDeadRE", "Remote.Attack.UseAnyATKRE", "Remote.Attack.AttackEnemyServiceRE" },
+        AutoIndex = { "Remote.Forge.ForgeRF", "Remote.Index.TryClaimIndexExpRF", "Utils.ForgeUtils", "Config.Weapon.Config", "Config.Armor.Config" },
+        MaxGear = { "Remote.Forge.ForgeRF", "Remote.Backpack.EnhantEquipmentRF", "Remote.Backpack.EnchantRE", "Config.Enhant.Config", "Config.EnchStone.Show" },
+        AutoEquip = { "Remote.Backpack.TryEquipItemRE", "Config.Weapon.Helper", "Config.Armor.Helper" },
+        AutoForge = { "Remote.Forge.ForgeRF", "Remote.Backpack.TrySellItemRE", "Config.Ore.Config" },
+        AutoSell = { "Remote.Backpack.TrySellItemRE", "Config.Weapon.Config", "Config.Armor.Config" },
+        AutoTrain = { "Remote.Train.IntoAutoTrainRE", "Remote.Train.ExitAutoTrainRE", "Config.TrainArea.Config" },
+        AutoRebirth = { "Remote.Rebirth.TryRebirthRE", "Config.Rebirth.Helper" },
+        AutoUpgrade = { "Remote.Upgrade.UpgradeOnceRE", "Config.Upgrade.Config" },
+        AutoTower = { "Remote.Dungeon.TryIntoDungeonRF", "Remote.Dungeon.StartRoundRE", "Remote.Dungeon.CompleteRoundRF", "Config.Dungeon.Config.LootTab" },
+        AutoSeason = { "Remote.Season.TryClaimDailyTicRE", "Remote.Season.ExchangeGoodsRE", "Remote.Season.LuckRE", "Config.Season.GoodsConfig" },
+        AutoClaim = { "Remote.Offline.TryClaimOfflineRewardRE", "Remote.Online.TryClaimRE" },
+        AutoRace = { "Remote.Class.LuckOnceRE", "Config.Class.Config" },
+        AutoBestRace = { "Remote.Class.ChangeEquipedIndexRE", "Config.Class.Config" },
+        KeepOre = { "Remote.Stage.LostAllOreRF" },
+    },
     KaitunToggles = { "MaxGear", "AutoEquip", "AutoForge", "AutoSell", "AutoTrain", "AutoRebirth", "AutoUpgrade", "AutoClaim", "AutoSeason", "KillAura", "SuperLootAura", "AutoWorldBoss", "AutoTower", "GodMode", "AutoBestRace" },
 }
 
@@ -254,6 +275,7 @@ xDTaraZ.State = {
     MissingLabels = {},
     OreStage = {},
     Plans = {},
+    Runes = nil,
     Conns = {},
     Opt = {
         MaxGear = false,
@@ -411,13 +433,50 @@ function xDTaraZ.GameLib.Need(module)
     return loaded
 end
 
+---@param path string  dotted path under ReplicatedStorage, e.g. "Config.Ore.Config"
+---@return Instance?
+function xDTaraZ.GameLib.Find(path)
+    local node = ReplicatedStorage
+    for part in path:gmatch("[^%.]+") do
+        node = node and node:FindFirstChild(part)
+    end
+    if node then return node end
+    local folder, name = path:match("^Remote%.([^%.]+)%.([^%.]+)$")
+    return folder and xDTaraZ.Util.FindRemote(folder, name)
+end
+
+---@return table  option idx -> missing paths
+function xDTaraZ.GameLib.Missing()
+    local missing = {}
+    for idx, paths in pairs(Config.Needs) do
+        for _, path in ipairs(paths) do
+            if not xDTaraZ.GameLib.Find(path) then
+                missing[idx] = missing[idx] or {}
+                table.insert(missing[idx], path)
+            end
+        end
+    end
+    return missing
+end
+
 for _, name in ipairs({ "Util", "Data", "Stage", "Ore", "Spawn", "Forge", "Sell", "Gear", "Index", "Level", "Upgrade", "Tower", "Boss", "Season", "Claim", "SuperLoot", "Combat", "Guard", "Race", "Movement", "Session", "Scheduler" }) do
     xDTaraZ[name] = {}
 end
 
+---@return Instance?  nil when missing; a renamed folder is searched by remote name
+function xDTaraZ.Util.FindRemote(folder, name)
+    if not Remote then return nil end
+    local holder = Remote:FindFirstChild(folder)
+    if holder then return holder:FindFirstChild(name) end
+    return Remote:FindFirstChild(name, true)
+end
+
 function xDTaraZ.Util.Remote(folder, name)
+    local remote = xDTaraZ.Util.FindRemote(folder, name)
+    if remote then return remote end
+
     local holder = Remote and Remote:WaitForChild(folder, Config.RemoteTimeout)
-    local remote = holder and holder:WaitForChild(name, Config.RemoteTimeout)
+    remote = holder and holder:WaitForChild(name, Config.RemoteTimeout) or xDTaraZ.Util.FindRemote(folder, name)
     if not remote then error(("remote %s.%s not found"):format(folder, name), 0) end
     return remote
 end
@@ -1010,8 +1069,34 @@ function xDTaraZ.Gear.Gather(missing)
     end
 end
 
+---@return string[]  every rune the game has from RuneMinTier up, strongest tier first
+function xDTaraZ.Gear.RuneOrder()
+    if State.Runes then return State.Runes end
+    local show = xDTaraZ.GameLib.Find("Config.EnchStone.Show")
+    local stones = show and xDTaraZ.GameLib.Require(show)
+    if not stones then return Config.EnchantPriority end
+
+    local known = {}
+    for index, stoneId in ipairs(Config.EnchantPriority) do
+        known[stoneId] = index
+    end
+    local runes = {}
+    for stoneId in pairs(stones) do
+        if xDTaraZ.Util.Tier(stoneId) >= Config.RuneMinTier then runes[#runes + 1] = stoneId end
+    end
+    table.sort(runes, function(a, b)
+        local ta, tb = xDTaraZ.Util.Tier(a), xDTaraZ.Util.Tier(b)
+        if ta ~= tb then return ta > tb end
+        local ka, kb = known[a] or math.huge, known[b] or math.huge
+        if ka ~= kb then return ka < kb end
+        return a < b
+    end)
+    State.Runes = runes
+    return runes
+end
+
 function xDTaraZ.Gear.Priority()
-    return #State.Opt.EnchantPriority > 0 and State.Opt.EnchantPriority or Config.EnchantPriority
+    return #State.Opt.EnchantPriority > 0 and State.Opt.EnchantPriority or xDTaraZ.Gear.RuneOrder()
 end
 
 function xDTaraZ.Gear.StockEnchants(profile)
@@ -1636,17 +1721,27 @@ function xDTaraZ.Claim.All()
     end
 end
 
+---@return string  the server's message for this code ("no reply" when it stayed silent)
 function xDTaraZ.Claim.Code(code)
-    local ok, reply = pcall(function()
+    local message
+    local hasListener, messageEvent = pcall(xDTaraZ.Util.Remote, "Message", "MessageRE")
+    local conn = hasListener and messageEvent.OnClientEvent:Connect(function(text)
+        message = message or tostring(text)
+    end)
+    local ok, err = pcall(function()
         return xDTaraZ.Util.Remote("Code", "TryUseCodeRF"):InvokeServer(code)
     end)
-    return ok and reply
+    local deadline = os.clock() + Config.CodeReplyWait
+    while conn and not message and os.clock() < deadline do task.wait(0.05) end
+    if conn then conn:Disconnect() end
+    if not ok then return "failed: " .. tostring(err) end
+    return message or "no reply"
 end
 
 function xDTaraZ.Claim.AllCodes()
     local results = {}
     for _, code in ipairs(Config.Codes) do
-        table.insert(results, ("%s: %s"):format(code, tostring(xDTaraZ.Claim.Code(code))))
+        table.insert(results, ("%s: %s"):format(code, xDTaraZ.Claim.Code(code)))
     end
     return table.concat(results, "\n")
 end
@@ -1995,6 +2090,13 @@ local function BuildInterface()
         xDTaraZ.Compat.Block(option, T("Not available on this executor", "ใช้กับ executor นี้ไม่ได้"))
     end
 
+    local function BlockMissing()
+        for idx, paths in pairs(xDTaraZ.GameLib.Missing()) do
+            warn("[LootToForge]", idx, "blocked, missing:", table.concat(paths, ", "))
+            if Options[idx] then xDTaraZ.Compat.Block(Options[idx], T("Not available after a game update", "ใช้ไม่ได้หลังเกมอัปเดต")) end
+        end
+    end
+
     local function Pump()
         for _, halt in ipairs(State.Halted) do
             TurnOff(halt[1])
@@ -2161,16 +2263,18 @@ local function BuildInterface()
                 opt.EnhanceTarget = value
             end,
         })
-        opt.EnchantPriority = table.clone(Config.EnchantPriority)
+        local runes = xDTaraZ.Gear.RuneOrder()
+        opt.EnchantPriority = table.clone(runes)
         gearBox:AddDropdown("EnchantPriority", {
             Text = T("Runes To Use", "รูนที่ใช้"),
             Description = T("Stronger runes go in first", "รูนที่แรงกว่าใส่ก่อน"),
-            Values = Config.EnchantPriority,
+            Values = runes,
             Multi = true,
-            Default = Config.EnchantPriority,
+            Default = runes,
+            Searchable = #runes > 8,
             Callback = function(selected)
                 local order = {}
-                for _, stoneId in ipairs(Config.EnchantPriority) do
+                for _, stoneId in ipairs(runes) do
                     if selected[stoneId] then order[#order + 1] = stoneId end
                 end
                 if #order == 0 then Notify("No rune selected, using all runes", "Warning") end
@@ -2200,7 +2304,7 @@ local function BuildInterface()
             return xDTaraZ.Gear.EnhanceSlot(opt.EnhanceSlot, opt.EnhanceTarget)
         end, function(level) return level and ("%s is +%d"):format(opt.EnhanceSlot, level) or "Nothing equipped there" end) })
 
-        local rewardBox = tab:AddLeftGroupbox(T("Rewards", "รางวัล"))
+        local rewardBox = tab:AddRightGroupbox(T("Rewards", "รางวัล"))
         Feature(rewardBox, "AutoClaim", T("Auto Claim", "รับรางวัลอัตโนมัติ"), T("Claims every free reward, including index", "รับรางวัลฟรีทุกอย่าง รวมสมุดสะสม"))
         rewardBox:AddButton({ Text = T("Claim Now", "รับเดี๋ยวนี้"), Style = "Success", Func = Action(xDTaraZ.Claim.All) })
         rewardBox:AddButton({ Text = T("Redeem All Codes", "ใช้โค้ดทั้งหมด"), Style = "Primary", Func = Action(function()
@@ -2226,7 +2330,23 @@ local function BuildInterface()
         Feature(stageBox, "CollectOre", T("Auto Collect Ore", "เก็บแร่อัตโนมัติ"), T("Clears the stage and collects its ores nonstop", "เคลียร์ด่านแล้วเก็บแร่ไม่หยุด"))
         MultiSelect(stageBox, "CollectRarities", T("Ore Rarity Filter", "กรอง rarity แร่"), T("Only collect these rarities", "เก็บเฉพาะ rarity ที่เลือก"), rarityNames)
 
-        local indexBox = tab:AddLeftGroupbox(T("Index", "สมุดสะสม"))
+        local combatBox = tab:AddLeftGroupbox(T("Combat", "ต่อสู้"))
+        local killAura = Feature(combatBox, "KillAura", T("Kill Aura", "ฆ่ารอบตัว"), T("Every monster in your fight dies instantly", "มอนสเตอร์ทุกตัวในการต่อสู้ตายทันที"), function(value)
+            if value then xDTaraZ.Combat.Start() end
+        end)
+        NeedModule(killAura, ReplicatedStorage.Utils.CommunicationUtils)
+        Feature(combatBox, "SuperLootAura", T("Kill Ore Boss", "ฆ่าบอสแร่"), T("Kills rare ore bosses the moment they spawn", "ฆ่าบอสแร่หายากทันทีที่เกิด"), function(value)
+            if value then xDTaraZ.SuperLoot.KillExisting() end
+        end)
+        combatBox:AddButton({ Text = T("Exit Fight Now", "ออกจากการต่อสู้เดี๋ยวนี้"), Style = "Warning", Func = Action(xDTaraZ.Stage.ExitFight) })
+
+        local bossBox = tab:AddRightGroupbox(T("World Boss", "บอสโลก"))
+        Feature(bossBox, "AutoWorldBoss", T("Auto World Boss", "บอสโลกอัตโนมัติ"), T("Joins every world boss and kills it", "เข้าบอสโลกทุกรอบแล้วฆ่า"), function(value)
+            if not value and LocalPlayer:GetAttribute("IntoFight") == "WorldBoss" then task.spawn(xDTaraZ.Util.Try, xDTaraZ.Boss.Leave) end
+        end)
+        Check(bossBox, "BossCards", T("Take every reward card", "เปิดการ์ดรางวัลทุกใบ"))
+
+        local indexBox = tab:AddRightGroupbox(T("Index", "สมุดสะสม"))
         MultiSelect(indexBox, "IndexTypes", T("Index Types", "ประเภทที่จะเก็บ"), nil, Config.GearTypes)
         Pick(indexBox, "MissingItem", T("Missing Item", "ของที่ยังไม่มี"), T("Chance shown is per forge with the best ore", "เปอร์เซ็นต์ = โอกาสต่อการหลอมหนึ่งครั้งด้วยแร่ที่ดีที่สุด"), function()
             return { "..." }
@@ -2251,20 +2371,6 @@ local function BuildInterface()
             local count, level = xDTaraZ.Index.Progress()
             return ("Index %d, level %d"):format(count, level)
         end) }):AddButton({ Text = T("Claim Rewards", "รับรางวัล"), Style = "Success", Func = Action(xDTaraZ.Index.ClaimAll) })
-
-        local combatBox = tab:AddRightGroupbox(T("Combat", "ต่อสู้"))
-        local killAura = Feature(combatBox, "KillAura", T("Kill Aura", "ฆ่ารอบตัว"), T("Every monster in your fight dies instantly", "มอนสเตอร์ทุกตัวในการต่อสู้ตายทันที"), function(value)
-            if value then xDTaraZ.Combat.Start() end
-        end)
-        NeedModule(killAura, ReplicatedStorage.Utils.CommunicationUtils)
-        Feature(combatBox, "SuperLootAura", T("Kill Ore Boss", "ฆ่าบอสแร่"), T("Kills rare ore bosses the moment they spawn", "ฆ่าบอสแร่หายากทันทีที่เกิด"), function(value)
-            if value then xDTaraZ.SuperLoot.KillExisting() end
-        end)
-        Feature(combatBox, "AutoWorldBoss", T("Auto World Boss", "บอสโลกอัตโนมัติ"), T("Joins every world boss and kills it", "เข้าบอสโลกทุกรอบแล้วฆ่า"), function(value)
-            if not value and LocalPlayer:GetAttribute("IntoFight") == "WorldBoss" then task.spawn(xDTaraZ.Util.Try, xDTaraZ.Boss.Leave) end
-        end)
-        Check(combatBox, "BossCards", T("Take every reward card", "เปิดการ์ดรางวัลทุกใบ"))
-        combatBox:AddButton({ Text = T("Exit Fight Now", "ออกจากการต่อสู้เดี๋ยวนี้"), Style = "Warning", Func = Action(xDTaraZ.Stage.ExitFight) })
     end
 
     local function BuildForge(tab)
@@ -2466,7 +2572,7 @@ local function BuildInterface()
 
     local function BuildSettings(window)
         local settingsTab = window:AddSettingsTab()
-        local sessionBox = settingsTab:AddLeftGroupbox(T("Session", "เซสชัน"))
+        local sessionBox = settingsTab:AddRightGroupbox(T("Session", "เซสชัน"))
         Toggle(sessionBox, "AutoRejoin", T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), T("Rejoins the game by itself after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"))
         Toggle(sessionBox, "LowGraphics", T("FPS Boost", "เพิ่ม FPS"), T("Turns off 3D rendering to save CPU and GPU", "ปิดการแสดงผล 3D ประหยัด CPU/GPU"), xDTaraZ.Session.SetLowGraphics)
         sessionBox:AddButton({ Text = T("Rejoin Now", "เข้าเกมใหม่เดี๋ยวนี้"), Func = Action(xDTaraZ.Session.Rejoin) })
@@ -2529,6 +2635,7 @@ local function BuildInterface()
         for _, section in ipairs(sections) do
             xDTaraZ.Util.Try(section[1], section[2])
         end
+        xDTaraZ.Util.Try(BlockMissing)
 
         Library:Every(Config.PumpInterval, Pump)
         task.spawn(function()

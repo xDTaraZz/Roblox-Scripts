@@ -345,11 +345,39 @@ function xDTaraZ.Util.Mount(instance)
     instance.Parent = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", Config.LoadTimeout)
 end
 
-local Remotes = ReplicatedStorage:WaitForChild("Remotes", Config.LoadTimeout)
-local GameplayRemotes = Remotes and Remotes:WaitForChild("Gameplay", Config.LoadTimeout)
-if not GameplayRemotes then
-    xDTaraZ.Util.Alert("Murder Mystery 2 has not finished loading. Rejoin and run the script again.")
-    return
+xDTaraZ.GameLib = {}
+local GameLib = xDTaraZ.GameLib
+
+---@param class string  RemoteFunction or BaseRemoteEvent
+---@return Instance?    remote in its usual folder, else the first with that name anywhere in ReplicatedStorage
+function GameLib.Remote(folder, name, class)
+    local remote = folder and folder:FindFirstChild(name)
+    remote = remote or ReplicatedStorage:FindFirstChild(name, true)
+    return remote and remote:IsA(class) and remote or nil
+end
+
+do
+    local remotes = ReplicatedStorage:WaitForChild("Remotes", Config.LoadTimeout)
+    local gameplay = remotes and remotes:WaitForChild("Gameplay", Config.LoadTimeout)
+    local extras = remotes and remotes:FindFirstChild("Extras")
+    GameLib.PlayerData = GameLib.Remote(gameplay, "GetCurrentPlayerData", "RemoteFunction")
+    GameLib.CoinCollected = GameLib.Remote(gameplay, "CoinCollected", "BaseRemoteEvent")
+    GameLib.CoinsStarted = GameLib.Remote(gameplay, "CoinsStarted", "BaseRemoteEvent")
+    GameLib.RoundStart = GameLib.Remote(gameplay, "RoundStart", "BaseRemoteEvent")
+    GameLib.RedeemCode = GameLib.Remote(extras, "RedeemCode", "RemoteFunction")
+end
+
+GameLib.Needs = {
+    RoleNotify = { "RoundStart" },
+    ResetWhenFull = { "CoinCollected" },
+}
+
+---@return string?  first remote the feature needs that is gone
+function GameLib.Missing(idx)
+    for _, name in ipairs(GameLib.Needs[idx] or {}) do
+        if not GameLib[name] then return name end
+    end
+    return nil
 end
 
 function xDTaraZ.Util.Connect(signal, fn)
@@ -379,7 +407,8 @@ function xDTaraZ.Round.RefreshRoles()
         return
     end
     State.LastRoleFetch = os.clock()
-    local ok, roster = pcall(GameplayRemotes.GetCurrentPlayerData.InvokeServer, GameplayRemotes.GetCurrentPlayerData)
+    if not GameLib.PlayerData then return end
+    local ok, roster = pcall(GameLib.PlayerData.InvokeServer, GameLib.PlayerData)
     if ok and type(roster) == "table" then
         State.Roles = roster
     end
@@ -414,6 +443,16 @@ function xDTaraZ.Round.Map()
         if child.Name ~= Config.LobbyName and child:IsA("Model") and child:FindFirstChild("CoinContainer") then
             return child
         end
+    end
+    return nil
+end
+
+---@return Model?  lobby by its usual name, else any workspace model named like a lobby
+function xDTaraZ.Round.Lobby()
+    local lobby = workspace:FindFirstChild(Config.LobbyName)
+    if lobby then return lobby end
+    for _, child in ipairs(workspace:GetChildren()) do
+        if child:IsA("Model") and child.Name:find("Lobby") then return child end
     end
     return nil
 end
@@ -972,15 +1011,20 @@ function xDTaraZ.Farm.Step()
 end
 
 function xDTaraZ.Farm.InitBagTracking()
-    xDTaraZ.Util.Connect(GameplayRemotes.CoinCollected.OnClientEvent, function(_, current, maximum)
-        State.Bag.Current = tonumber(current) or 0
-        State.Bag.Max = tonumber(maximum) or 0
-    end)
-    xDTaraZ.Util.Connect(GameplayRemotes.CoinsStarted.OnClientEvent, function()
-        State.Bag.Current, State.Bag.Max = 0, 0
-        table.clear(State.SkippedCoins)
-    end)
-    xDTaraZ.Util.Connect(GameplayRemotes.RoundStart.OnClientEvent, function()
+    if GameLib.CoinCollected then
+        xDTaraZ.Util.Connect(GameLib.CoinCollected.OnClientEvent, function(_, current, maximum)
+            State.Bag.Current = tonumber(current) or 0
+            State.Bag.Max = tonumber(maximum) or 0
+        end)
+    end
+    if GameLib.CoinsStarted then
+        xDTaraZ.Util.Connect(GameLib.CoinsStarted.OnClientEvent, function()
+            State.Bag.Current, State.Bag.Max = 0, 0
+            table.clear(State.SkippedCoins)
+        end)
+    end
+    if not GameLib.RoundStart then return end
+    xDTaraZ.Util.Connect(GameLib.RoundStart.OnClientEvent, function()
         State.Bag.Current, State.Bag.Max = 0, 0
         table.clear(State.Roles)
     end)
@@ -1047,7 +1091,7 @@ function xDTaraZ.Visual.XRayStep()
         end
         return
     end
-    local map = xDTaraZ.Round.Map() or workspace:FindFirstChild(Config.LobbyName)
+    local map = xDTaraZ.Round.Map() or xDTaraZ.Round.Lobby()
     if not map or State.XRayMap == map then
         return
     end
@@ -1154,7 +1198,7 @@ function xDTaraZ.Teleport.ToPlayer(name)
 end
 
 function xDTaraZ.Teleport.ToLobby()
-    local lobby = workspace:FindFirstChild(Config.LobbyName)
+    local lobby = xDTaraZ.Round.Lobby()
     local spawnPart = lobby and (lobby:FindFirstChild("Spawns", true) or lobby:FindFirstChildWhichIsA("SpawnLocation", true))
     local part = spawnPart and (spawnPart:IsA("BasePart") and spawnPart or spawnPart:FindFirstChildWhichIsA("BasePart"))
     if not part and lobby then
@@ -1284,7 +1328,9 @@ function xDTaraZ.Visual.SetFullbright(enabled)
 end
 
 function xDTaraZ.Session.RedeemCode(code)
-    local ok, message = pcall(Remotes.Extras.RedeemCode.InvokeServer, Remotes.Extras.RedeemCode, code)
+    local remote = GameLib.RedeemCode
+    if not remote then return "The code box was not found in this game version" end
+    local ok, message = pcall(remote.InvokeServer, remote, code)
     return ok and tostring(message) or "Request failed"
 end
 
@@ -1317,7 +1363,8 @@ function xDTaraZ.Session.InitAntiAfk()
 end
 
 function xDTaraZ.Session.InitRoleNotify(notify)
-    xDTaraZ.Util.Connect(Remotes.Gameplay.RoundStart.OnClientEvent, function()
+    if not GameLib.RoundStart then return end
+    xDTaraZ.Util.Connect(GameLib.RoundStart.OnClientEvent, function()
         task.wait(2)
         State.LastRoleFetch = 0
         xDTaraZ.Round.RefreshRoles()
@@ -1816,12 +1863,6 @@ local function BuildInterface()
         })
         live.Bag = coinBox:AddProgressBar("StatusBag", { Text = T("Coin Bag", "ถุงเหรียญ"), Max = 1, Default = 0 })
 
-        local roundBox = tab:AddRightGroupbox(T("Round", "รอบนี้"))
-        live.Role = roundBox:AddLabel("You: -")
-        live.Murderer = roundBox:AddLabel("Murderer: ?")
-        live.Sheriff = roundBox:AddLabel("Sheriff: ?")
-        live.BagCount = roundBox:AddLabel("Bag: 0 / 0")
-
         local discordBox = tab:AddRightGroupbox("Discord", "link")
         discordBox:AddLabel(Config.Discord)
         discordBox:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ Discord"), Style = "Primary", Func = function()
@@ -1829,6 +1870,12 @@ local function BuildInterface()
             if copy then copy(Config.Discord) end
             Notify(copy and "Discord link copied" or Config.Discord)
         end })
+
+        local roundBox = tab:AddRightGroupbox(T("Round", "รอบนี้"))
+        live.Role = roundBox:AddLabel("You: -")
+        live.Murderer = roundBox:AddLabel("Murderer: ?")
+        live.Sheriff = roundBox:AddLabel("Sheriff: ?")
+        live.BagCount = roundBox:AddLabel("Bag: 0 / 0")
     end
 
     local function BuildMiscTab(window)
@@ -1901,6 +1948,20 @@ local function BuildInterface()
         end
     end
 
+    local function GateRemotes()
+        local reason = T("Not found after a game update", "หาไม่เจอหลังเกมอัปเดต")
+        for idx in pairs(GameLib.Needs) do
+            local missing = GameLib.Missing(idx)
+            if missing and Library.Options[idx] then
+                Library.Compat.Block(idx, reason)
+                warn("[MM2] " .. idx .. " off, missing remote " .. missing)
+            end
+        end
+        for _, name in ipairs({ "PlayerData", "CoinsStarted", "RedeemCode" }) do
+            if not GameLib[name] then warn("[MM2] missing remote " .. name) end
+        end
+    end
+
     local function StartLive()
         Library:Every(Config.StatusRefresh, function()
             ReportHalts()
@@ -1920,6 +1981,7 @@ local function BuildInterface()
         xDTaraZ.Util.Try(BuildVisualTab, window)
         xDTaraZ.Util.Try(BuildMiscTab, window)
         xDTaraZ.Util.Try(window.AddSettingsTab, window)
+        xDTaraZ.Util.Try(GateRemotes)
         xDTaraZ.Util.Try(StartLive)
     end
 

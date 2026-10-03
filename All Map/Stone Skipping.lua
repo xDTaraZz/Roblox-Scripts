@@ -187,7 +187,14 @@ xDTaraZ.Config = {
     RebirthInterval = 15,
     RateWindow = 120,
     RejoinDelay = 5,
-    Codes = { "10KCCU", "SECRET", "WORLD4", "WELCOME", "THANKYOU", "5KCCU" },
+    Codes = { "10KCCU", "SECRET", "WORLD4", "WORLD3", "5KCCU", "WELCOME" },
+    PotionKinds = { "Skill", "Win", "Luck" },
+    Needs = {
+        AutoFarm = { "Worlds.Definitions", "Balance.TrainingPasses" },
+        AutoBuyStone = { "Balance.Stones", "Worlds.Definitions" },
+        AutoTravel = { "Worlds.Definitions" },
+        AutoClaim = { "Balance.GiftRewards", "Balance.DailyRewards.Rewards" },
+    },
 }
 
 xDTaraZ.State = {
@@ -219,7 +226,7 @@ xDTaraZ.State = {
         HatchReserve = 0,
         AutoInventoryHatch = false,
         AutoPotions = false,
-        Potions = { Skill = true, Win = true, Luck = true },
+        Potions = {},
         AutoClaim = false,
         AutoTravel = false,
         SpeedOn = false,
@@ -231,14 +238,33 @@ xDTaraZ.State = {
 }
 
 local Config, State = xDTaraZ.Config, xDTaraZ.State
-local Network = ReplicatedStorage:WaitForChild("SkippingNetwork", Config.LoadTimeout)
+
+xDTaraZ.GameLib = {}
+
+---@return Instance?  the network folder; a renamed one is found by its Request + Event remotes
+function xDTaraZ.GameLib.FindNetwork()
+    local named = ReplicatedStorage:FindFirstChild("SkippingNetwork")
+    if named then return named end
+    for _, remote in ipairs(ReplicatedStorage:GetDescendants()) do
+        if remote.Name == "Request" and remote:IsA("RemoteEvent") and remote.Parent:FindFirstChild("Event") then return remote.Parent end
+    end
+    return ReplicatedStorage:WaitForChild("SkippingNetwork", Config.LoadTimeout)
+end
+
+local Network = xDTaraZ.GameLib.FindNetwork()
 local Shared = ReplicatedStorage:WaitForChild("Shared", Config.LoadTimeout)
 local SharedConfig = Shared and Shared:WaitForChild("Config", Config.LoadTimeout)
 
-xDTaraZ.GameLib = {
-    Request = Network and Network:WaitForChild("Request", Config.LoadTimeout),
-    Event = Network and Network:WaitForChild("Event", Config.LoadTimeout),
-}
+xDTaraZ.GameLib.Request = Network and Network:WaitForChild("Request", Config.LoadTimeout)
+xDTaraZ.GameLib.Event = Network and Network:WaitForChild("Event", Config.LoadTimeout)
+
+---@return ModuleScript?  Shared.Config.<name>, or the first module with that name anywhere under Shared
+function xDTaraZ.GameLib.Module(name)
+    local direct = SharedConfig and SharedConfig:FindFirstChild(name)
+    if direct then return direct end
+    local found = Shared and Shared:FindFirstChild(name, true)
+    return found and found:IsA("ModuleScript") and found or nil
+end
 
 ---@return boolean, any  ok + module, retried from an identity-2 thread when the executor can really switch
 function xDTaraZ.GameLib.RequireAsGame(module)
@@ -270,9 +296,27 @@ function xDTaraZ.GameLib.Require(module)
 end
 
 local GameLib = xDTaraZ.GameLib
-GameLib.Balance = GameLib.Require(SharedConfig and SharedConfig:FindFirstChild("GameBalance"))
-GameLib.Worlds = GameLib.Require(SharedConfig and SharedConfig:FindFirstChild("Worlds"))
+GameLib.Balance = GameLib.Require(GameLib.Module("GameBalance"))
+GameLib.Worlds = GameLib.Require(GameLib.Module("Worlds"))
 GameLib.Ready = GameLib.Balance ~= nil and GameLib.Worlds ~= nil and GameLib.Request ~= nil
+
+---@return table  option idx -> GameLib paths that are gone
+function xDTaraZ.GameLib.Missing()
+    local missing = {}
+    for idx, paths in pairs(Config.Needs) do
+        for _, path in ipairs(paths) do
+            local node = GameLib
+            for part in path:gmatch("[^.]+") do
+                node = type(node) == "table" and node[part] or nil
+            end
+            if node == nil then
+                missing[idx] = missing[idx] or {}
+                table.insert(missing[idx], path)
+            end
+        end
+    end
+    return missing
+end
 
 xDTaraZ.StoneById = {}
 do
@@ -1007,6 +1051,19 @@ function xDTaraZ.Rewards.UsePotions()
     end
 end
 
+---@return string[]  known potion kinds plus any new kind found in your saved data
+function xDTaraZ.Rewards.PotionKinds()
+    local kinds = table.clone(Config.PotionKinds)
+    local known = {}
+    for _, kind in ipairs(kinds) do known[kind] = true end
+
+    local data = xDTaraZ.Game.Profile()
+    for kind in pairs(data and data.Potions or {}) do
+        if not known[kind] then table.insert(kinds, kind) end
+    end
+    return kinds
+end
+
 function xDTaraZ.Rewards.RedeemAll()
     for _, code in ipairs(Config.Codes) do
         xDTaraZ:Send("RedeemCode", code)
@@ -1295,7 +1352,7 @@ local function BuildInterface()
             end
         end })
 
-        local discordBox = MainTab:AddRightGroupbox(T("Discord", "Discord"), "link")
+        local discordBox = MainTab:AddLeftGroupbox(T("Discord", "Discord"), "link")
         discordBox:AddLabel(Config.Discord)
         discordBox:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ Discord"), Style = "Primary", Func = function()
             local copy = setclipboard or toclipboard
@@ -1317,6 +1374,7 @@ local function BuildInterface()
             Default = 1,
             Callback = function(value) opt.FarmMode = value or "Smart" end,
         })
+        farmBox:AddButton({ Text = T("Throw Now", "ปาหินเดี๋ยวนี้"), Style = "Primary", Func = Request("ThrowNow") })
 
         local function ZoneNames()
             local names = { "Best" }
@@ -1326,14 +1384,15 @@ local function BuildInterface()
             return names
         end
 
-        local zoneDropdown = farmBox:AddDropdown("TrainZone", {
+        local trainBox = FarmTab:AddRightGroupbox(T("Training", "ฝึก"), "target")
+        local zoneDropdown = trainBox:AddDropdown("TrainZone", {
             Text = T("Training Zone", "โซนฝึก"),
             Description = T("Best = strongest zone you have unlocked", "Best = โซนที่ดีที่สุดที่ปลดล็อกแล้ว"),
             Values = ZoneNames(),
             Default = 1,
             Callback = function(value) opt.TrainZone = value or "Best" end,
         })
-        farmBox:AddButton({ Text = T("Refresh Zones", "รีเฟรชรายการโซน"), Func = function()
+        trainBox:AddButton({ Text = T("Refresh Zones", "รีเฟรชรายการโซน"), Func = function()
             table.clear(State.OwnedPasses)
             xDTaraZ.Train.CheckPasses()
             zoneDropdown:SetValues(ZoneNames())
@@ -1342,10 +1401,7 @@ local function BuildInterface()
             xDTaraZ.Train.CheckPasses()
             zoneDropdown:SetValues(ZoneNames())
         end)
-
-        local nowBox = FarmTab:AddRightGroupbox(T("Manual", "สั่งเอง"), "target")
-        nowBox:AddButton({ Text = T("Throw Now", "ปาหินเดี๋ยวนี้"), Style = "Primary", Func = Request("ThrowNow") })
-        nowBox:AddButton({ Text = T("Go Train Now", "ไปฝึกเดี๋ยวนี้"), Func = Request("TrainNow") })
+        trainBox:AddButton({ Text = T("Go Train Now", "ไปฝึกเดี๋ยวนี้"), Func = Request("TrainNow") })
     end
 
     local function BuildStones(window)
@@ -1399,11 +1455,13 @@ local function BuildInterface()
         Feature(rewardBox, "AutoClaim", T("Auto Claim", "รับรางวัลอัตโนมัติ"), T("Claims playtime gifts, daily, offline and group rewards", "รับของขวัญเวลาเล่น รางวัลรายวัน ออฟไลน์ และกลุ่ม"))
         rewardBox:AddButton({ Text = T("Claim Now", "รับเดี๋ยวนี้"), Func = Request("ClaimNow") })
         Feature(rewardBox, "AutoPotions", T("Auto Use Potions", "ใช้ยาอัตโนมัติ"), T("Keeps the selected boosts running", "เปิดบูสต์ที่เลือกไว้ตลอด"))
+        local potionKinds = xDTaraZ.Rewards.PotionKinds()
+        for _, kind in ipairs(potionKinds) do opt.Potions[kind] = true end
         rewardBox:AddDropdown("Potions", {
             Text = T("Potions", "ยา"),
-            Values = { "Skill", "Win", "Luck" },
+            Values = potionKinds,
             Multi = true,
-            Default = { "Skill", "Win", "Luck" },
+            Default = potionKinds,
             Callback = function(selected) opt.Potions = selected end,
         })
         rewardBox:AddButton({ Text = T("Use Potions Now", "ใช้ยาเดี๋ยวนี้"), Func = Request("PotionNow") })
@@ -1434,7 +1492,7 @@ local function BuildInterface()
 
     local function BuildSettings(window)
         local settingsTab = window:AddSettingsTab()
-        local sessionBox = settingsTab:AddLeftGroupbox(T("Session", "เซสชัน"), "gear")
+        local sessionBox = settingsTab:AddRightGroupbox(T("Session", "เซสชัน"), "gear")
         Toggle(sessionBox, "AntiAfk", T("Anti AFK", "กันหลุด AFK"), T("Stops the idle kick", "กันโดนเตะเพราะไม่ขยับ"))
         Toggle(sessionBox, "AutoRejoin", T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), T("Rejoins by itself after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"))
     end
@@ -1452,6 +1510,10 @@ local function BuildInterface()
                 task.defer(toggle.SetValue, toggle, false)
                 return false
             end)
+        end
+        for idx, paths in pairs(GameLib.Ready and GameLib.Missing() or {}) do
+            warn("[StoneSkipping]", idx, "blocked, missing:", table.concat(paths, ", "))
+            Library.Compat.Block(idx, T("Not available after a game update", "ใช้ไม่ได้หลังเกมอัปเดต"))
         end
         local en, th = xDTaraZ:Unsupported()
         if not en then return end

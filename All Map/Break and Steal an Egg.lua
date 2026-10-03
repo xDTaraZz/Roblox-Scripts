@@ -244,6 +244,10 @@ xDTaraZ.GameLib = {
     Remote = setmetatable({}, {
         __index = function(self, name)
             local remote = ReplicatedStorage:FindFirstChild(name)
+            if not remote then
+                local nested = ReplicatedStorage:FindFirstChild(name, true)
+                remote = nested and (nested:IsA("BaseRemoteEvent") or nested:IsA("RemoteFunction")) and nested or nil
+            end
             if remote then rawset(self, name, remote) end
             return remote
         end,
@@ -273,6 +277,10 @@ end
 function xDTaraZ.GameLib.Require(name)
     local module = Shared and Shared:FindFirstChild(name)
     if not module then
+        local nested = Shared and Shared:FindFirstChild(name, true)
+        module = nested and nested:IsA("ModuleScript") and nested or nil
+    end
+    if not module then
         warn("[BreakStealEgg] missing game module", name)
         return nil
     end
@@ -299,23 +307,30 @@ end
 
 GameLib.Needs = {
     AutoSteal = { "Rewards" },
-    AutoBreak = { "Pickaxe", "Eggs", "Rewards" },
-    RobCarriers = { "Bat" },
-    AutoSell = { "Rewards" },
+    AutoBreak = { "Pickaxe", "Eggs", "Rewards", "Remote.EggHitRequest" },
+    RobCarriers = { "Bat", "Remote.BatHitRequest" },
+    AutoPlace = { "Remote.PetsInventoryRemote" },
+    AutoSell = { "Rewards", "Remote.BackpackSellRemote" },
+    AutoClaim = { "Remote.IndexRemote", "Remote.OfflineRewardRemote" },
+    AutoHatch = { "Remote.MergeMachineRemote" },
     AutoBuyPickaxe = { "Pickaxe" },
     AutoUpgradePlot = { "Plot" },
     AutoTrail = { "Trails" },
     AutoTreadmill = { "Treadmill" },
     SpeedOn = { "Speed" },
     EspEggs = { "Pickaxe" },
-    BatLoop = { "Bat" },
-    BatAura = { "Bat" },
+    BatLoop = { "Bat", "Remote.BatHitRequest" },
+    BatAura = { "Bat", "Remote.BatHitRequest" },
 }
 
----@return string?  first game module the feature needs that did not load
+---@return string?  first module ("Rewards") or remote ("Remote.EggHitRequest") the feature needs that is gone
 function GameLib.Missing(idx)
     for _, key in ipairs(GameLib.Needs[idx] or {}) do
-        if GameLib[key] == nil then return key end
+        local node = GameLib
+        for part in key:gmatch("[^.]+") do
+            node = type(node) == "table" and node[part] or nil
+        end
+        if node == nil then return key end
     end
     return nil
 end
@@ -1553,7 +1568,6 @@ local function BuildInterface()
             Numeric = true,
             Callback = function(value) opt.StealMinValue = tonumber(value) or 0 end,
         })
-        Toggle(stealBox, "RobCarriers", { Text = T("Rob Carriers", "ปล้นคนที่แบกสัตว์"), Description = T("Bats players carrying animals and takes what they drop", "ตีผู้เล่นที่แบกสัตว์แล้วเก็บของที่หล่น"), Risky = true })
         stealBox:AddButton({ Text = T("Steal Best Now", "ขโมยตัวดีสุดเดี๋ยวนี้"), Style = "Primary", Func = Request("StealNow") })
         stealBox:AddButton({ Text = T("Bank Now", "เก็บเข้าฐานเดี๋ยวนี้"), Func = Request("BankNow") })
 
@@ -1574,6 +1588,9 @@ local function BuildInterface()
             Min = 1, Max = 200, Default = opt.MaxHits, Rounding = 0,
             Callback = function(value) opt.MaxHits = tonumber(value) or opt.MaxHits end,
         })
+
+        local robBox = tab:AddRightGroupbox(T("Rob Players", "ปล้นผู้เล่น"), "swords")
+        Toggle(robBox, "RobCarriers", { Text = T("Rob Carriers", "ปล้นคนที่แบกสัตว์"), Description = T("Bats players carrying animals and takes what they drop", "ตีผู้เล่นที่แบกสัตว์แล้วเก็บของที่หล่น"), Risky = true })
     end
 
     local function BuildBase(window)
@@ -1583,15 +1600,17 @@ local function BuildInterface()
         local placeBox = tab:AddLeftGroupbox(T("Animals", "สัตว์"), "mushroom")
         Feature(placeBox, "AutoPlace", { Text = T("Auto Place Best", "วางตัวดีสุดอัตโนมัติ"), Description = T("Keeps the best earners standing on your base", "วางตัวที่ทำเงินดีสุดไว้บนฐานตลอด") })
         placeBox:AddButton({ Text = T("Place Best Now", "วางตัวดีสุดเดี๋ยวนี้"), Func = Request("Place") })
-        Feature(placeBox, "AutoSell", { Text = T("Auto Sell Leftovers", "ขายตัวที่เหลืออัตโนมัติ"), Description = T("Sells animals in your backpack that did not fit on the base", "ขายสัตว์ในกระเป๋าที่ไม่ได้วางบนฐาน") })
-        placeBox:AddDropdown("KeepRarities", {
+
+        local sellBox = tab:AddLeftGroupbox(T("Sell", "ขาย"), "coin")
+        Feature(sellBox, "AutoSell", { Text = T("Auto Sell Leftovers", "ขายตัวที่เหลืออัตโนมัติ"), Description = T("Sells animals in your backpack that did not fit on the base", "ขายสัตว์ในกระเป๋าที่ไม่ได้วางบนฐาน") })
+        sellBox:AddDropdown("KeepRarities", {
             Text = T("Never Sell", "ไม่ขาย"),
             Values = xDTaraZ.RarityLadder,
             Multi = true,
             Default = {},
             Callback = function(selected) opt.KeepRarities = ToSet(selected) end,
         })
-        placeBox:AddButton({ Text = T("Sell All Now", "ขายทั้งหมดเดี๋ยวนี้"), Func = Request("SellNow") })
+        sellBox:AddButton({ Text = T("Sell All Now", "ขายทั้งหมดเดี๋ยวนี้"), Func = Request("SellNow") })
 
         local shopBox = tab:AddRightGroupbox(T("Upgrades", "อัปเกรด"), "coin")
         Feature(shopBox, "AutoUpgrade", { Text = T("Auto Upgrade", "อัปเกรดอัตโนมัติ"), Description = T("Buys the picked upgrades as soon as you can pay", "ซื้ออัปเกรดที่เลือกทันทีที่เงินพอ") }, xDTaraZ.Shop.Sync)
@@ -1615,11 +1634,13 @@ local function BuildInterface()
             Callback = function(value) opt.CashReserve = tonumber(value) or 0 end,
         })
 
-        local rewardBox = tab:AddLeftGroupbox(T("Rewards", "รางวัล"), "star")
+        local hatchBox = tab:AddLeftGroupbox(T("Eggs", "ไข่"), "mushroom")
+        Feature(hatchBox, "AutoHatch", { Text = T("Auto Hatch Eggs", "ฟักไข่อัตโนมัติ"), Description = T("Places eggs from your backpack on your base and hatches them when ready", "วางไข่ในกระเป๋าบนฐานแล้วฟักเมื่อพร้อม") })
+        hatchBox:AddButton({ Text = T("Hatch Eggs Now", "ฟักไข่เดี๋ยวนี้"), Func = Request("HatchNow") })
+
+        local rewardBox = tab:AddRightGroupbox(T("Rewards", "รางวัล"), "star")
         Feature(rewardBox, "AutoClaim", { Text = T("Auto Claim", "รับรางวัลอัตโนมัติ"), Description = T("Claims index, offline, group and community rewards, no joining needed", "รับรางวัล Index ออฟไลน์ กลุ่ม และคอมมูนิตี้ ไม่ต้องเข้ากลุ่ม") })
         rewardBox:AddButton({ Text = T("Claim Now", "รับเดี๋ยวนี้"), Func = Request("ClaimNow") })
-        Feature(rewardBox, "AutoHatch", { Text = T("Auto Hatch Eggs", "ฟักไข่อัตโนมัติ"), Description = T("Places eggs from your backpack on your base and hatches them when ready", "วางไข่ในกระเป๋าบนฐานแล้วฟักเมื่อพร้อม") })
-        rewardBox:AddButton({ Text = T("Hatch Eggs Now", "ฟักไข่เดี๋ยวนี้"), Func = Request("HatchNow") })
     end
 
     local function BuildPlayer(window)
@@ -1675,8 +1696,10 @@ local function BuildInterface()
             Default = 1,
             Callback = function(value) opt.EspMinRarity = value or "Common" end,
         })
-        Toggle(espBox, "EspEggs", { Text = T("Eggs", "ไข่"), Description = T("HP and how many hits it takes", "HP และจำนวนครั้งที่ต้องตี") })
-        Toggle(espBox, "EspPlayers", { Text = T("Players", "ผู้เล่น"), Description = T("Distance and what they carry", "ระยะและสิ่งที่แบกอยู่") })
+
+        local worldEspBox = tab:AddRightGroupbox(T("Eggs & Players", "ไข่และผู้เล่น"), "eye")
+        Toggle(worldEspBox, "EspEggs", { Text = T("Eggs", "ไข่"), Description = T("HP and how many hits it takes", "HP และจำนวนครั้งที่ต้องตี") })
+        Toggle(worldEspBox, "EspPlayers", { Text = T("Players", "ผู้เล่น"), Description = T("Distance and what they carry", "ระยะและสิ่งที่แบกอยู่") })
     end
 
     local function BuildTroll(window)
@@ -1693,12 +1716,14 @@ local function BuildInterface()
         batBox:AddButton({ Text = T("Refresh Players", "รีเฟรชผู้เล่น"), Func = function() batTarget:SetValues(PlayerNames()) end })
         Feature(batBox, "BatLoop", { Text = T("Loop Bat Target", "ตีเป้าหมายวนไป"), Description = T("Follows the target and keeps knocking them over", "ตามเป้าหมายแล้วตีล้มไม่หยุด"), Risky = true })
         batBox:AddButton({ Text = T("Bat Target Now", "ตีเป้าหมายเดี๋ยวนี้"), Func = Request("BatNow") })
-        Feature(batBox, "BatAura", { Text = T("Bat Aura", "ออร่าไม้ตี"), Description = T("Knocks over anyone who gets close", "ตีล้มทุกคนที่เข้าใกล้"), Risky = true })
+
+        local auraBox = tab:AddRightGroupbox(T("Bat Aura", "ออร่าไม้ตี"), "swords")
+        Feature(auraBox, "BatAura", { Text = T("Bat Aura", "ออร่าไม้ตี"), Description = T("Knocks over anyone who gets close", "ตีล้มทุกคนที่เข้าใกล้"), Risky = true })
     end
 
     local function BuildSettings(window)
         local tab = window:AddSettingsTab()
-        local sessionBox = tab:AddLeftGroupbox(T("Session", "เซสชัน"), "gear")
+        local sessionBox = tab:AddRightGroupbox(T("Session", "เซสชัน"), "gear")
         Toggle(sessionBox, "AntiAfk", { Text = T("Anti AFK", "กันหลุด AFK"), Description = T("Stops the idle kick", "กันโดนเตะเพราะไม่ขยับ") })
         Toggle(sessionBox, "AutoRejoin", { Text = T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), Description = T("Rejoins by itself after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง") })
         sessionBox:AddButton({ Text = T("Rejoin Now", "เข้าเกมใหม่เดี๋ยวนี้"), Func = xDTaraZ.Session.Rejoin })
@@ -1720,8 +1745,9 @@ local function BuildInterface()
         for idx in pairs(GameLib.Needs) do
             local missing = GameLib.Missing(idx)
             if not (missing and Options[idx]) then continue end
-            warn("[BreakStealEgg] " .. idx .. " disabled, module missing: " .. missing)
-            local reason = T("Not available on this executor", "ใช้กับ executor นี้ไม่ได้")
+            warn("[BreakStealEgg] " .. idx .. " disabled, missing: " .. missing)
+            local reason = missing:find("^Remote%.") and T("Not available after a game update", "ใช้ไม่ได้หลังเกมอัปเดต")
+                or T("Not available on this executor", "ใช้กับ executor นี้ไม่ได้")
             if Library.Compat then
                 Library.Compat.Block(idx, reason)
             else
@@ -1751,7 +1777,7 @@ local function BuildInterface()
 
         local _, gated = try("ui gate", GateModules)
         if type(gated) == "number" and gated > 0 then
-            Library:Notify("Break and Steal an Egg", "Some features can't read the game's data on this executor and are turned off.", 8, "Warning")
+            Library:Notify("Break and Steal an Egg", "Some features can't find the game parts they need and are turned off.", 8, "Warning")
         end
 
         Library:Every(0.5, function()

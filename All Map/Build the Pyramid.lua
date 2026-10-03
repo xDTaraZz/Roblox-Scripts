@@ -339,9 +339,14 @@ if not (SharedConfig and KnitServices) then
     return
 end
 
----@return Instance?  RF/RE under a Knit service, nil if the game renamed it
+---@return Instance?  RF/RE under a Knit service, found by name when the service moved; nil if renamed
 local function Remote(service, kind, name)
-    return Wait(Wait(Wait(KnitServices, service), kind), name)
+    local remote = Wait(Wait(Wait(KnitServices, service), kind), name)
+    if remote then return remote end
+    for _, node in ipairs(KnitServices:GetDescendants()) do
+        if node.Name == name and node.Parent and node.Parent.Name == kind then return node end
+    end
+    return nil
 end
 
 xDTaraZ.GameLib = {}
@@ -436,12 +441,16 @@ xDTaraZ.Gate = {
     },
 }
 
----@return boolean  every game module and remote the option needs was found
-function xDTaraZ.Gate.Ready(idx)
+---@return string?  first game module or remote the option needs that was not found
+function xDTaraZ.Gate.Missing(idx)
     for _, key in ipairs(xDTaraZ.Gate.Needs[idx] or {}) do
-        if GameLib[key] == nil then return false end
+        if GameLib[key] == nil then return key end
     end
-    return true
+    return nil
+end
+
+function xDTaraZ.Gate.Ready(idx)
+    return xDTaraZ.Gate.Missing(idx) == nil
 end
 
 function xDTaraZ.Format(n)
@@ -1426,8 +1435,10 @@ local function BuildInterface()
     local function Gate()
         local blocked = 0
         for idx in pairs(xDTaraZ.Gate.Needs) do
-            if not Library.Options[idx] or xDTaraZ.Gate.Ready(idx) then continue end
+            local missing = xDTaraZ.Gate.Missing(idx)
+            if not Library.Options[idx] or not missing then continue end
             blocked += 1
+            warn("[BuildThePyramid] " .. idx .. " blocked, missing " .. missing)
             if Library.Compat then Library.Compat.Block(idx, T("Needs a script update (game changed)", "ต้องอัปเดตสคริปต์ (เกมเปลี่ยน)")) end
         end
         if blocked == 0 then return end
@@ -1525,18 +1536,20 @@ local function BuildInterface()
             Default = {},
             Callback = function(selected) opt.Upgrades = selected or {} end,
         })
-        upgradeBox:AddDropdown("UpgradeOrder", {
+        upgradeBox:AddButton({ Text = T("Buy Now", "ซื้อเดี๋ยวนี้"), Func = Request("UpgradeNow") })
+
+        local rulesBox = ShopTab:AddRightGroupbox(T("Spending", "การใช้เหรียญ"), "coin")
+        rulesBox:AddDropdown("UpgradeOrder", {
             Text = T("Order", "ลำดับ"),
             Values = { "Cheapest First", "In Order" },
             Default = 1,
             Callback = function(value) opt.UpgradeOrder = value or "Cheapest First" end,
         })
-        upgradeBox:AddSlider("KeepCoins", {
+        rulesBox:AddSlider("KeepCoins", {
             Text = T("Keep Coins", "กันเหรียญไว้"),
             Min = 0, Max = 1000000, Default = 0, Rounding = 0,
             Callback = function(value) opt.KeepCoins = tonumber(value) or 0 end,
         })
-        upgradeBox:AddButton({ Text = T("Buy Now", "ซื้อเดี๋ยวนี้"), Func = Request("UpgradeNow") })
 
         local codeBox = ShopTab:AddRightGroupbox(T("Codes", "โค้ด"), "code")
         codeBox:AddButton({ Text = T("Redeem All Codes", "ใช้โค้ดทั้งหมด"), Style = "Primary", Func = Request("CodesNow") })
@@ -1591,7 +1604,7 @@ local function BuildInterface()
 
     local function BuildSettings(window)
         local settingsTab = window:AddSettingsTab()
-        local sessionBox = settingsTab:AddLeftGroupbox(T("Session", "เซสชัน"), "gear")
+        local sessionBox = settingsTab:AddRightGroupbox(T("Session", "เซสชัน"), "gear")
         Toggle(sessionBox, "AntiAfk", T("Anti AFK", "กันหลุด AFK"), T("Stops the idle kick", "กันโดนเตะเพราะไม่ขยับ"))
         Toggle(sessionBox, "AutoRejoin", T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), T("Rejoins by itself after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"))
         Toggle(sessionBox, "NoRender", T("Disable 3D Rendering", "ปิดการเรนเดอร์ 3D"), T("Saves battery and CPU while farming", "ประหยัดแบตและ CPU ตอนฟาร์ม"), function(on)
