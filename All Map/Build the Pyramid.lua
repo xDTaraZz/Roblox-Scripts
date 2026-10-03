@@ -8,12 +8,17 @@ if game.GameId ~= 10765012427 then
 end
 
 local MarioBanner = {
-    Print = type(getrenv) == "function" and getrenv().print or print,
+    Print = print,
     Started = os.clock(),
     Last = os.clock(),
     Done = 0,
     Total = 4,
 }
+
+do
+    local ok, renv = pcall(getrenv)
+    if ok and type(renv) == "table" and type(renv.print) == "function" then MarioBanner.Print = renv.print end
+end
 
 function MarioBanner.Show()
     local ok, executor = pcall(identifyexecutor)
@@ -112,8 +117,8 @@ function MarioBanner.Ready()
     }, "\n"))
 end
 
-MarioBanner.Show()
-MarioBanner.Step("Core")
+pcall(MarioBanner.Show)
+pcall(MarioBanner.Step, "Core")
 
 if not LPH_OBFUSCATED then
     local function Passthrough(fn) return fn end
@@ -143,24 +148,46 @@ local xDTaraZ = setmetatable({}, {
 
 xDTaraZ.Config = {
     Discord = "https://discord.gg/FHVfmeSceA",
-    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui_v2.lua",
+    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
+    ReloadSource = [[
+local url = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/loader.lua"
+local ok, body = pcall(game.HttpGet, game, url)
+if not (ok and type(body) == "string") then
+    local requester = request or http_request or (syn and syn.request) or (http and http.request)
+    local sent, reply = pcall(requester, { Url = url, Method = "GET" })
+    body = sent and type(reply) == "table" and reply.Body
+end
+if type(body) == "string" then loadstring(body)() end]],
     SaveFolder = "Build the Pyramid",
     TickDelay = 0.1,
     LoadTimeout = 10,
+    AlertTries = 20,
+    AlertGap = 0.5,
+    FailLimit = 5,
+    FailWindow = 10,
     SettleDelay = 0.15,
     StreamWait = 2,
+    StreamDistance = 200,
     PickupRetries = 3,
+    QuarryJitter = 0.35,
+    RetryDelay = 1,
+    RetryMax = 8,
+    StallLimit = 120,
     PlaceTimeout = 3,
     PlaceRetries = 3,
     PlaceReach = 28,
     SlotSpacing = 4,
+    SlotSearchCells = 150,
+    EngineRadiusLimit = 15000,
     HoverHeight = 6,
-    SlotSearchCells = 200,
+    StandHeight = 3,
     QuarrySpot = vector3New(-234, -16, 38),
     BenchRange = 12,
     BenchRetry = 2,
     StandRadius = 4,
     UpgradeInterval = 2,
+    UpgradeGap = 0.3,
+    UpgradeBurst = 36,
     CodeGap = 1.1,
     ActivityInterval = 60,
     RateWindow = 60,
@@ -179,9 +206,14 @@ xDTaraZ.State = {
     Last = {},
     Stats = {},
     CoinLog = {},
+    Fails = {},
+    FailSince = {},
+    Halted = {},
+    HaltQueue = {},
     Status = "Idle",
     Task = "None",
     Placed = 0,
+    FarmWait = 0,
     Opt = {
         AutoFarm = false,
         ReturnOnStop = false,
@@ -195,7 +227,7 @@ xDTaraZ.State = {
         AlternateMinutes = 5,
         AutoPool = false,
         SpeedOn = false,
-        WalkSpeed = 50,
+        WalkSpeed = 100,
         Fly = false,
         FlySpeed = 60,
         Noclip = false,
@@ -207,45 +239,175 @@ xDTaraZ.State = {
 }
 
 local Config, State = xDTaraZ.Config, xDTaraZ.State
-local Shared = ReplicatedStorage:WaitForChild("Shared")
-local SharedConfig = Shared:WaitForChild("Config")
-local KnitServices = ReplicatedStorage:WaitForChild("Packages"):WaitForChild("_Index")
-    :WaitForChild("sleitnick_knit@1.7.0"):WaitForChild("knit"):WaitForChild("Services")
+
+xDTaraZ.Util = {}
+
+---@return string?, string?  body, or nil and why every transport failed
+function xDTaraZ.Util.HttpGet(url)
+    local ok, body = pcall(game.HttpGet, game, url)
+    if ok and type(body) == "string" then return body end
+    local requester = request or http_request or (syn and syn.request) or (http and http.request)
+    if not requester then return nil, "no http function" end
+
+    local sent, reply = pcall(requester, { Url = url, Method = "GET" })
+    if not sent or type(reply) ~= "table" then return nil, tostring(reply) end
+    if reply.StatusCode ~= 200 or type(reply.Body) ~= "string" then return nil, "HTTP " .. tostring(reply.StatusCode) end
+    return reply.Body
+end
+
+---@param detail any?  extra context for the console only
+function xDTaraZ.Util.Alert(text, detail)
+    warn("[BuildThePyramid]", text, detail or "")
+    task.spawn(function()
+        local starterGui = game:GetService("StarterGui")
+        for _ = 1, Config.AlertTries do
+            local shown = pcall(starterGui.SetCore, starterGui, "SendNotification", { Title = "Mario Hub", Text = text, Duration = 10 })
+            if shown then return end
+            task.wait(Config.AlertGap)
+        end
+    end)
+end
+
+---@return boolean  fn finished without error
+function xDTaraZ.Util.Try(label, fn, ...)
+    local ok, err = pcall(fn, ...)
+    if not ok then warn("[BuildThePyramid] " .. label .. ":", err) end
+    return ok
+end
+
+---@return table?, string?  UI library, or nil and a message for the player
+function xDTaraZ.Util.LoadLibrary(url)
+    local source, why = xDTaraZ.Util.HttpGet(url)
+    if not source or not source:sub(-64):find("return%s+Library%s*$") then
+        warn("[BuildThePyramid] ui download:", why or "truncated or not the library")
+        return nil, "Could not download the menu. Check your connection and run it again."
+    end
+    local chunk, compileErr = loadstring(source)
+    if not chunk then return nil, "The menu failed to load on this executor: " .. tostring(compileErr) end
+    local ok, lib = pcall(chunk)
+    if not ok or type(lib) ~= "table" then return nil, "The menu failed to load on this executor: " .. tostring(lib) end
+    return lib
+end
+
+---@return boolean  the hub is queued to load again after the next teleport
+function xDTaraZ.Util.QueueReload()
+    local queue = queue_on_teleport or queueonteleport or (syn and syn.queue_on_teleport)
+    if not queue then return false end
+    return (pcall(queue, Config.ReloadSource))
+end
+
+function xDTaraZ.Util.Copy(text)
+    local copy = setclipboard or toclipboard
+    if not copy then return false end
+    return (pcall(copy, text))
+end
+
+local bootMissed = false
+
+---@return Instance?  child, nil once Config.LoadTimeout runs out; no waiting after the first miss
+local function Wait(parent, name)
+    if not parent then return nil end
+    if bootMissed then return parent:FindFirstChild(name) end
+    local child = parent:WaitForChild(name, Config.LoadTimeout)
+    if not child then bootMissed = true end
+    return child
+end
+
+---@return Instance?  Services folder of whichever knit version the game ships
+local function FindKnitServices()
+    local index = Wait(Wait(ReplicatedStorage, "Packages"), "_Index")
+    if not index then return nil end
+    local fallback
+    for _, package in ipairs(index:GetChildren()) do
+        if not package.Name:find("^sleitnick_knit") then continue end
+        local knit = package:FindFirstChild("knit")
+        local services = knit and knit:FindFirstChild("Services")
+        if services then return services end
+        fallback = fallback or knit
+    end
+    return Wait(fallback, "Services")
+end
+
+local Shared = Wait(ReplicatedStorage, "Shared")
+local SharedConfig = Wait(Shared, "Config")
+local KnitServices = FindKnitServices()
+
+if not (SharedConfig and KnitServices) then
+    xDTaraZ.Util.Alert("Build the Pyramid was updated and this script needs an update too. Join discord.gg/FHVfmeSceA",
+        SharedConfig and "knit Services folder not found" or "Shared.Config not found")
+    return
+end
 
 ---@return Instance?  RF/RE under a Knit service, nil if the game renamed it
 local function Remote(service, kind, name)
-    local svc = KnitServices:WaitForChild(service, Config.LoadTimeout)
-    local folder = svc and svc:WaitForChild(kind, Config.LoadTimeout)
-    return folder and folder:WaitForChild(name, Config.LoadTimeout)
+    return Wait(Wait(Wait(KnitServices, service), kind), name)
 end
 
-xDTaraZ.GameLib = {
-    Pyramid = require(SharedConfig.PyramidConfig),
-    Carry = require(SharedConfig.CarryConfig),
-    Upgrades = require(SharedConfig.UpgradeCatalog),
-    Gym = require(SharedConfig.GymConfig),
-    Codes = require(SharedConfig.CodesConfig),
-    Completion = require(SharedConfig.PyramidCompletionConfig),
-    GymAccess = require(Shared:WaitForChild("Gym"):WaitForChild("GymAccess")),
-    Runtime = require(Shared:WaitForChild("Placement"):WaitForChild("PyramidRuntime")),
-    CarryState = require(Shared:WaitForChild("Books"):WaitForChild("CarryState")),
-    Regions = require(Shared:WaitForChild("RegionRegistry")),
-    Knit = require(ReplicatedStorage.Packages:WaitForChild("Knit")),
-    Pickup = Remote("BookService", "RF", "Pickup"),
-    Place = Remote("PyramidService", "RF", "Place"),
-    Purchase = Remote("DataService", "RF", "PurchaseUpgrade"),
-    StartBench = Remote("GymService", "RF", "StartBench"),
-    StopBench = Remote("GymService", "RF", "StopBench"),
-    Redeem = Remote("CodesService", "RF", "Redeem"),
-    Activity = Remote("AFKService", "RE", "Activity"),
-}
-
+xDTaraZ.GameLib = {}
 local GameLib = xDTaraZ.GameLib
+
+---@return boolean, any  ok and module, required from a fresh identity-2 thread
+function GameLib.RequireAsGame(module)
+    if GameLib.CanSwitch == false then return false, nil end
+
+    local done, ok, loaded = false, false, nil
+    task.spawn(function()
+        local switched = pcall(setthreadidentity, 2)
+        local read, identity = pcall(getthreadidentity)
+        if switched and read and identity == 2 then
+            ok, loaded = pcall(require, module)
+        else
+            GameLib.CanSwitch = false
+        end
+        done = true
+    end)
+    local deadline = osClock() + Config.LoadTimeout
+    while not done and osClock() < deadline do task.wait() end
+    return ok, loaded
+end
+
+---@return any?  module, nil when it is missing or no identity can require it
+function GameLib.Require(module)
+    if not (module and module:IsA("ModuleScript")) then return nil end
+    local ok, loaded = pcall(require, module)
+    if ok then return loaded end
+    local retried, again = GameLib.RequireAsGame(module)
+    if retried then return again end
+    warn("[BuildThePyramid] require " .. module.Name .. ":", loaded)
+    return nil
+end
+
+do
+    local modules = {
+        Pyramid = Wait(SharedConfig, "PyramidConfig"),
+        Carry = Wait(SharedConfig, "CarryConfig"),
+        Upgrades = Wait(SharedConfig, "UpgradeCatalog"),
+        Gym = Wait(SharedConfig, "GymConfig"),
+        Codes = Wait(SharedConfig, "CodesConfig"),
+        Completion = Wait(SharedConfig, "PyramidCompletionConfig"),
+        GymAccess = Wait(Wait(Shared, "Gym"), "GymAccess"),
+        Runtime = Wait(Wait(Shared, "Placement"), "PyramidRuntime"),
+        CarryState = Wait(Wait(Shared, "Books"), "CarryState"),
+        Regions = Wait(Shared, "RegionRegistry"),
+        Knit = Wait(Wait(ReplicatedStorage, "Packages"), "Knit"),
+    }
+    for key, module in pairs(modules) do
+        GameLib[key] = GameLib.Require(module)
+    end
+end
+
+GameLib.Pickup = Remote("BookService", "RF", "Pickup")
+GameLib.Place = Remote("PyramidService", "RF", "Place")
+GameLib.Purchase = Remote("DataService", "RF", "PurchaseUpgrade")
+GameLib.StartBench = Remote("GymService", "RF", "StartBench")
+GameLib.StopBench = Remote("GymService", "RF", "StopBench")
+GameLib.Redeem = Remote("CodesService", "RF", "Redeem")
+GameLib.Activity = Remote("AFKService", "RE", "Activity")
 
 xDTaraZ.UpgradeByName = {}
 xDTaraZ.UpgradeNames = {}
 do
-    for _, upgrade in ipairs(GameLib.Upgrades.Upgrades) do
+    for _, upgrade in ipairs(GameLib.Upgrades and GameLib.Upgrades.Upgrades or {}) do
         xDTaraZ.UpgradeByName[upgrade.DisplayName] = upgrade
         table.insert(xDTaraZ.UpgradeNames, upgrade.DisplayName)
     end
@@ -259,26 +421,25 @@ do
         seen[code] = true
         xDTaraZ.CodeList[#xDTaraZ.CodeList + 1] = code
     end
-    for code in pairs(GameLib.Codes.Codes) do Add(code) end
+    for code in pairs(GameLib.Codes and GameLib.Codes.Codes or {}) do Add(code) end
     for _, code in ipairs(Config.ExtraCodes) do Add(code) end
 end
 
-xDTaraZ.Util = {}
+xDTaraZ.Gate = {
+    Needs = {
+        AutoFarm = { "Pyramid", "Carry", "CarryState", "Runtime", "Regions", "Upgrades", "Pickup", "Place" },
+        AutoStrength = { "Gym", "GymAccess", "StartBench", "StopBench" },
+        AutoSpeed = { "Gym", "GymAccess" },
+        AutoPool = { "Pyramid", "Completion" },
+        AutoUpgrade = { "Upgrades", "Purchase", "Knit" },
+    },
+}
 
----@return string?  body, nil when no http function works
-function xDTaraZ.Util.HttpGet(url)
-    local ok, body = pcall(game.HttpGet, game, url)
-    if ok and type(body) == "string" then return body end
-    local requester = request or http_request or (syn and syn.request) or (http and http.request)
-    if not requester then return nil end
-    local sent, reply = pcall(requester, { Url = url, Method = "GET" })
-    return sent and type(reply) == "table" and reply.Body or nil
-end
-
-function xDTaraZ.Util.Copy(text)
-    local copy = setclipboard or toclipboard
-    if not copy then return false end
-    copy(text)
+---@return boolean  every game module and remote the option needs was found
+function xDTaraZ.Gate.Ready(idx)
+    for _, key in ipairs(xDTaraZ.Gate.Needs[idx] or {}) do
+        if GameLib[key] == nil then return false end
+    end
     return true
 end
 
@@ -326,13 +487,18 @@ function xDTaraZ.Game.UpgradeLevel(upgrade)
 end
 
 function xDTaraZ.Game.Capacity()
-    return GameLib.Carry.Capacity + (tonumber(xDTaraZ.Game.Attr("StrengthLevel")) or 0)
+    local base = GameLib.Carry and tonumber(GameLib.Carry.Capacity) or 0
+    return base + (tonumber(xDTaraZ.Game.Attr("StrengthLevel")) or 0)
 end
 
 function xDTaraZ.Game.Carried()
     if State.Carry then return State.Carry end
-    local ok, state = pcall(GameLib.CarryState.read, LocalPlayer)
-    return ok and type(state) == "table" and tonumber(state.count) or 0
+    if GameLib.CarryState then
+        local ok, state = pcall(GameLib.CarryState.read, LocalPlayer)
+        local count = ok and type(state) == "table" and tonumber(state.count)
+        if count then return count end
+    end
+    return tonumber(xDTaraZ.Game.Attr("CarriedCount")) or 0
 end
 
 function xDTaraZ.Game.Coins()
@@ -340,6 +506,7 @@ function xDTaraZ.Game.Coins()
 end
 
 function xDTaraZ.Game.Benching()
+    if not GameLib.Gym then return nil end
     local station = xDTaraZ.Game.Attr(GameLib.Gym.BenchStationAttribute)
     return type(station) == "string" and station ~= "" and station or nil
 end
@@ -398,7 +565,7 @@ end
 function xDTaraZ.Move.To(pos, stream)
     local _, _, hrp = xDTaraZ:Character()
     if not hrp then return false end
-    if stream and (hrp.Position - pos).Magnitude > 200 then xDTaraZ.Move.Stream(pos) end
+    if stream and (hrp.Position - pos).Magnitude > Config.StreamDistance then xDTaraZ.Move.Stream(pos) end
     hrp.AssemblyLinearVelocity = Vector3.zero
     hrp.CFrame = CFrame.new(pos) * hrp.CFrame.Rotation
     return true
@@ -409,15 +576,22 @@ function xDTaraZ.Move.Near(pos, radius)
     return hrp ~= nil and (hrp.Position - pos).Magnitude <= (radius or Config.StandRadius)
 end
 
-function xDTaraZ.Move.QuarrySpot()
+---@param jitter boolean?  pick a random spot inside the region instead of its centre
+function xDTaraZ.Move.QuarrySpot(jitter)
     local region = GameLib.Regions.getPart("Quarry")
     if not (region and region:IsA("BasePart")) then return Config.QuarrySpot end
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = { LocalPlayer.Character, region, Workspace:FindFirstChild(GameLib.Pyramid.QuarryFolderName) }
+
     local top = region.Position + vector3New(0, region.Size.Y / 2, 0)
+    if jitter then
+        local spread = Config.QuarryJitter
+        top += region.CFrame:VectorToWorldSpace(vector3New(
+            (math.random() * 2 - 1) * region.Size.X * spread, 0, (math.random() * 2 - 1) * region.Size.Z * spread))
+    end
     local hit = Workspace:Raycast(top, vector3New(0, -region.Size.Y - 50, 0), params)
-    local spot = hit and hit.Position + vector3New(0, 3, 0)
+    local spot = hit and hit.Position + vector3New(0, Config.StandHeight, 0)
     if spot and GameLib.Regions.isWithin("Quarry", spot) then return spot end
     return Config.QuarrySpot
 end
@@ -441,7 +615,8 @@ function xDTaraZ.Move.Frame()
     if not char then return end
     if State.Opt.SpeedOn and not State.Opt.Fly and hum.MoveDirection.Magnitude > 0 then
         local velocity = hrp.AssemblyLinearVelocity
-        hrp.AssemblyLinearVelocity = vector3New(hum.MoveDirection.X * State.Opt.WalkSpeed, velocity.Y, hum.MoveDirection.Z * State.Opt.WalkSpeed)
+        local speed = math.max(State.Opt.WalkSpeed, hum.WalkSpeed)
+        hrp.AssemblyLinearVelocity = vector3New(hum.MoveDirection.X * speed, velocity.Y, hum.MoveDirection.Z * speed)
     end
     if State.Opt.Noclip then
         for _, part in ipairs(char:GetChildren()) do
@@ -481,14 +656,46 @@ end
 
 xDTaraZ.Farm = {}
 
----@return boolean  holding at least one block
+function xDTaraZ.Farm.Progress()
+    State.StallSince, State.Backoff = nil, nil
+end
+
+---@param reason string  shown while the farm waits; raised once the stall passes Config.StallLimit
+---@return boolean       always false, so lower jobs get the character meanwhile
+function xDTaraZ.Farm.Hold(reason)
+    local now = osClock()
+    State.StallSince = State.StallSince or now
+    if now - State.StallSince > Config.StallLimit then
+        State.Waiting = nil
+        error(reason:lower() .. " for " .. Config.StallLimit .. "s", 0)
+    end
+    State.Backoff = State.Backoff and math.min(State.Backoff * 2, Config.RetryMax) or Config.RetryDelay
+    State.FarmWait = now + State.Backoff
+    State.Waiting = reason .. ", retrying"
+    return false
+end
+
+---@return boolean  the server had you flagged AFK and was told you are back
+function xDTaraZ.Farm.Wake()
+    if xDTaraZ.Game.Attr("IsAFK") ~= true or not GameLib.Activity then return false end
+    GameLib.Activity:FireServer()
+    return true
+end
+
+function xDTaraZ.Farm.Park()
+    if State.Parked then return end
+    State.Parked = true
+    xDTaraZ.Move.To(xDTaraZ.Move.QuarrySpot())
+end
+
+---@return boolean, string?  holding at least one block, else why not
 function xDTaraZ.Farm.Gather()
     if xDTaraZ.Game.Benching() then xDTaraZ:Invoke(GameLib.StopBench) end
     local cap = xDTaraZ.Game.Capacity()
     if xDTaraZ.Game.Carried() >= cap then return true end
 
     State.Status = "Picking up blocks"
-    if not xDTaraZ.Move.To(xDTaraZ.Move.QuarrySpot()) then return false end
+    if not xDTaraZ.Move.To(xDTaraZ.Move.QuarrySpot(State.Backoff ~= nil)) then return false, "Character not ready" end
     task.wait(Config.SettleDelay)
 
     local region = GameLib.Regions.getPart("Quarry")
@@ -502,6 +709,7 @@ function xDTaraZ.Farm.Gather()
             carried = xDTaraZ.Game.ReadCarry(carryState) or carried
             State.Carry = carried
             misses = 0
+            xDTaraZ.Farm.Progress()
         else
             misses += 1
             if carried > 0 or misses >= Config.PickupRetries then break end
@@ -509,8 +717,37 @@ function xDTaraZ.Farm.Gather()
         end
     end
     if carried > 0 then return true end
-    State.Carry = cap
-    return true
+
+    State.Carry = nil
+    if xDTaraZ.Game.Carried() > 0 then return true end
+    if xDTaraZ.Farm.Wake() then return false, "Marked AFK, waking up" end
+    return false, "Quarry refused blocks"
+end
+
+---@return table?  geometry of the tier being built, same one the slot resolver uses
+function xDTaraZ.Farm.Geometry()
+    local context = GameLib.Runtime.getContext(Workspace)
+    return context and context.geometry
+end
+
+---@param cells number  ring count wanted
+---@return number       ring count whose stud radius stays inside the engine's spatial query limit
+function xDTaraZ.Farm.ClampCells(cells)
+    return math.min(cells, math.floor(Config.EngineRadiusLimit / GameLib.Pyramid.BlockSize))
+end
+
+---@return number  rings that reach every cell of the current layer
+function xDTaraZ.Farm.SearchCells()
+    local geometry = xDTaraZ.Farm.Geometry()
+    local layer = GameLib.Runtime.getCurrentLayer(Workspace)
+    local side = geometry and layer and geometry.getLayerSide(layer) or Config.SlotSearchCells
+    return xDTaraZ.Farm.ClampCells(math.min(side, Config.SlotSearchCells))
+end
+
+---@param from Vector3  used until the first block lands
+---@return table?        free slot on the current layer, searched from the last placed block
+function xDTaraZ.Farm.FirstSlot(from)
+    return GameLib.Runtime.resolveNearestSlot(State.LastSlot or from, Workspace, nil, xDTaraZ.Farm.SearchCells())
 end
 
 ---@param origin Vector3  where the character stands
@@ -518,10 +755,12 @@ end
 ---@return table[]         free slots in reach, far enough apart that bulk fills do not overlap
 function xDTaraZ.Farm.Slots(origin, count, radius)
     local picked, cells, rejected = {}, {}, {}
-    local geometry = GameLib.Runtime.getGeometry(Workspace, 2)
+    local geometry = xDTaraZ.Farm.Geometry()
+    if not geometry then return picked end
     local function Skip(layer, index)
         if rejected[layer .. ":" .. index] then return true end
         local col, row = geometry.fromSlotIndex(layer, index)
+        if not (col and row) then return false end
         for _, cell in ipairs(cells) do
             if cell.layer == layer and math.max(math.abs(cell.col - col), math.abs(cell.row - row)) < Config.SlotSpacing then
                 return true
@@ -531,11 +770,11 @@ function xDTaraZ.Farm.Slots(origin, count, radius)
     end
     for _ = 1, count * 3 do
         if #picked >= count then break end
-        local slot = GameLib.Runtime.resolveNearestSlot(origin, Workspace, Skip, radius)
+        local slot = GameLib.Runtime.resolveNearestSlot(origin, Workspace, Skip, xDTaraZ.Farm.ClampCells(radius))
         if not slot then break end
         local flat = vector3New(slot.position.X - origin.X, 0, slot.position.Z - origin.Z)
-        if flat.Magnitude <= Config.PlaceReach then
-            local col, row = geometry.fromSlotIndex(slot.layer, slot.slotIndex)
+        local col, row = geometry.fromSlotIndex(slot.layer, slot.slotIndex)
+        if col and row and flat.Magnitude <= Config.PlaceReach then
             table.insert(cells, { layer = slot.layer, col = col, row = row })
             table.insert(picked, slot)
         else
@@ -547,32 +786,41 @@ end
 
 ---@return number  blocks still carried
 function xDTaraZ.Farm.PlaceBatch(slots)
-    local pending, left = #slots, xDTaraZ.Game.Carried()
+    local pending, left, known = #slots, xDTaraZ.Game.Carried(), false
     for _, slot in ipairs(slots) do
         task.spawn(function()
             local ok, carryState = xDTaraZ:Invoke(GameLib.Place, slot.layer, slot.slotIndex, slot.generation)
-            if ok == true then State.Placed += 1 end
-            left = math.min(left, xDTaraZ.Game.ReadCarry(carryState) or left)
+            if ok == true then
+                State.Placed += 1
+                State.LastSlot = slot.position
+            end
+            local count = xDTaraZ.Game.ReadCarry(carryState)
+            if count then left, known = math.min(left, count), true end
             pending -= 1
         end)
     end
+
     local deadline = osClock() + Config.PlaceTimeout
     while pending > 0 and osClock() < deadline do task.wait() end
-    State.Carry = left
-    return left
+    State.Carry = known and left or nil
+    return xDTaraZ.Game.Carried()
 end
 
----@return boolean  false when the pyramid has no free slot
+---@return boolean, string?  placed at least one block (or nothing left to place), else why not
 function xDTaraZ.Farm.Deliver()
     local _, _, hrp = xDTaraZ:Character()
-    if not hrp then return false end
+    if not hrp then return false, "Character not ready" end
     local perPlace = 1 + xDTaraZ.Game.UpgradeLevel(GameLib.Upgrades.ById.bulkPlace)
+    local before, why = State.Placed, "Pyramid refused blocks"
 
     for _ = 1, Config.PlaceRetries do
         local carried = xDTaraZ.Game.Carried()
         if carried <= 0 or not State.Opt.AutoFarm then return true end
-        local first = GameLib.Runtime.resolveNearestSlot(hrp.Position, Workspace, nil, Config.SlotSearchCells)
-        if not first then return false end
+        local first = xDTaraZ.Farm.FirstSlot(hrp.Position)
+        if not first then
+            why = "No free slot on the pyramid"
+            break
+        end
 
         State.Status = ("Placing on layer %d"):format(first.layer)
         xDTaraZ.Move.To(first.position + vector3New(0, Config.HoverHeight, 0))
@@ -580,30 +828,45 @@ function xDTaraZ.Farm.Deliver()
 
         local reach = math.ceil(Config.PlaceReach / GameLib.Pyramid.BlockSize)
         local slots = xDTaraZ.Farm.Slots(hrp.Position, math.ceil(carried / perPlace), reach)
-        if #slots == 0 then return false end
-        if xDTaraZ.Farm.PlaceBatch(slots) <= 0 then return true end
+        if #slots == 0 then
+            why = "No free slot on the pyramid"
+            break
+        end
+        if xDTaraZ.Farm.PlaceBatch(slots) <= 0 then break end
     end
+
+    if State.Placed == before then return false, why end
+    xDTaraZ.Farm.Progress()
     return true
 end
 
 ---@return boolean  did work this tick
 function xDTaraZ.Farm.Step()
-    if not GameLib.Runtime.getCurrentLayer(Workspace) then return false end
+    if osClock() < State.FarmWait then return false end
+    if not GameLib.Runtime.getCurrentLayer(Workspace) then
+        xDTaraZ.Farm.Progress()
+        State.Waiting = "Waiting for the next pyramid"
+        xDTaraZ.Farm.Park()
+        return false
+    end
+
+    State.Waiting, State.Parked = nil, false
     if not State.FarmOrigin then
         local _, _, hrp = xDTaraZ:Character()
         State.FarmOrigin = hrp and hrp.CFrame
     end
-    if not xDTaraZ.Farm.Gather() then
-        task.wait(Config.SettleDelay)
-        return true
-    end
-    xDTaraZ.Farm.Deliver()
-    return true
+    local holding, why = xDTaraZ.Farm.Gather()
+    if not holding then return xDTaraZ.Farm.Hold(why) end
+
+    local placed, reason = xDTaraZ.Farm.Deliver()
+    if placed then return true end
+    return xDTaraZ.Farm.Hold(reason)
 end
 
 function xDTaraZ.Farm.Stop()
     local origin = State.FarmOrigin
-    State.FarmOrigin = nil
+    State.FarmOrigin, State.Waiting, State.Parked, State.FarmWait = nil, nil, false, 0
+    xDTaraZ.Farm.Progress()
     if not (origin and State.Opt.ReturnOnStop) then return end
     local _, _, hrp = xDTaraZ:Character()
     if hrp then hrp.CFrame = origin end
@@ -646,7 +909,7 @@ function xDTaraZ.Train.Strength()
     local seat = xDTaraZ.Move.GymPart(folder, GameLib.Gym.BenchpressModelName, GameLib.Gym.AlignPartName)
     if not seat then return false end
     if not xDTaraZ.Move.Near(seat.Position, Config.BenchRange) then
-        xDTaraZ.Move.To(seat.Position + vector3New(0, 3, 0))
+        xDTaraZ.Move.To(seat.Position + vector3New(0, Config.StandHeight, 0))
         task.wait(Config.SettleDelay)
     end
     local ok = xDTaraZ:Invoke(GameLib.StartBench, folder)
@@ -721,14 +984,20 @@ xDTaraZ.Tasks.Jobs = {
 function xDTaraZ.Tasks.Step()
     for _, name in ipairs(xDTaraZ.Tasks.Order()) do
         local job = xDTaraZ.Tasks.Jobs[name]
-        if not job.On() then continue end
-        if job.Step() then
+        if not job.On() or State.Halted[name] then continue end
+        local ok, worked = pcall(job.Step)
+        if not ok then
+            xDTaraZ.Scheduler.Fail(name, worked)
+            return
+        end
+        State.Fails[name], State.FailSince[name] = nil, nil
+        if worked then
             State.Task = name
             return
         end
     end
     State.Task = "None"
-    State.Status = "Idle"
+    State.Status = State.Opt.AutoFarm and State.Waiting or "Idle"
 end
 
 xDTaraZ.Upgrade = {}
@@ -769,8 +1038,8 @@ function xDTaraZ.Upgrade.Now()
         local upgrade, cost = xDTaraZ.Upgrade.Pick()
         if not (upgrade and xDTaraZ.Upgrade.Buy(upgrade, cost)) then break end
         bought += 1
-        task.wait(0.3)
-    until bought >= 36
+        task.wait(Config.UpgradeGap)
+    until bought >= Config.UpgradeBurst
     if bought == 0 then xDTaraZ:Notify("Nothing to buy") end
 end
 
@@ -799,17 +1068,23 @@ end
 
 function xDTaraZ.Teleport.Pyramid()
     local _, _, hrp = xDTaraZ:Character()
-    local from = hrp and hrp.Position or Config.QuarrySpot
-    local slot = GameLib.Runtime.resolveNearestSlot(from, Workspace, nil, Config.SlotSearchCells)
-    if slot then return xDTaraZ.Move.To(slot.position + vector3New(0, Config.HoverHeight, 0)) end
+    if not hrp then return end
+    local slot = xDTaraZ.Farm.FirstSlot(hrp.Position)
+    if slot then
+        xDTaraZ.Move.To(slot.position + vector3New(0, Config.HoverHeight, 0))
+        return
+    end
     local model = xDTaraZ.Game.Model()
     if model then xDTaraZ.Move.To(model:GetPivot().Position + vector3New(0, Config.HoverHeight, 0)) end
 end
 
 function xDTaraZ.Teleport.Pool()
     local spot = xDTaraZ.Move.PoolSpot()
-    if spot then return xDTaraZ.Move.To(spot, true) end
-    xDTaraZ:Notify("Pool is closed right now")
+    if not spot then
+        xDTaraZ:Notify(xDTaraZ.Game.Completed() and "Pool is not loaded yet, try again in a moment" or "Pool opens when a pyramid is completed")
+        return
+    end
+    xDTaraZ.Move.To(spot, true)
 end
 
 function xDTaraZ.Teleport.Gym()
@@ -817,21 +1092,27 @@ function xDTaraZ.Teleport.Gym()
     local seat = folder and xDTaraZ.Move.GymPart(folder, GameLib.Gym.BenchpressModelName, GameLib.Gym.AlignPartName)
     local belt = folder and xDTaraZ.Move.GymPart(folder, GameLib.Gym.TreadmillModelName, GameLib.Gym.HitboxName)
     local target = seat or belt
-    if target then xDTaraZ.Move.To(target.Position + vector3New(0, 3, 0)) end
+    if target then xDTaraZ.Move.To(target.Position + vector3New(0, Config.StandHeight, 0)) end
 end
 
 function xDTaraZ.Teleport.Player()
     local target = State.PlayerTarget and Players:FindFirstChild(State.PlayerTarget)
     local root = target and target.Character and target.Character:FindFirstChild("HumanoidRootPart")
-    if root then return xDTaraZ.Move.To(root.Position + vector3New(0, 3, 0), true) end
-    xDTaraZ:Notify("Player not found")
+    if not root then
+        xDTaraZ:Notify("Player not found")
+        return
+    end
+    xDTaraZ.Move.To(root.Position + vector3New(0, Config.StandHeight, 0), true)
 end
 
 xDTaraZ.Server = {}
 
 function xDTaraZ.Server.Rejoin()
-    if #Players:GetPlayers() <= 1 then return TeleportService:Teleport(game.PlaceId, LocalPlayer) end
-    TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+    if #Players:GetPlayers() > 1 then
+        TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+    else
+        TeleportService:Teleport(game.PlaceId, LocalPlayer)
+    end
 end
 
 function xDTaraZ.Server.Hop()
@@ -848,21 +1129,47 @@ function xDTaraZ.Server.Hop()
             table.insert(options, server.id)
         end
     end
-    if #options == 0 then return xDTaraZ:Notify("No other server found") end
+    if #options == 0 then
+        xDTaraZ:Notify("No other server found")
+        return
+    end
     TeleportService:TeleportToPlaceInstance(game.PlaceId, options[math.random(#options)], LocalPlayer)
 end
 
 function xDTaraZ.Server.Boost()
+    local saved = State.Boosted
+    if not saved then
+        saved = { Shadows = Lighting.GlobalShadows, FogEnd = Lighting.FogEnd, Effects = {}, Materials = {} }
+        State.Boosted = saved
+    end
     Lighting.GlobalShadows = false
     Lighting.FogEnd = 1e6
+
+    local plastic, smooth = Enum.Material.Plastic, Enum.Material.SmoothPlastic
     for _, inst in ipairs(Workspace:GetDescendants()) do
         if inst:IsA("ParticleEmitter") or inst:IsA("Trail") or inst:IsA("Smoke") or inst:IsA("Fire") then
+            if not inst.Enabled then continue end
+            saved.Effects[inst] = true
             inst.Enabled = false
-        elseif inst:IsA("BasePart") and inst.Material ~= Enum.Material.Plastic then
-            inst.Material = Enum.Material.SmoothPlastic
+        elseif inst:IsA("BasePart") and inst.Material ~= plastic and inst.Material ~= smooth then
+            saved.Materials[inst] = inst.Material
+            inst.Material = smooth
         end
     end
     xDTaraZ:Notify("FPS boost applied")
+end
+
+function xDTaraZ.Server.Unboost()
+    local saved = State.Boosted
+    if not saved then return end
+    State.Boosted = nil
+    Lighting.GlobalShadows, Lighting.FogEnd = saved.Shadows, saved.FogEnd
+    for inst in pairs(saved.Effects) do
+        if inst.Parent then inst.Enabled = true end
+    end
+    for part, material in pairs(saved.Materials) do
+        if part.Parent then part.Material = material end
+    end
 end
 
 xDTaraZ.Client = {}
@@ -888,6 +1195,7 @@ function xDTaraZ.Client.Bind()
     table.insert(State.Connections, GuiService.ErrorMessageChanged:Connect(function()
         if not State.Opt.AutoRejoin or State.Rejoining or GuiService:GetErrorMessage() == "" then return end
         State.Rejoining = true
+        if not xDTaraZ.Util.QueueReload() then warn("[BuildThePyramid] auto rejoin: this executor cannot reload the hub after teleport") end
         task.wait(Config.RejoinDelay)
         TeleportService:Teleport(game.PlaceId, LocalPlayer)
     end))
@@ -911,9 +1219,57 @@ xDTaraZ.Scheduler.RequestHandlers = {
     Boost = xDTaraZ.Server.Boost,
 }
 
-function xDTaraZ.Scheduler.Run(fn)
+xDTaraZ.Scheduler.Toggles = {
+    Farm = { "AutoFarm" },
+    Train = { "AutoStrength", "AutoSpeed" },
+    Pool = { "AutoPool" },
+    Upgrade = { "AutoUpgrade" },
+    Activity = { "AntiAfk" },
+    Summary = {},
+}
+
+---@param key string?  job name; repeated failures stop it and switch its toggles off
+function xDTaraZ.Scheduler.Run(fn, key)
+    if key and State.Halted[key] then return end
     local ok, err = pcall(fn)
-    if not ok then warn("[BuildThePyramid]", err) end
+    if ok then
+        if key then State.Fails[key], State.FailSince[key] = nil, nil end
+        return
+    end
+    if key then
+        xDTaraZ.Scheduler.Fail(key, err)
+    else
+        warn("[BuildThePyramid]", err)
+    end
+end
+
+---@return boolean  one of the job's toggles is on; core jobs have none
+function xDTaraZ.Scheduler.Wanted(key)
+    for _, idx in ipairs(xDTaraZ.Scheduler.Toggles[key] or {}) do
+        if State.Opt[idx] == true then return true end
+    end
+    return false
+end
+
+function xDTaraZ.Scheduler.Fail(key, err)
+    local fails = (State.Fails[key] or 0) + 1
+    State.Fails[key] = fails
+    State.FailSince[key] = State.FailSince[key] or osClock()
+    if fails == 1 then warn("[BuildThePyramid] " .. key .. " failing:", err) end
+
+    if fails < Config.FailLimit or osClock() - State.FailSince[key] < Config.FailWindow then return end
+    if not xDTaraZ.Scheduler.Wanted(key) then return end
+    State.Halted[key] = true
+    for _, idx in ipairs(xDTaraZ.Scheduler.Toggles[key] or {}) do State.Opt[idx] = false end
+    table.insert(State.HaltQueue, { key, tostring(err):match("^[^\n]*") })
+end
+
+function xDTaraZ.Scheduler.Resume(idx)
+    for key, toggles in pairs(xDTaraZ.Scheduler.Toggles) do
+        if table.find(toggles, idx) then
+            State.Halted[key], State.Fails[key], State.FailSince[key] = nil, nil, nil
+        end
+    end
 end
 
 function xDTaraZ.Scheduler.RunOnce(name, fn)
@@ -928,7 +1284,7 @@ end
 function xDTaraZ.Scheduler.Every(key, interval, fn)
     if osClock() - (State.Last[key] or 0) < interval then return end
     State.Last[key] = osClock()
-    xDTaraZ.Scheduler.Run(fn)
+    xDTaraZ.Scheduler.Run(fn, key)
 end
 
 function xDTaraZ.Scheduler.Summarize()
@@ -939,7 +1295,6 @@ function xDTaraZ.Scheduler.Summarize()
         if entry[1] < cutoff then table.remove(State.CoinLog, i) else recent += entry[2] end
     end
     local carried, cap = xDTaraZ.Game.Carried(), xDTaraZ.Game.Capacity()
-    State.CarryShown = carried
     State.Summary = ("Coins %s · %s/min\nStrength Lv %s · Speed Lv %s · Carry %d/%d\nPyramids %s · Placed %d"):format(
         xDTaraZ.Format(State.Stats.Coins), xDTaraZ.Format(recent * 60 / Config.RateWindow),
         tostring(xDTaraZ.Game.Attr("StrengthLevel") or 0), tostring(xDTaraZ.Game.Attr("SpeedLevel") or 0),
@@ -948,7 +1303,7 @@ end
 
 function xDTaraZ.Scheduler.Step()
     local opt = State.Opt
-    xDTaraZ.Scheduler.Run(xDTaraZ.Scheduler.Summarize)
+    xDTaraZ.Scheduler.Run(xDTaraZ.Scheduler.Summarize, "Summary")
 
     for name, handler in pairs(xDTaraZ.Scheduler.RequestHandlers) do
         if State.Requests[name] then
@@ -990,14 +1345,19 @@ function xDTaraZ.Scheduler.Stop()
     opt.SpeedOn, opt.Fly, opt.Noclip = false, false, false
     xDTaraZ.Move.Refresh()
     RunService:Set3dRenderingEnabled(true)
+    xDTaraZ.Util.Try("fps boost restore", xDTaraZ.Server.Unboost)
 end
 
-
 local function BuildInterface()
-    local Library = loadstring(xDTaraZ.Util.HttpGet(Config.UiSource))()
-    MarioBanner.Step("UI library")
+    local Library, problem = xDTaraZ.Util.LoadLibrary(Config.UiSource)
+    if not Library then
+        xDTaraZ.Util.Alert(problem)
+        return
+    end
+    pcall(MarioBanner.Step, "UI library")
     local T = function(en, th) return Library:T(en, th) end
     local opt = State.Opt
+    local statusLabel, runLabel
 
     local function Notify(text, kind)
         Library:Notify("Build the Pyramid", text, 4, kind or "Info")
@@ -1007,12 +1367,22 @@ local function BuildInterface()
         return function() State.Requests[name] = true end
     end
 
-    ---@param onChange function?  runs after the option is stored
-    local function Store(key, onChange, cast)
-        return function(value)
-            opt[key] = cast and cast(value) or value
-            if onChange then onChange(value) end
-        end
+    local function Toggle(group, key, text, description, onChange)
+        return group:AddToggle(key, {
+            Text = text,
+            Description = description,
+            Default = false,
+            Callback = function(value)
+                if value == true and not xDTaraZ.Gate.Ready(key) then
+                    Notify(T("Needs a script update (game changed)", "ต้องอัปเดตสคริปต์ (เกมเปลี่ยน)"), "Warning")
+                    task.defer(function() Library.Toggles[key]:SetValue(false) end)
+                    return
+                end
+                opt[key] = value
+                if value == true then xDTaraZ.Scheduler.Resume(key) end
+                if onChange then onChange(value) end
+            end,
+        })
     end
 
     local function PlayerNames()
@@ -1032,267 +1402,223 @@ local function BuildInterface()
         return names
     end
 
-    local function RegisterIcons()
-        if Library:HasIcon("pyramid") then return end
-        Library:AddIcon("pyramid", {
-            ".........",
-            "....Y....",
-            "...YYS...",
-            "...YSS...",
-            "..YYSSS..",
-            "..YSSSS..",
-            ".YYSSSSS.",
-            "YYYSSSSSS",
-            "KKKKKKKKK",
-        }, {
-            Y = Color3.fromRGB(240, 200, 110),
-            S = Color3.fromRGB(196, 146, 70),
-            K = Color3.fromRGB(92, 64, 38),
-        })
+    ---@return table  list from a game-data source, empty when it errors
+    local function Values(source)
+        local ok, list = pcall(source)
+        return ok and type(list) == "table" and list or {}
+    end
+
+    local function Gate()
+        local blocked = 0
+        for idx in pairs(xDTaraZ.Gate.Needs) do
+            if not Library.Options[idx] or xDTaraZ.Gate.Ready(idx) then continue end
+            blocked += 1
+            if Library.Compat then Library.Compat.Block(idx, T("Needs a script update (game changed)", "ต้องอัปเดตสคริปต์ (เกมเปลี่ยน)")) end
+        end
+        if blocked == 0 then return end
+        Library:Notify("Mario Hub", T(blocked .. " features need a script update (game changed)", blocked .. " ฟีเจอร์ต้องอัปเดตสคริปต์ (เกมเปลี่ยน)"), 8, "Warning")
+    end
+
+    local function DrainHalted()
+        while #State.HaltQueue > 0 do
+            local key, reason = table.unpack(table.remove(State.HaltQueue, 1))
+            for _, idx in ipairs(xDTaraZ.Scheduler.Toggles[key] or {}) do
+                local toggle = Library.Toggles[idx]
+                if toggle and toggle.Value == true then toggle:SetValue(false) end
+            end
+            Notify(key .. " stopped: " .. reason, "Error")
+        end
     end
 
     local function BuildMain(window)
         window:AddTabSection(T("Main", "หลัก"))
-        local tab = window:AddTab(T("Main", "หลัก"), "main", T("Status and Discord", "สถานะและ Discord"))
+        local MainTab = window:AddTab(T("Main", "หลัก"), "house", T("Status and Discord", "สถานะและ Discord"))
 
-        local status = tab:AddLeftGroupbox(T("Status", "สถานะ"), "stats")
-        status:AddStatus("StatusTask", { Text = T("Doing", "กำลังทำ"), Icon = "play" })
-        status:AddStatus("StatusCarry", { Text = T("Carrying", "ถืออยู่"), Icon = "box" })
+        local statusBox = MainTab:AddLeftGroupbox(T("Status", "สถานะ"), "star")
+        statusLabel = statusBox:AddLabel(T("Loading...", "กำลังโหลด..."))
+        runLabel = statusBox:AddLabel("-")
 
-        local live = tab:AddLeftGroupbox(T("Live", "ตัวเลขสด"), "chart")
-        live:AddStat("StatCoins", { Text = T("Coins", "เหรียญ"), Icon = "money", Token = "Coin" })
-        live:AddStat("StatPlaced", { Text = T("Blocks placed", "บล็อกที่วาง"), Icon = "pyramid", Format = "%s" })
-        live:AddStat("StatStrength", { Text = T("Strength level", "เลเวลพลัง"), Icon = "power", Format = "%s" })
-        live:AddStat("StatSpeed", { Text = T("Speed level", "เลเวลความเร็ว"), Icon = "speed", Format = "%s" })
-        live:AddStat("StatPyramids", { Text = T("Pyramids built", "พีระมิดที่สร้างเสร็จ"), Icon = "trophy", Format = "%s", Token = "Good" })
-
-        Library.Kit.Discord.Build(tab, Config.Discord)
+        local discordBox = MainTab:AddRightGroupbox(T("Discord", "Discord"), "link")
+        discordBox:AddLabel(Config.Discord)
+        discordBox:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ Discord"), Style = "Primary", Func = function()
+            Notify(xDTaraZ.Util.Copy(Config.Discord) and "Discord link copied" or Config.Discord)
+        end })
     end
 
     local function BuildFarm(window)
         window:AddTabSection(T("Farming", "ฟาร์ม"))
-        local tab = window:AddTab(T("Auto Farm", "ฟาร์มอัตโนมัติ"), "autofarm", T("Blocks, coins and training", "บล็อก เหรียญ และการฝึก"))
+        local FarmTab = window:AddTab(T("Auto Farm", "ฟาร์มอัตโนมัติ"), "brick", T("Blocks and coins", "บล็อกและเหรียญ"))
 
-        local farm = tab:AddLeftGroupbox(T("Pyramid", "พีระมิด"), "pyramid")
-        farm:AddFeature("AutoFarm", {
+        local farmBox = FarmTab:AddLeftGroupbox(T("Auto Farm", "ฟาร์มอัตโนมัติ"), "brick")
+        farmBox:AddToggle("AutoFarm", {
             Text = T("Auto Farm", "ฟาร์มอัตโนมัติ"),
             Description = T("Grabs blocks and builds the pyramid for coins", "หยิบบล็อกแล้วสร้างพีระมิดเพื่อเหรียญ"),
-            Icon = "pyramid",
+            Default = false,
             Risky = true,
-            Keybind = { Default = "None", Mode = "Toggle" },
-            Callback = Store("AutoFarm", function(on)
-                if not on then State.Requests.FarmStop = true end
-            end),
-            Options = function(options)
-                options:AddToggle("ReturnOnStop", { Text = T("Return On Stop", "กลับที่เดิมเมื่อหยุด"), Icon = "waypoint", Callback = Store("ReturnOnStop") })
+            Callback = function(value)
+                opt.AutoFarm = value
+                if value then xDTaraZ.Scheduler.Resume("AutoFarm") else State.Requests.FarmStop = true end
             end,
-        })
+        }):AddKeyPicker("AutoFarmKey", { Default = "None", Mode = "Toggle" })
+        Toggle(farmBox, "ReturnOnStop", T("Return On Stop", "กลับที่เดิมเมื่อหยุด"), T("Goes back to where you started", "กลับไปจุดที่เริ่มฟาร์ม"))
 
-        local gym = tab:AddLeftGroupbox(T("Gym", "ยิม"), "gravity")
-        gym:AddFeature("AutoStrength", {
-            Text = T("Auto Train Strength", "ฝึกพลังอัตโนมัติ"),
-            Description = T("Bench press at your strongest gym", "ยกน้ำหนักที่ยิมแรงสุดที่ใช้ได้"),
-            Icon = "power",
-            Keybind = { Default = "None", Mode = "Toggle" },
-            Callback = Store("AutoStrength", function(on)
-                if not on then State.Requests.TrainStop = true end
-            end),
-        })
-        gym:AddFeature("AutoSpeed", {
-            Text = T("Auto Train Speed", "ฝึกความเร็วอัตโนมัติ"),
-            Description = T("Runs on your strongest treadmill", "วิ่งบนลู่ที่แรงสุดที่ใช้ได้"),
-            Icon = "speed",
-            Keybind = { Default = "None", Mode = "Toggle" },
-            Callback = Store("AutoSpeed"),
-        })
-
-        local pool = tab:AddRightGroupbox(T("Waters of Nu", "สระ Waters of Nu"), "water")
-        pool:AddFeature("AutoPool", {
-            Text = T("Auto Join Pool", "ลงสระอัตโนมัติ"),
-            Description = T("Trains in the pool when a pyramid is finished", "ฝึกในสระเมื่อพีระมิดสร้างเสร็จ"),
-            Icon = "water",
-            Keybind = { Default = "None", Mode = "Toggle" },
-            Callback = Store("AutoPool"),
-        })
-
-        local order = tab:AddRightGroupbox(T("Farm vs Training", "ฟาร์มกับฝึก"), "sort")
-        order:AddSegmented("Priority", {
-            Text = T("When both are on", "เมื่อเปิดทั้งคู่"),
-            Icon = "sort",
+        local orderBox = FarmTab:AddRightGroupbox(T("Farm vs Training", "ฟาร์มกับฝึก"), "sliders-horizontal")
+        local altSlider
+        orderBox:AddDropdown("Priority", {
+            Text = T("When Both Are On", "เมื่อเปิดทั้งคู่"),
             Values = { "Farm", "Train", "Alternate" },
-            Default = "Farm",
-            Callback = Store("Priority", nil, function(value) return value or "Farm" end),
+            Default = 1,
+            Callback = function(value)
+                opt.Priority = value or "Farm"
+                if altSlider then altSlider:SetVisible(opt.Priority == "Alternate") end
+            end,
         })
-        order:AddStepper("AlternateMinutes", {
-            Text = T("Switch every", "สลับทุก"),
-            Icon = "timer",
-            Min = 1, Max = 30, Step = 1, Default = opt.AlternateMinutes, Suffix = " min",
-            DependsOn = { "Priority", "Alternate" },
-            Callback = Store("AlternateMinutes", nil, function(value) return tonumber(value) or 5 end),
+        altSlider = orderBox:AddSlider("AlternateMinutes", {
+            Text = T("Alternate Every (min)", "สลับทุก (นาที)"),
+            Min = 1, Max = 30, Default = opt.AlternateMinutes, Rounding = 0,
+            Callback = function(value) opt.AlternateMinutes = tonumber(value) or 5 end,
         })
+        altSlider:SetVisible(opt.Priority == "Alternate")
     end
 
-    local function BuildProgression(window)
+    local function BuildTraining(window)
+        local GymTab = window:AddTab(T("Training", "ฝึก"), "heart", T("Strength, speed and the pool", "พลัง ความเร็ว และสระ"))
+
+        local gymBox = GymTab:AddLeftGroupbox(T("Gym", "ยิม"), "heart")
+        Toggle(gymBox, "AutoStrength", T("Auto Train Strength", "ฝึกพลังอัตโนมัติ"), T("Bench press at your strongest gym", "ยกน้ำหนักที่ยิมแรงสุดที่ใช้ได้"), function(on)
+            if not on then State.Requests.TrainStop = true end
+        end):AddKeyPicker("AutoStrengthKey", { Default = "None", Mode = "Toggle" })
+        Toggle(gymBox, "AutoSpeed", T("Auto Train Speed", "ฝึกความเร็วอัตโนมัติ"), T("Runs on your strongest treadmill", "วิ่งบนลู่ที่แรงสุดที่ใช้ได้"))
+            :AddKeyPicker("AutoSpeedKey", { Default = "None", Mode = "Toggle" })
+
+        local poolBox = GymTab:AddRightGroupbox(T("Waters of Nu", "สระ Waters of Nu"), "pipe")
+        Toggle(poolBox, "AutoPool", T("Auto Join Pool", "ลงสระอัตโนมัติ"), T("Trains in the pool when a pyramid is finished", "ฝึกในสระเมื่อพีระมิดสร้างเสร็จ"))
+            :AddKeyPicker("AutoPoolKey", { Default = "None", Mode = "Toggle" })
+    end
+
+    local function BuildShop(window)
         window:AddTabSection(T("Progression", "ความคืบหน้า"))
-        local tab = window:AddTab(T("Upgrades & Codes", "อัปเกรดและโค้ด"), "upgrade", T("Spend coins and redeem codes", "ใช้เหรียญและใส่โค้ด"))
+        local ShopTab = window:AddTab(T("Upgrades & Codes", "อัปเกรดและโค้ด"), "shop", T("Spend coins and redeem codes", "ใช้เหรียญและใส่โค้ด"))
 
-        local upgrades = tab:AddLeftGroupbox(T("Upgrades", "อัปเกรด"), "upgrade")
-        upgrades:AddFeature("AutoUpgrade", {
-            Text = T("Auto Upgrade", "อัปเกรดอัตโนมัติ"),
-            Description = T("Buys the selected upgrades with coins", "ซื้ออัปเกรดที่เลือกด้วยเหรียญ"),
-            Icon = "upgrade",
-            Keybind = { Default = "None", Mode = "Toggle" },
-            Callback = Store("AutoUpgrade"),
-            Now = { Text = T("Buy Now", "ซื้อเดี๋ยวนี้"), Icon = "buy", Callback = Request("UpgradeNow") },
-        })
-        upgrades:AddMultiChips("Upgrades", {
+        local upgradeBox = ShopTab:AddLeftGroupbox(T("Upgrades", "อัปเกรด"), "coin")
+        Toggle(upgradeBox, "AutoUpgrade", T("Auto Upgrade", "อัปเกรดอัตโนมัติ"), T("Buys the selected upgrades with coins", "ซื้ออัปเกรดที่เลือกด้วยเหรียญ"))
+            :AddKeyPicker("AutoUpgradeKey", { Default = "None", Mode = "Toggle" })
+        upgradeBox:AddDropdown("Upgrades", {
             Text = T("Upgrades", "อัปเกรด"),
-            Icon = "filter",
             Values = xDTaraZ.UpgradeNames,
+            Multi = true,
             Default = {},
-            Callback = Store("Upgrades", nil, function(selected) return selected or {} end),
+            Callback = function(selected) opt.Upgrades = selected or {} end,
         })
-        upgrades:AddSegmented("UpgradeOrder", {
+        upgradeBox:AddDropdown("UpgradeOrder", {
             Text = T("Order", "ลำดับ"),
-            Icon = "sort",
             Values = { "Cheapest First", "In Order" },
-            Default = "Cheapest First",
-            Callback = Store("UpgradeOrder", nil, function(value) return value or "Cheapest First" end),
+            Default = 1,
+            Callback = function(value) opt.UpgradeOrder = value or "Cheapest First" end,
         })
-        upgrades:AddSlider("KeepCoins", {
-            Text = T("Keep coins", "กันเหรียญไว้"),
-            Icon = "money",
+        upgradeBox:AddSlider("KeepCoins", {
+            Text = T("Keep Coins", "กันเหรียญไว้"),
             Min = 0, Max = 1000000, Default = 0, Rounding = 0,
-            Callback = Store("KeepCoins", nil, function(value) return tonumber(value) or 0 end),
+            Callback = function(value) opt.KeepCoins = tonumber(value) or 0 end,
         })
+        upgradeBox:AddButton({ Text = T("Buy Now", "ซื้อเดี๋ยวนี้"), Func = Request("UpgradeNow") })
 
-        local codes = tab:AddRightGroupbox(T("Codes", "โค้ด"), "code")
-        codes:AddButton({ Text = T("Redeem All Codes", "ใช้โค้ดทั้งหมด"), Icon = "code", Style = "Primary", Callback = Request("CodesNow") })
+        local codeBox = ShopTab:AddRightGroupbox(T("Codes", "โค้ด"), "code")
+        codeBox:AddButton({ Text = T("Redeem All Codes", "ใช้โค้ดทั้งหมด"), Style = "Primary", Func = Request("CodesNow") })
     end
 
-    local function BuildMovement(tab)
-        local move = tab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "speed")
-        move:AddFeature("SpeedOn", {
-            Text = T("Speed", "ความเร็ว"),
-            Icon = "speed",
-            Keybind = { Default = "None", Mode = "Toggle" },
-            Callback = Store("SpeedOn", Request("Movement")),
-            Options = function(options)
-                options:AddSlider("WalkSpeed", {
-                    Text = T("Walk speed", "ความเร็วเดิน"), Icon = "speed",
-                    Min = 16, Max = 200, Default = opt.WalkSpeed, Rounding = 0,
-                    Callback = Store("WalkSpeed", nil, function(value) return tonumber(value) or opt.WalkSpeed end),
-                })
-            end,
-        })
-        move:AddFeature("Fly", {
-            Text = T("Fly", "บิน"),
-            Icon = "fly",
-            Keybind = { Default = "None", Mode = "Toggle" },
-            Callback = Store("Fly", Request("Movement")),
-            Options = function(options)
-                options:AddSlider("FlySpeed", {
-                    Text = T("Fly speed", "ความเร็วบิน"), Icon = "wingcap",
-                    Min = 10, Max = 200, Default = opt.FlySpeed, Rounding = 0,
-                    Callback = Store("FlySpeed", nil, function(value) return tonumber(value) or opt.FlySpeed end),
-                })
-            end,
-        })
-        move:AddFeature("Noclip", {
-            Text = T("Noclip", "ทะลุกำแพง"),
-            Icon = "noclip",
-            Keybind = { Default = "None", Mode = "Toggle" },
-            Callback = Store("Noclip", Request("Movement")),
-        })
-        move:AddToggle("InfJump", { Text = T("Infinite Jump", "กระโดดไม่จำกัด"), Icon = "infjump", Callback = Store("InfJump") })
-    end
+    local function BuildPlayer(window)
+        window:AddTabSection(T("Misc", "อื่นๆ"))
+        local PlayerTab = window:AddTab(T("Player", "ผู้เล่น"), "user", T("Movement and teleports", "การเคลื่อนที่และวาร์ป"))
 
-    local function BuildTeleport(tab)
-        local tp = tab:AddRightGroupbox(T("Teleport", "วาร์ป"), "teleport")
-        tp:AddButton({ Text = T("Quarry", "เหมืองหิน"), Icon = "mine", Callback = Request("TpQuarry") })
-            :AddButton({ Text = T("Pyramid", "พีระมิด"), Icon = "pyramid", Callback = Request("TpPyramid") })
-        tp:AddButton({ Text = T("Pool", "สระ"), Icon = "water", Callback = Request("TpPool") })
+        local moveBox = PlayerTab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "star")
+        Toggle(moveBox, "SpeedOn", T("Speed", "ความเร็ว"), nil, Request("Movement"))
+            :AddKeyPicker("SpeedOnKey", { Default = "None", Mode = "Toggle" })
+        moveBox:AddSlider("WalkSpeed", {
+            Text = T("Walk Speed", "ความเร็วเดิน"),
+            Min = 16, Max = 200, Default = opt.WalkSpeed, Rounding = 0,
+            Callback = function(value) opt.WalkSpeed = tonumber(value) or opt.WalkSpeed end,
+        })
+        Toggle(moveBox, "Fly", T("Fly", "บิน"), nil, Request("Movement"))
+            :AddKeyPicker("FlyKey", { Default = "None", Mode = "Toggle" })
+        moveBox:AddSlider("FlySpeed", {
+            Text = T("Fly Speed", "ความเร็วบิน"),
+            Min = 10, Max = 200, Default = opt.FlySpeed, Rounding = 0,
+            Callback = function(value) opt.FlySpeed = tonumber(value) or opt.FlySpeed end,
+        })
+        Toggle(moveBox, "Noclip", T("Noclip", "ทะลุกำแพง"), nil, Request("Movement"))
+            :AddKeyPicker("NoclipKey", { Default = "None", Mode = "Toggle" })
+        Toggle(moveBox, "InfJump", T("Infinite Jump", "กระโดดไม่จำกัด"))
 
-        tp:AddDropdown("GymTarget", {
+        local tpBox = PlayerTab:AddRightGroupbox(T("Teleport", "วาร์ป"), "teleport")
+        tpBox:AddButton({ Text = T("Quarry", "เหมืองหิน"), Func = Request("TpQuarry") })
+        tpBox:AddButton({ Text = T("Pyramid", "พีระมิด"), Func = Request("TpPyramid") })
+        tpBox:AddButton({ Text = T("Pool", "สระ"), Func = Request("TpPool") })
+        local gymDropdown = tpBox:AddDropdown("GymTarget", {
             Text = T("Gym", "ยิม"),
-            Icon = "gravity",
-            Values = GymNames(),
+            Values = Values(GymNames),
             Default = 1,
             Callback = function(value) State.GymTarget = value and value:match("^Gym (%S+)") end,
         })
-        tp:AddButton({ Text = T("Go To Gym", "ไปยิม"), Icon = "teleport", Callback = Request("TpGym") })
+        State.GymTarget = gymDropdown.Value and gymDropdown.Value:match("^Gym (%S+)")
+        tpBox:AddButton({ Text = T("Go To Gym", "ไปยิม"), Func = Request("TpGym") })
 
-        local playerDropdown = tp:AddDropdown("PlayerTarget", {
+        local playerDropdown = tpBox:AddDropdown("PlayerTarget", {
             Text = T("Player", "ผู้เล่น"),
-            Icon = "players",
             Values = PlayerNames(),
             Searchable = true,
             AllowNull = true,
             Callback = function(value) State.PlayerTarget = value end,
         })
-        tp:AddButton({ Text = T("Go To Player", "ไปหาผู้เล่น"), Icon = "teleport", Callback = Request("TpPlayer") })
-            :AddButton({ Text = T("Refresh", "รีเฟรช"), Icon = "refresh", Style = "Ghost", Callback = function()
-                playerDropdown:SetValues(PlayerNames())
-            end })
+        tpBox:AddButton({ Text = T("Refresh Players", "รีเฟรชผู้เล่น"), Func = function() playerDropdown:SetValues(PlayerNames()) end })
+        tpBox:AddButton({ Text = T("Go To Player", "ไปหาผู้เล่น"), Func = Request("TpPlayer") })
     end
 
-    local function BuildMisc(window)
-        window:AddTabSection(T("Misc", "อื่นๆ"))
-        local tab = window:AddTab(T("Player", "ผู้เล่น"), "player", T("Movement, teleports and session", "การเคลื่อนที่ วาร์ป และเซสชัน"))
-        BuildMovement(tab)
-        BuildTeleport(tab)
-
-        local session = tab:AddLeftGroupbox(T("Session", "เซสชัน"), "server")
-        session:AddToggle("AntiAfk", { Text = T("Anti AFK", "กันหลุด AFK"), Icon = "antiafk", Callback = Store("AntiAfk") })
-        session:AddToggle("AutoRejoin", { Text = T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), Description = T("Rejoins by itself after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"), Icon = "rejoin", Callback = Store("AutoRejoin") })
-        session:AddToggle("NoRender", {
-            Text = T("Disable 3D Rendering", "ปิดการเรนเดอร์ 3D"),
-            Description = T("Saves battery and CPU while farming", "ประหยัดแบตและ CPU ตอนฟาร์ม"),
-            Icon = "lowfps",
-            Callback = Store("NoRender", function(on) RunService:Set3dRenderingEnabled(not on) end),
-        })
-        session:AddButton({ Text = T("FPS Boost", "เพิ่ม FPS"), Icon = "fpsboost", Callback = Request("Boost") })
-        session:AddButton({ Text = T("Rejoin", "เข้าเซิร์ฟเดิมใหม่"), Icon = "rejoin", Callback = Request("Rejoin") })
-            :AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), Icon = "hop", Callback = Request("Hop") })
+    local function BuildSettings(window)
+        local settingsTab = window:AddSettingsTab()
+        local sessionBox = settingsTab:AddLeftGroupbox(T("Session", "เซสชัน"), "gear")
+        Toggle(sessionBox, "AntiAfk", T("Anti AFK", "กันหลุด AFK"), T("Stops the idle kick", "กันโดนเตะเพราะไม่ขยับ"))
+        Toggle(sessionBox, "AutoRejoin", T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), T("Rejoins by itself after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"))
+        Toggle(sessionBox, "NoRender", T("Disable 3D Rendering", "ปิดการเรนเดอร์ 3D"), T("Saves battery and CPU while farming", "ประหยัดแบตและ CPU ตอนฟาร์ม"), function(on)
+            RunService:Set3dRenderingEnabled(not on)
+        end)
+        sessionBox:AddButton({ Text = T("FPS Boost", "เพิ่ม FPS"), Func = Request("Boost") })
+        sessionBox:AddButton({ Text = T("Rejoin", "เข้าเซิร์ฟเดิมใหม่"), Func = Request("Rejoin") })
+        sessionBox:AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), Func = Request("Hop") })
     end
 
     local function Live()
-        local status = Library.Lib.Status
-        status("StatusTask", function()
-            if State.Task == "None" then return "Idle", "Idle" end
-            return ("%s: %s"):format(State.Task, State.Status), "Running"
-        end, 1)
-        status("StatusCarry", function()
-            return ("%d / %d"):format(State.CarryShown or 0, xDTaraZ.Game.Capacity())
-        end, 1)
-        status("StatCoins", xDTaraZ.Game.Coins, 1)
-        status("StatPlaced", function() return State.Placed end, 1)
-        status("StatStrength", function() return tonumber(xDTaraZ.Game.Attr("StrengthLevel")) or 0 end, 2)
-        status("StatSpeed", function() return tonumber(xDTaraZ.Game.Attr("SpeedLevel")) or 0 end, 2)
-        status("StatPyramids", function() return tonumber(xDTaraZ.Game.Attr("Pyramids")) or 0 end, 5)
-
         Library:Every(1, function()
             while #State.Messages > 0 do
                 Notify(table.remove(State.Messages, 1))
             end
+            DrainHalted()
+            if statusLabel then statusLabel:SetText(State.Summary or "-") end
+            if not runLabel then return end
+            runLabel:SetText(State.Task == "None" and State.Status or ("%s: %s"):format(State.Task, State.Status))
         end)
     end
 
     local function BuildTabs()
         local window = Library.Window
-        RegisterIcons()
-        BuildMain(window)
-        BuildFarm(window)
-        BuildProgression(window)
-        BuildMisc(window)
-        window:AddSettingsTab()
-        Live()
+        xDTaraZ.Util.Try("ui main", BuildMain, window)
+        xDTaraZ.Util.Try("ui farm", BuildFarm, window)
+        xDTaraZ.Util.Try("ui training", BuildTraining, window)
+        xDTaraZ.Util.Try("ui shop", BuildShop, window)
+        xDTaraZ.Util.Try("ui player", BuildPlayer, window)
+        xDTaraZ.Util.Try("ui settings", BuildSettings, window)
+        xDTaraZ.Util.Try("ui gate", Gate)
+        xDTaraZ.Util.Try("ui live", Live)
     end
 
-    Library:OnUnload(xDTaraZ.Scheduler.Stop)
-    getgenv().BuildThePyramidUnload = function()
+    local function UnloadHub()
         Library:Unload()
     end
+    Library:OnUnload(xDTaraZ.Scheduler.Stop)
+    Library:OnUnload(function()
+        if getgenv().BuildThePyramidUnload == UnloadHub then getgenv().BuildThePyramidUnload = nil end
+    end)
+    getgenv().BuildThePyramidUnload = UnloadHub
 
     Library:CreateWindow({
         Title = "Mario Hub",
@@ -1303,18 +1629,20 @@ local function BuildInterface()
         Theme = "Overworld",
         OnUnlocked = function()
             BuildTabs()
-            xDTaraZ.Scheduler.Boot()
+            xDTaraZ.Util.Try("boot", xDTaraZ.Scheduler.Boot)
             Notify("Loaded", "Success")
-            Library:LoadAutoloadConfig()
+            xDTaraZ.Util.Try("autoload config", Library.LoadAutoloadConfig, Library)
         end,
     })
+    return true
 end
 
 if getgenv().BuildThePyramidUnload then
     pcall(getgenv().BuildThePyramidUnload)
 end
 
-MarioBanner.Step("Systems")
-BuildInterface()
-MarioBanner.Step("Interface")
-MarioBanner.Ready()
+pcall(MarioBanner.Step, "Systems")
+if BuildInterface() then
+    pcall(MarioBanner.Step, "Interface")
+    pcall(MarioBanner.Ready)
+end

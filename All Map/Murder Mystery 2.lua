@@ -3,17 +3,24 @@ if not game:IsLoaded() then
 end
 
 if game.GameId ~= 66654135 then
-    game:GetService("Players").LocalPlayer:Kick("Mario Hub : this script is for Murder Mystery 2 only")
+    game:GetService("Players").LocalPlayer:Kick("Mario Hub: this script is for Murder Mystery 2 only")
     return
 end
 
 local MarioBanner = {
-    Print = type(getrenv) == "function" and getrenv().print or print,
+    Print = print,
     Started = os.clock(),
     Last = os.clock(),
     Done = 0,
     Total = 4,
 }
+
+do
+    local ok, renv = pcall(getrenv)
+    if ok and type(renv) == "table" and type(renv.print) == "function" then
+        MarioBanner.Print = renv.print
+    end
+end
 
 function MarioBanner.Show()
     local ok, executor = pcall(identifyexecutor)
@@ -112,8 +119,8 @@ function MarioBanner.Ready()
     }, "\n"))
 end
 
-MarioBanner.Show()
-MarioBanner.Step("Core")
+pcall(MarioBanner.Show)
+pcall(MarioBanner.Step, "Core")
 
 if not LPH_OBFUSCATED then
     local function Passthrough(fn) return fn end
@@ -136,13 +143,17 @@ local xDTaraZ = setmetatable({}, {
         rawset(self, key, type(value) == "function" and LPH_JIT(value) or value)
     end,
 })
-local Remotes = ReplicatedStorage:WaitForChild("Remotes")
-local GameplayRemotes = Remotes:WaitForChild("Gameplay")
 
 xDTaraZ.Config = {
     Discord = "https://discord.gg/FHVfmeSceA",
-    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui_v2.lua",
+    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
     SaveFolder = "Murder Mystery 2",
+    LoadTimeout = 10,
+    AlertTries = 20,
+    AlertRetry = 0.5,
+    JobFailLimit = 5,
+    JobFailWindow = 10,
+    StatusRefresh = 1,
     TickDelay = 0.5,
     RoleRefresh = 1,
     ShootStands = { Vector3.new(0, 0, 6), Vector3.new(0, 0, -6), Vector3.new(6, 0, 0), Vector3.new(-6, 0, 0), Vector3.new(0, 6, 3) },
@@ -161,6 +172,8 @@ xDTaraZ.Config = {
     FarmMurdererRadius = 30,
     FarmArrive = 1.5,
     FarmBrake = 20,
+    FarmGroundLift = 4,
+    FarmGroundReach = 400,
     FarmIdleWait = 0.3,
     FarmSettle = 0.15,
     FarmSkipTime = 4,
@@ -199,6 +212,7 @@ xDTaraZ.State = {
     ShootBusy = false,
     LastDodge = 0,
     FarmBusy = false,
+    FarmHome = nil,
     FarmMover = nil,
     Bag = { Current = 0, Max = 0 },
     SkippedCoins = {},
@@ -207,12 +221,14 @@ xDTaraZ.State = {
     Skins = {},
     KillBusy = false,
     NoclipConn = nil,
+    NoclipSaved = {},
     FlyConn = nil,
     FlyVelocity = nil,
     StickTarget = nil,
     Hook = nil,
     Esp = { Players = {}, Gun = nil },
     LightingDefaults = nil,
+    Halted = {},
     Opt = {
         AutoGrabGun = false,
         AutoShoot = false,
@@ -249,13 +265,9 @@ xDTaraZ.State = {
 
 local State = xDTaraZ.State
 
-for _, name in ipairs({ "Util", "Round", "Sheriff", "Murderer", "Troll", "Survive", "Kaitun", "Farm", "Aim", "Skin", "Teleport", "Movement", "Esp", "Visual", "Session", "Scheduler", "UI" }) do
+for _, name in ipairs({ "Util", "Round", "Sheriff", "Murderer", "Troll", "Survive", "Kaitun", "Farm", "Aim", "Skin", "Teleport", "Movement", "Esp", "Visual", "Session", "Scheduler" }) do
     xDTaraZ[name] = {}
 end
-
-xDTaraZ.Caps = {
-    Hook = type(hookmetamethod) == "function" and type(newcclosure) == "function" and type(getnamecallmethod) == "function",
-}
 
 function xDTaraZ.Util.Try(fn, ...)
     local ok, err = pcall(fn, ...)
@@ -263,6 +275,81 @@ function xDTaraZ.Util.Try(fn, ...)
         warn("[MM2]", err)
     end
     return ok, err
+end
+
+---@param text string  shown as a Roblox notification, works before the menu exists
+function xDTaraZ.Util.Alert(text)
+    warn("[MM2] " .. text)
+    task.spawn(function()
+        local starterGui = game:GetService("StarterGui")
+        for _ = 1, Config.AlertTries do
+            if pcall(starterGui.SetCore, starterGui, "SendNotification", { Title = "Mario Hub", Text = text, Duration = 10 }) then
+                return
+            end
+            task.wait(Config.AlertRetry)
+        end
+    end)
+end
+
+---@return string?  body, nil when every way to fetch failed
+function xDTaraZ.Util.HttpGet(url)
+    local ok, body = pcall(game.HttpGet, game, url)
+    if ok and type(body) == "string" then
+        return body
+    end
+    local send = (type(request) == "function" and request) or (type(http_request) == "function" and http_request)
+        or (type(syn) == "table" and syn.request) or (type(http) == "table" and http.request)
+    if type(send) ~= "function" then
+        return nil
+    end
+    local sent, response = pcall(send, { Url = url, Method = "GET" })
+    if sent and type(response) == "table" and tonumber(response.StatusCode) == 200 and type(response.Body) == "string" then
+        return response.Body
+    end
+    return nil
+end
+
+---@return table?  UI library, nil after telling the player why
+function xDTaraZ.Util.LoadLibrary()
+    local source = xDTaraZ.Util.HttpGet(Config.UiSource)
+    if not source or not source:sub(-64):find("return Library%s*$") then
+        xDTaraZ.Util.Alert("Could not download the menu. Check your connection and run it again.")
+        return nil
+    end
+    local chunk, err = loadstring(source)
+    if not chunk then
+        xDTaraZ.Util.Alert("The menu failed to load on this executor: " .. tostring(err))
+        return nil
+    end
+    local ok, library = pcall(chunk)
+    if not ok or type(library) ~= "table" then
+        xDTaraZ.Util.Alert("The menu failed to load on this executor: " .. tostring(library))
+        return nil
+    end
+    if type(library.Compat) ~= "table" then
+        xDTaraZ.Util.Alert("The menu is out of date. Wait a few minutes and run the script again.")
+        return nil
+    end
+    return library
+end
+
+---@param instance Instance  parented to gethui, then CoreGui, then PlayerGui
+function xDTaraZ.Util.Mount(instance)
+    local ok, hui = pcall(gethui)
+    if ok and typeof(hui) == "Instance" and pcall(function() instance.Parent = hui end) then
+        return
+    end
+    if pcall(function() instance.Parent = game:GetService("CoreGui") end) then
+        return
+    end
+    instance.Parent = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", Config.LoadTimeout)
+end
+
+local Remotes = ReplicatedStorage:WaitForChild("Remotes", Config.LoadTimeout)
+local GameplayRemotes = Remotes and Remotes:WaitForChild("Gameplay", Config.LoadTimeout)
+if not GameplayRemotes then
+    xDTaraZ.Util.Alert("Murder Mystery 2 has not finished loading. Rejoin and run the script again.")
+    return
 end
 
 function xDTaraZ.Util.Connect(signal, fn)
@@ -285,17 +372,6 @@ function xDTaraZ.Util.Tool(player, name)
     local character = player.Character
     local backpack = player:FindFirstChild("Backpack")
     return (character and character:FindFirstChild(name)) or (backpack and backpack:FindFirstChild(name))
-end
-
-function xDTaraZ.Util.PlayerNames()
-    local names = {}
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer then
-            table.insert(names, player.Name)
-        end
-    end
-    table.sort(names)
-    return names
 end
 
 function xDTaraZ.Round.RefreshRoles()
@@ -330,6 +406,7 @@ function xDTaraZ.Round.FindByRole(role)
             return player
         end
     end
+    return nil
 end
 
 function xDTaraZ.Round.Map()
@@ -338,12 +415,13 @@ function xDTaraZ.Round.Map()
             return child
         end
     end
+    return nil
 end
 
 function xDTaraZ.Round.IAmPlaying()
     local entry = State.Roles[LocalPlayer.Name]
     local humanoid = xDTaraZ.Util.Humanoid()
-    return xDTaraZ.Round.Map() ~= nil and humanoid ~= nil and humanoid.Health > 0 and not (entry and entry.Dead)
+    return xDTaraZ.Round.Map() ~= nil and humanoid ~= nil and humanoid.Health > 0 and entry ~= nil and not entry.Dead
 end
 
 function xDTaraZ.Round.GunDrop()
@@ -358,19 +436,28 @@ function xDTaraZ.Movement.SetNoclip(enabled)
         State.NoclipConn = nil
     end
     if not enabled then
+        xDTaraZ.Movement.RestoreCollision()
         return
     end
+    local saved = State.NoclipSaved
     State.NoclipConn = xDTaraZ.Util.Connect(RunService.Stepped, function()
         local character = LocalPlayer.Character
-        if not character then
-            return
-        end
+        if not character then return end
         for _, part in ipairs(character:GetChildren()) do
-            if part:IsA("BasePart") then
-                part.CanCollide = false
+            if not part:IsA("BasePart") then continue end
+            if saved[part] == nil then
+                saved[part] = part.CanCollide
             end
+            part.CanCollide = false
         end
     end)
+end
+
+function xDTaraZ.Movement.RestoreCollision()
+    for part, canCollide in pairs(State.NoclipSaved) do
+        if part.Parent then part.CanCollide = canCollide end
+    end
+    table.clear(State.NoclipSaved)
 end
 
 function xDTaraZ.Movement.RefreshNoclip()
@@ -565,8 +652,10 @@ function xDTaraZ.Sheriff.GrabGun()
     end
     return xDTaraZ.Util.WarpAndReturn(part.CFrame, function()
         local root = xDTaraZ.Util.Root()
-        firetouchinterest(root, part, 0)
-        firetouchinterest(root, part, 1)
+        if root and xDTaraZ.Library.Compat.Caps.Touch then
+            firetouchinterest(root, part, 0)
+            firetouchinterest(root, part, 1)
+        end
         task.wait(Config.GunGrabHold)
     end)
 end
@@ -674,10 +763,22 @@ function xDTaraZ.Murderer.NearestVictimRoot(origin)
     return best
 end
 
+---Hooked only while Silent Aim or Knife Throw Aim is on, the original goes back when both are off.
+function xDTaraZ.Sheriff.SyncAimHook()
+    local wanted = State.Alive and (State.Opt.SilentAim or State.Opt.KnifeAim)
+    if wanted and not State.Hook then
+        xDTaraZ.Util.Try(xDTaraZ.Sheriff.InstallAimHook)
+    elseif not wanted and State.Hook then
+        local restore = State.Hook
+        State.Hook = nil
+        xDTaraZ.Util.Try(restore)
+    end
+end
+
 function xDTaraZ.Sheriff.InstallAimHook()
-    if not xDTaraZ.Caps.Hook then return end
-    local original
-    original = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+    if not xDTaraZ.Library.Compat.Has({ "Namecall", "CheckCaller" }) then return end
+    local original, restore
+    original, restore = xDTaraZ.Library.Compat.HookMeta(game, "__namecall", function(self, ...)
         if not State.Alive or getnamecallmethod() ~= "FireServer" or checkcaller() then
             return original(self, ...)
         end
@@ -698,8 +799,8 @@ function xDTaraZ.Sheriff.InstallAimHook()
             end
         end
         return original(self, ...)
-    end))
-    State.Hook = original
+    end)
+    State.Hook = restore
 end
 
 function xDTaraZ.Survive.SafestSpot(threatPosition)
@@ -816,15 +917,15 @@ function xDTaraZ.Farm.GlideTo(position)
 end
 
 function xDTaraZ.Farm.Run()
-    State.FarmBusy = true
     local root = xDTaraZ.Util.Root()
     if root then
         xDTaraZ.Farm.AttachMover(root)
     end
     xDTaraZ.Movement.RefreshNoclip()
+    State.FarmHome = root and root.CFrame
     while xDTaraZ.Farm.CanRun() do
-        local map, root = xDTaraZ.Round.Map(), xDTaraZ.Util.Root()
-        local coin = map and root and xDTaraZ.Farm.NearestCoin(map, root.Position)
+        local map, hrp = xDTaraZ.Round.Map(), xDTaraZ.Util.Root()
+        local coin = map and hrp and xDTaraZ.Farm.NearestCoin(map, hrp.Position)
         if coin and not xDTaraZ.Util.Busy() then
             xDTaraZ.Farm.GlideTo(coin.Position)
             task.wait(Config.FarmSettle)
@@ -837,19 +938,37 @@ function xDTaraZ.Farm.Run()
             task.wait(Config.FarmIdleWait)
         end
     end
-    xDTaraZ.Farm.DetachMover()
-    State.FarmBusy = false
-    xDTaraZ.Movement.RefreshNoclip()
-    local humanoid = xDTaraZ.Util.Humanoid()
-    if xDTaraZ.Farm.BagFull() and State.Opt.ResetWhenFull and humanoid then
-        humanoid.Health = 0
-    end
+end
+
+---Leaves the character standing on something: back to where the farm started when there is no ground below.
+function xDTaraZ.Farm.Settle()
+    local root, home = xDTaraZ.Util.Root(), State.FarmHome
+    State.FarmHome = nil
+    if not root then return end
+    root.AssemblyLinearVelocity = Vector3.zero
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = { LocalPlayer.Character }
+    local ground = workspace:Raycast(root.Position + Vector3.new(0, Config.FarmGroundLift, 0), Vector3.new(0, -Config.FarmGroundReach, 0), params)
+    if ground or not home then return end
+    root.CFrame = home
 end
 
 function xDTaraZ.Farm.Step()
-    if not State.FarmBusy and xDTaraZ.Farm.CanRun() then
-        task.spawn(xDTaraZ.Farm.Run)
-    end
+    if State.FarmBusy or not xDTaraZ.Farm.CanRun() then return end
+    State.FarmBusy = true
+    task.spawn(function()
+        local ok = xDTaraZ.Util.Try(xDTaraZ.Farm.Run)
+        xDTaraZ.Farm.DetachMover()
+        xDTaraZ.Farm.Settle()
+        State.FarmBusy = false
+        xDTaraZ.Movement.RefreshNoclip()
+
+        local humanoid = xDTaraZ.Util.Humanoid()
+        if ok and humanoid and State.Opt.ResetWhenFull and xDTaraZ.Farm.BagFull() then
+            humanoid.Health = 0
+        end
+    end)
 end
 
 function xDTaraZ.Farm.InitBagTracking()
@@ -860,6 +979,10 @@ function xDTaraZ.Farm.InitBagTracking()
     xDTaraZ.Util.Connect(GameplayRemotes.CoinsStarted.OnClientEvent, function()
         State.Bag.Current, State.Bag.Max = 0, 0
         table.clear(State.SkippedCoins)
+    end)
+    xDTaraZ.Util.Connect(GameplayRemotes.RoundStart.OnClientEvent, function()
+        State.Bag.Current, State.Bag.Max = 0, 0
+        table.clear(State.Roles)
     end)
 end
 
@@ -1050,7 +1173,7 @@ end
 function xDTaraZ.Esp.Init()
     xDTaraZ.Esp.Folder = Instance.new("Folder")
     xDTaraZ.Esp.Folder.Name = HttpService:GenerateGUID(false)
-    xDTaraZ.Esp.Folder.Parent = gethui and gethui() or game:GetService("CoreGui")
+    xDTaraZ.Util.Mount(xDTaraZ.Esp.Folder)
 end
 
 function xDTaraZ.Esp.MakeHighlight(adornee, color)
@@ -1171,11 +1294,12 @@ end
 
 function xDTaraZ.Session.Hop()
     local url = string.format("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100", game.PlaceId)
-    local ok, body = pcall(game.HttpGet, game, url)
-    if not ok then
+    local body = xDTaraZ.Util.HttpGet(url)
+    local ok, servers = pcall(HttpService.JSONDecode, HttpService, body or "")
+    if not ok or type(servers) ~= "table" then
         return
     end
-    for _, server in ipairs(HttpService:JSONDecode(body).data or {}) do
+    for _, server in ipairs(servers.data or {}) do
         if server.id ~= game.JobId and server.playing < server.maxPlayers then
             TeleportService:TeleportToPlaceInstance(game.PlaceId, server.id, LocalPlayer)
             return
@@ -1205,41 +1329,107 @@ function xDTaraZ.Session.InitRoleNotify(notify)
     end)
 end
 
-function xDTaraZ.Scheduler.Step()
-    xDTaraZ.Util.Try(xDTaraZ.Round.RefreshRoles)
-    xDTaraZ.Util.Try(xDTaraZ.Kaitun.Step)
-    xDTaraZ.Util.Try(xDTaraZ.Farm.Step)
-    xDTaraZ.Util.Try(xDTaraZ.Visual.XRayStep)
-    xDTaraZ.Util.Try(xDTaraZ.Skin.ApplyStep)
-    xDTaraZ.Util.Try(xDTaraZ.Movement.Apply)
-    xDTaraZ.Util.Try(xDTaraZ.Sheriff.AutoGrabStep)
-    xDTaraZ.Util.Try(xDTaraZ.Sheriff.AutoShootStep)
-    xDTaraZ.Util.Try(xDTaraZ.Murderer.AutoKillStep)
-    xDTaraZ.Util.Try(xDTaraZ.Esp.RefreshPlayers)
-    xDTaraZ.Util.Try(xDTaraZ.Esp.RefreshGun)
+xDTaraZ.Scheduler.Jobs = {
+    Tick = {
+        { "Roles", xDTaraZ.Round.RefreshRoles },
+        { "Auto Win", xDTaraZ.Kaitun.Step, "Kaitun" },
+        { "Auto Farm", xDTaraZ.Farm.Step, "AutoFarm" },
+        { "X-Ray", xDTaraZ.Visual.XRayStep, "XRay" },
+        { "Skins", xDTaraZ.Skin.ApplyStep },
+        { "Movement", xDTaraZ.Movement.Apply, { "SpeedOn", "JumpOn" } },
+        { "Auto Grab Gun", xDTaraZ.Sheriff.AutoGrabStep, "AutoGrabGun" },
+        { "Auto Shoot", xDTaraZ.Sheriff.AutoShootStep, "AutoShoot" },
+        { "Auto Kill All", xDTaraZ.Murderer.AutoKillStep, "AutoKillAll" },
+        { "Role ESP", xDTaraZ.Esp.RefreshPlayers, "EspPlayers" },
+        { "Gun ESP", xDTaraZ.Esp.RefreshGun, "EspGun" },
+    },
+    Stepped = { { "Anti Fling", xDTaraZ.Movement.AntiFlingStep, "AntiFling" } },
+    Render = { { "Aimbot", xDTaraZ.Aim.Step, "Aimbot" } },
+    Heartbeat = {
+        { "Kill Aura", xDTaraZ.Murderer.KillAuraStep, "KillAura" },
+        { "Auto Dodge", xDTaraZ.Survive.DodgeStep, "AutoDodge" },
+        { "Stick To Player", xDTaraZ.Troll.StickStep, "StickTo" },
+    },
+}
+
+---@param job table  { label, step, toggle idx or list }
+---@return table     toggles of the job that are on
+function xDTaraZ.Scheduler.OnToggles(job)
+    local on = {}
+    if not xDTaraZ.Library or job[3] == nil then return on end
+    for _, idx in ipairs(type(job[3]) == "table" and job[3] or { job[3] }) do
+        local toggle = xDTaraZ.Library.Toggles[idx]
+        if toggle and toggle.Value then
+            on[#on + 1] = toggle
+        end
+    end
+    return on
+end
+
+---Queues the job's toggles to be switched off by the UI pump (their callbacks restore the game state); a job with none on rests until one turns on.
+function xDTaraZ.Scheduler.Halt(job, err)
+    local reason = tostring(err):match("^[^\n]*")
+    job.Streak = nil
+    if #xDTaraZ.Scheduler.OnToggles(job) == 0 then
+        job.Stopped = true
+        warn("[MM2] " .. job[1] .. " paused until turned on:", reason)
+        return
+    end
+
+    job.Halting = true
+    warn("[MM2] " .. job[1] .. " stopped:", reason)
+    table.insert(State.Halted, { job, reason })
+end
+
+---@param job table  { label, step, toggle idx or list }; toggle jobs halt after Config.JobFailLimit errors spanning Config.JobFailWindow seconds
+function xDTaraZ.Scheduler.Run(job, ...)
+    if job.Halting then return end
+    if job.Stopped then
+        if #xDTaraZ.Scheduler.OnToggles(job) == 0 then return end
+        job.Stopped = nil
+    end
+
+    local ok, err = pcall(job[2], ...)
+    if ok then
+        job.Streak = nil
+        return
+    end
+
+    local streak = job.Streak
+    if not streak then
+        streak = { count = 0, since = os.clock() }
+        job.Streak = streak
+        warn("[MM2] " .. job[1] .. ":", err)
+    end
+    streak.count += 1
+    if job[3] == nil or streak.count < Config.JobFailLimit or os.clock() - streak.since < Config.JobFailWindow then return end
+    xDTaraZ.Scheduler.Halt(job, err)
+end
+
+function xDTaraZ.Scheduler.RunLane(lane, ...)
+    for _, job in ipairs(xDTaraZ.Scheduler.Jobs[lane]) do
+        xDTaraZ.Scheduler.Run(job, ...)
+    end
 end
 
 function xDTaraZ.Scheduler.Boot(notify)
     xDTaraZ.Esp.Init()
     xDTaraZ.Farm.InitBagTracking()
     xDTaraZ.Util.Connect(RunService.Stepped, function()
-        xDTaraZ.Util.Try(xDTaraZ.Movement.AntiFlingStep)
+        xDTaraZ.Scheduler.RunLane("Stepped")
     end)
     xDTaraZ.Movement.InitInfJump()
     xDTaraZ.Session.InitAntiAfk()
     xDTaraZ.Session.InitRoleNotify(notify)
-    xDTaraZ.Sheriff.InstallAimHook()
     xDTaraZ.Util.Connect(RunService.RenderStepped, function(dt)
-        xDTaraZ.Util.Try(xDTaraZ.Aim.Step, dt)
+        xDTaraZ.Scheduler.RunLane("Render", dt)
     end)
     xDTaraZ.Util.Connect(RunService.Heartbeat, function()
-        xDTaraZ.Util.Try(xDTaraZ.Murderer.KillAuraStep)
-        xDTaraZ.Util.Try(xDTaraZ.Survive.DodgeStep)
-        xDTaraZ.Util.Try(xDTaraZ.Troll.StickStep)
+        xDTaraZ.Scheduler.RunLane("Heartbeat")
     end)
     task.spawn(function()
         while State.Alive do
-            xDTaraZ.Scheduler.Step()
+            xDTaraZ.Scheduler.RunLane("Tick")
             task.wait(Config.TickDelay)
         end
     end)
@@ -1247,6 +1437,8 @@ end
 
 function xDTaraZ.Scheduler.Stop()
     State.Alive = false
+    getgenv().MurderMystery2Unload = nil
+    xDTaraZ.Sheriff.SyncAimHook()
     State.StickTarget = nil
     xDTaraZ.Movement.SetFly(false)
     xDTaraZ.Movement.SetNoclip(false)
@@ -1268,23 +1460,13 @@ function xDTaraZ.Scheduler.Stop()
 end
 
 local function BuildInterface()
-    local Library = loadstring(game:HttpGet(Config.UiSource))()
-    MarioBanner.Step("UI library")
+    local Library = xDTaraZ.Util.LoadLibrary()
+    if not Library then return false end
+    xDTaraZ.Library = Library
+    pcall(MarioBanner.Step, "UI library")
     local T = function(en, th) return Library:T(en, th) end
     local opt = State.Opt
-
-    ---@param cap string  key in xDTaraZ.Caps
-    function xDTaraZ.UI.NeedCap(idx, cap)
-        if xDTaraZ.Caps[cap] then return end
-        local option = Library.Options[idx]
-        if not option then return end
-        option:OnChanged(function(on)
-            if not on then return end
-            local title = option.Info and option.Info.Text
-            Library:Notify("Mario Hub", tostring(title or idx) .. " is not supported on this executor", 5, "Warn")
-            task.defer(function() option:SetValue(false) end)
-        end)
-    end
+    local live = {}
 
     local function Notify(text, kind)
         Library:Notify("Murder Mystery 2", text, 5, kind or "Info")
@@ -1296,204 +1478,171 @@ local function BuildInterface()
         end
     end
 
+    local function AimHookBind(idx)
+        return function(value)
+            opt[idx] = value
+            xDTaraZ.Sheriff.SyncAimHook()
+        end
+    end
+
+    ---@return string?  live dropdown value, the list can change without a callback
+    local function Picked(idx)
+        local option = Library.Options[idx]
+        opt[idx] = option and option.Value or nil
+        return opt[idx]
+    end
+
     local function FlingAsync(target)
         if target then task.spawn(xDTaraZ.Troll.Fling, target) end
     end
 
-    local function BuildMainTab(window)
-        window:AddTabSection(T("Main", "หลัก"))
-        local tab = window:AddTab(T("Main", "หลัก"), "mushroom", T("Round info and auto play", "ข้อมูลรอบและเล่นอัตโนมัติ"))
+    local function BuildCombatTab(window)
+        local tab = window:AddTab(T("Combat", "ต่อสู้"), "crosshair", T("Sheriff and murderer tools", "เครื่องมือนายอำเภอและฆาตกร"))
 
-        local status = tab:AddLeftGroupbox(T("Round", "รอบนี้"), "stats")
-        status:AddStatus("StatusRole", { Text = T("Your role", "บทบาทเรา"), Icon = "player" })
-        status:AddStatus("StatusMurderer", { Text = T("Murderer", "ฆาตกร"), Icon = "knife" })
-        status:AddStatus("StatusSheriff", { Text = T("Sheriff", "นายอำเภอ"), Icon = "gun" })
-        status:AddProgressBar("StatusBag", { Text = T("Coin bag", "ถุงเหรียญ"), Icon = "money", Max = 1, Default = 0, Token = "Coin" })
+        local gunBox = tab:AddLeftGroupbox(T("Sheriff / Hero", "นายอำเภอ / ฮีโร่"))
+        gunBox:AddToggle("SilentAim", {
+            Text = T("Silent Aim", "ยิงล็อกเป้า"),
+            Description = T("Every shot you fire goes to the murderer", "ทุกนัดที่ยิงไปโดนฆาตกร"),
+            Default = false,
+            Callback = AimHookBind("SilentAim"),
+        }):AddKeyPicker("SilentAimKey", { Default = "None", Mode = "Toggle" })
+        Library.Compat.NeedCap("SilentAim", { "Namecall", "CheckCaller" })
+        gunBox:AddToggle("AutoShoot", {
+            Text = T("Auto Shoot Murderer", "ยิงฆาตกรอัตโนมัติ"),
+            Description = T("Kills the murderer as soon as you hold the gun", "ยิงฆาตกรทันทีที่ได้ถือปืน"),
+            Default = false,
+            Risky = true,
+            Callback = Bind("AutoShoot"),
+        }):AddKeyPicker("AutoShootKey", { Default = "None", Mode = "Toggle" })
+        gunBox:AddButton({ Text = T("Shoot Murderer Now", "ยิงฆาตกรเดี๋ยวนี้"), Style = "Primary", Func = function()
+            local ok, detail = xDTaraZ.Sheriff.ShootMurderer()
+            Notify(ok and ("Shot " .. tostring(detail)) or tostring(detail or "You need the gun"), ok and "Success" or "Warning")
+        end })
+        gunBox:AddToggle("AutoGrabGun", {
+            Text = T("Auto Grab Gun", "เก็บปืนอัตโนมัติ"),
+            Description = T("Picks up the dropped gun the moment the sheriff dies", "เก็บปืนที่ตกทันทีที่นายอำเภอตาย"),
+            Default = false,
+            Callback = Bind("AutoGrabGun"),
+        }):AddKeyPicker("AutoGrabGunKey", { Default = "None", Mode = "Toggle" })
+        gunBox:AddButton({ Text = T("Grab Gun Now", "เก็บปืนเดี๋ยวนี้"), Func = function()
+            local got = xDTaraZ.Sheriff.GrabGun()
+            Notify(got and "Gun grabbed" or "No gun on the ground", got and "Success" or "Warning")
+        end })
 
-        local play = tab:AddLeftGroupbox(T("Auto Play", "เล่นอัตโนมัติ"), "trophy")
-        play:AddFeature("Kaitun", {
+        local knifeBox = tab:AddRightGroupbox(T("Murderer", "ฆาตกร"))
+        knifeBox:AddToggle("AutoKillAll", {
+            Text = T("Auto Kill All", "ฆ่าทุกคนอัตโนมัติ"),
+            Description = T("Ends the round by killing everyone when you are the murderer", "จบรอบด้วยการฆ่าทุกคนเมื่อเราเป็นฆาตกร"),
+            Default = false,
+            Risky = true,
+            Callback = Bind("AutoKillAll"),
+        }):AddKeyPicker("AutoKillAllKey", { Default = "None", Mode = "Toggle" })
+        knifeBox:AddButton({ Text = T("Kill All Now", "ฆ่าทุกคนเดี๋ยวนี้"), Style = "Primary", Func = function()
+            task.spawn(function()
+                Notify(string.format("Killed %d players", xDTaraZ.Murderer.KillAll()))
+            end)
+        end })
+        knifeBox:AddToggle("KillAura", {
+            Text = T("Kill Aura", "ออร่าฆ่า"),
+            Description = T("Kills anyone who gets close while you hold the knife", "ฆ่าใครก็ตามที่เข้าใกล้ตอนถือมีด"),
+            Default = false,
+            Risky = true,
+            Callback = Bind("KillAura"),
+        }):AddKeyPicker("KillAuraKey", { Default = "None", Mode = "Toggle" })
+        knifeBox:AddToggle("KnifeAim", {
+            Text = T("Knife Throw Aim", "ปามีดล็อกเป้า"),
+            Description = T("Thrown knives fly to the nearest player", "มีดที่ปาพุ่งไปหาคนที่ใกล้ที่สุด"),
+            Default = false,
+            Callback = AimHookBind("KnifeAim"),
+        })
+        Library.Compat.NeedCap("KnifeAim", { "Namecall", "CheckCaller" })
+
+        local aimBox = tab:AddRightGroupbox(T("Aimbot", "ล็อกกล้อง"))
+        aimBox:AddToggle("Aimbot", {
+            Text = T("Aimbot", "ล็อกกล้อง"),
+            Description = T("Locks your camera on the murderer, or on the next victim when you hold the knife", "ล็อกกล้องไปที่ฆาตกร หรือเหยื่อคนถัดไปตอนถือมีด"),
+            Default = false,
+            Callback = Bind("Aimbot"),
+        }):AddKeyPicker("AimbotKey", { Default = "Q", Mode = "Hold" })
+        aimBox:AddSlider("AimSmooth", {
+            Text = T("Smoothness", "ความนุ่ม"),
+            Min = 0, Max = 95, Default = opt.AimSmooth, Rounding = 0, Suffix = "%",
+            Callback = function(value)
+                opt.AimSmooth = tonumber(value) or 0
+            end,
+        })
+
+        local smartBox = tab:AddLeftGroupbox(T("Auto Play", "เล่นอัตโนมัติ"))
+        smartBox:AddToggle("Kaitun", {
             Text = T("Auto Win", "ชนะอัตโนมัติ"),
             Description = T("Plays every round for you in any role", "เล่นทุกรอบให้เองทุกบทบาท"),
-            Icon = "kaitun",
+            Default = false,
             Risky = true,
-            Badge = T("Risky", "เสี่ยง"),
-            Keybind = { Default = "None", Mode = "Toggle" },
             Callback = function(value)
                 opt.Kaitun = value
-                if value then return end
+                if value then
+                    return
+                end
                 for _, idx in ipairs({ "AutoKillAll", "AutoShoot", "AutoGrabGun", "AutoDodge", "AutoFarm" }) do
                     opt[idx] = Library.Options[idx].Value
                 end
             end,
-        })
-
-        local quick = tab:AddRightGroupbox(T("Quick", "ด่วน"), "lightning")
-        quick:AddButton({ Text = T("Panic - All Off", "ฉุกเฉิน ปิดทั้งหมด"), Icon = "stop", Style = "Danger", Callback = function()
-            for _, toggle in pairs(Library.Toggles) do
-                if toggle.Value == true then toggle:SetValue(false) end
-            end
-        end })
-
-        Library.Kit.Discord.Build(tab, Config.Discord)
-    end
-
-    local function BuildFarmTab(window)
-        window:AddTabSection(T("Farming", "ฟาร์ม"))
-        local tab = window:AddTab(T("Farm", "ฟาร์ม"), "coin", T("Coins every round", "เหรียญทุกรอบ"))
-
-        local coins = tab:AddLeftGroupbox(T("Coin Farm", "ฟาร์มเหรียญ"), "coin")
-        coins:AddFeature("AutoFarm", {
-            Text = T("Auto Farm Coins", "ฟาร์มเหรียญอัตโนมัติ"),
-            Description = T("Collects every coin until your bag is full, away from the murderer", "เก็บเหรียญจนเต็มถุง และอยู่ห่างจากฆาตกร"),
-            Icon = "autofarm",
-            Keybind = { Default = "None", Mode = "Toggle" },
-            Callback = Bind("AutoFarm"),
-            Options = function(options)
-                options:AddSlider("FarmSpeed", {
-                    Text = T("Farm Speed", "ความเร็วฟาร์ม"),
-                    Icon = "speed",
-                    Min = 16, Max = Config.FarmSpeedMax, Default = Config.FarmSpeed, Rounding = 0,
-                    Callback = function(value)
-                        opt.FarmSpeed = tonumber(value) or Config.FarmSpeed
-                    end,
-                })
-                options:AddToggle("ResetWhenFull", {
-                    Text = T("Reset When Bag Full", "รีเซ็ตตัวเมื่อถุงเต็ม"),
-                    Description = T("Respawns once the bag is full so the murderer cannot catch you", "เกิดใหม่เมื่อถุงเต็ม ฆาตกรตามไม่ทัน"),
-                    Icon = "respawn",
-                    Callback = Bind("ResetWhenFull"),
-                })
-            end,
-        })
-
-        local survive = tab:AddRightGroupbox(T("Survival", "เอาตัวรอด"), "shield")
-        survive:AddFeature("AutoDodge", {
+        }):AddKeyPicker("KaitunKey", { Default = "None", Mode = "Toggle" })
+        smartBox:AddToggle("AutoDodge", {
             Text = T("Auto Dodge Murderer", "หลบฆาตกรอัตโนมัติ"),
             Description = T("Escapes to the far side of the map when the murderer gets close", "หนีไปอีกฝั่งของแมพเมื่อฆาตกรเข้าใกล้"),
-            Icon = "run",
-            Keybind = { Default = "None", Mode = "Toggle" },
+            Default = false,
             Callback = Bind("AutoDodge"),
-        })
-        survive:AddToggle("AntiFling", {
-            Text = T("Anti Fling", "กันโดนดีด"),
-            Description = T("Other players cannot push or launch you", "ผู้เล่นอื่นดันหรือดีดเราไม่ได้"),
-            Icon = "shield",
-            Callback = Bind("AntiFling"),
-        })
+        }):AddKeyPicker("AutoDodgeKey", { Default = "None", Mode = "Toggle" })
     end
 
-    local function BuildSheriffGroup(tab)
-        local gun = tab:AddLeftGroupbox(T("Sheriff / Hero", "นายอำเภอ / ฮีโร่"), "gun")
-        gun:AddFeature("SilentAim", {
-            Text = T("Silent Aim", "ยิงล็อกเป้า"),
-            Description = T("Every shot you fire goes to the murderer", "ทุกนัดที่ยิงไปโดนฆาตกร"),
-            Icon = "silentaim",
-            Keybind = { Default = "None", Mode = "Toggle" },
-            Callback = Bind("SilentAim"),
-        })
-        gun:AddFeature("AutoShoot", {
-            Text = T("Auto Shoot Murderer", "ยิงฆาตกรอัตโนมัติ"),
-            Description = T("Kills the murderer as soon as you hold the gun", "ยิงฆาตกรทันทีที่ได้ถือปืน"),
-            Icon = "autoshoot",
-            Risky = true,
-            Badge = T("Risky", "เสี่ยง"),
-            Keybind = { Default = "None", Mode = "Toggle" },
-            Callback = Bind("AutoShoot"),
-            Now = { Text = T("Shoot Murderer Now", "ยิงฆาตกรเดี๋ยวนี้"), Icon = "shoot", Callback = function()
-                local ok, detail = xDTaraZ.Sheriff.ShootMurderer()
-                Notify(ok and ("Shot " .. tostring(detail)) or tostring(detail or "You need the gun"), ok and "Success" or "Warn")
-            end },
-        })
-        gun:AddFeature("AutoGrabGun", {
-            Text = T("Auto Grab Gun", "เก็บปืนอัตโนมัติ"),
-            Description = T("Picks up the dropped gun the moment the sheriff dies", "เก็บปืนที่ตกทันทีที่นายอำเภอตาย"),
-            Icon = "autograb",
-            Keybind = { Default = "None", Mode = "Toggle" },
-            Callback = Bind("AutoGrabGun"),
-            Now = { Text = T("Grab Gun Now", "เก็บปืนเดี๋ยวนี้"), Icon = "grab", Callback = function()
-                local got = xDTaraZ.Sheriff.GrabGun()
-                Notify(got and "Gun grabbed" or "No gun on the ground", got and "Success" or "Warn")
-            end },
-        })
-        xDTaraZ.UI.NeedCap("SilentAim", "Hook")
-    end
+    local function BuildTeleportTab(window)
+        local tab = window:AddTab(T("Teleport", "วาร์ป"), "globe", T("Map, lobby and players", "แมพ ล็อบบี้ และผู้เล่น"))
 
-    local function BuildMurdererGroup(tab)
-        local knife = tab:AddRightGroupbox(T("Murderer", "ฆาตกร"), "knife")
-        knife:AddFeature("AutoKillAll", {
-            Text = T("Auto Kill All", "ฆ่าทุกคนอัตโนมัติ"),
-            Description = T("Ends the round by killing everyone when you are the murderer", "จบรอบด้วยการฆ่าทุกคนเมื่อเราเป็นฆาตกร"),
-            Icon = "killall",
-            Risky = true,
-            Badge = T("Risky", "เสี่ยง"),
-            Keybind = { Default = "None", Mode = "Toggle" },
-            Callback = Bind("AutoKillAll"),
-            Now = { Text = T("Kill All Now", "ฆ่าทุกคนเดี๋ยวนี้"), Icon = "skull", Style = "Danger", Callback = function()
-                task.spawn(function()
-                    Notify(string.format("Killed %d players", xDTaraZ.Murderer.KillAll()))
-                end)
-            end },
-        })
-        knife:AddFeature("KillAura", {
-            Text = T("Kill Aura", "ออร่าฆ่า"),
-            Description = T("Kills anyone who gets close while you hold the knife", "ฆ่าใครก็ตามที่เข้าใกล้ตอนถือมีด"),
-            Icon = "killaura",
-            Risky = true,
-            Keybind = { Default = "None", Mode = "Toggle" },
-            Callback = Bind("KillAura"),
-        })
-        knife:AddToggle("KnifeAim", {
-            Text = T("Knife Throw Aim", "ปามีดล็อกเป้า"),
-            Description = T("Thrown knives fly to the nearest player", "มีดที่ปาพุ่งไปหาคนที่ใกล้ที่สุด"),
-            Icon = "target",
-            Callback = Bind("KnifeAim"),
-        })
-        xDTaraZ.UI.NeedCap("KnifeAim", "Hook")
-    end
+        local placeBox = tab:AddLeftGroupbox(T("Places", "สถานที่"))
+        placeBox:AddButton({ Text = T("Lobby", "ล็อบบี้"), Func = xDTaraZ.Teleport.ToLobby }):AddButton({ Text = T("Map", "แมพ"), Func = xDTaraZ.Teleport.ToMap })
+        placeBox:AddButton({ Text = T("To Murderer", "ไปหาฆาตกร"), Func = function()
+            local target = xDTaraZ.Round.FindByRole("Murderer")
+            xDTaraZ.Teleport.ToPlayer(target and target.Name)
+        end }):AddButton({ Text = T("To Sheriff", "ไปหานายอำเภอ"), Func = function()
+            local target = xDTaraZ.Round.FindByRole("Sheriff")
+            xDTaraZ.Teleport.ToPlayer(target and target.Name)
+        end })
 
-    local function BuildCombatTab(window)
-        window:AddTabSection(T("Combat", "ต่อสู้"))
-        local tab = window:AddTab(T("Combat", "ต่อสู้"), "crosshair", T("Sheriff, murderer and aim", "นายอำเภอ ฆาตกร และการเล็ง"))
-        BuildSheriffGroup(tab)
-        BuildMurdererGroup(tab)
-
-        local aim = tab:AddLeftGroupbox(T("Aimbot", "ล็อกกล้อง"), "aimbot")
-        aim:AddFeature("Aimbot", {
-            Text = T("Aimbot", "ล็อกกล้อง"),
-            Description = T("Locks onto the murderer, or the next victim when you hold the knife", "ล็อกไปที่ฆาตกร หรือเหยื่อคนถัดไปตอนถือมีด"),
-            Icon = "aimbot",
-            Keybind = { Default = "Q", Mode = "Hold" },
-            Callback = Bind("Aimbot"),
-            Options = function(options)
-                options:AddSlider("AimSmooth", {
-                    Text = T("Smoothness", "ความนุ่ม"),
-                    Icon = "sliders-horizontal",
-                    Min = 0, Max = 95, Default = opt.AimSmooth, Rounding = 0, Suffix = "%",
-                    Callback = function(value)
-                        opt.AimSmooth = tonumber(value) or 0
-                    end,
-                })
-            end,
+        local playerBox = tab:AddRightGroupbox(T("Players", "ผู้เล่น"))
+        playerBox:AddDropdown("TeleportTarget", {
+            Text = T("Player", "ผู้เล่น"),
+            SpecialType = "Player",
+            Searchable = true,
+            Callback = Bind("TeleportTarget"),
         })
+        playerBox:AddButton({ Text = T("Teleport", "วาร์ป"), Style = "Primary", Func = function()
+            xDTaraZ.Teleport.ToPlayer(Picked("TeleportTarget"))
+        end })
     end
 
     local function BuildTrollTab(window)
-        local tab = window:AddTab(T("Troll", "ป่วน"), "troll", T("Fling, stick and spectate", "ดีด เกาะติด และส่อง"))
+        local tab = window:AddTab(T("Troll", "ป่วน"), "zap", T("Fling, stick and spectate", "ดีด เกาะติด และส่อง"))
 
-        local fling = tab:AddLeftGroupbox(T("Fling", "ดีด"), "fling")
-        fling:AddDropdown("TrollTarget", {
+        local box = tab:AddLeftGroupbox(T("Target", "เป้าหมาย"))
+        box:AddDropdown("TrollTarget", {
             Text = T("Player", "ผู้เล่น"),
-            Icon = "player",
             SpecialType = "Player",
             Searchable = true,
-            Callback = Bind("TrollTarget"),
+            Callback = function(value)
+                opt.TrollTarget = value
+                local stick, spectate = Library.Options.StickTo, Library.Options.Spectate
+                if stick and stick.Value then State.StickTarget = value end
+                if spectate and spectate.Value then xDTaraZ.Troll.Spectate(xDTaraZ.Troll.Target()) end
+            end,
         })
-        fling:AddButton({ Text = T("Fling", "ดีดกระเด็น"), Icon = "fling", Style = "Primary", Callback = function()
+        box:AddButton({ Text = T("Fling", "ดีดกระเด็น"), Style = "Primary", Func = function()
+            Picked("TrollTarget")
             FlingAsync(xDTaraZ.Troll.Target())
-        end }):AddButton({ Text = T("Fling Murderer", "ดีดฆาตกร"), Icon = "knife", Callback = function()
+        end }):AddButton({ Text = T("Fling Murderer", "ดีดฆาตกร"), Func = function()
             FlingAsync(xDTaraZ.Round.FindByRole("Murderer"))
         end })
-        fling:AddButton({ Text = T("Fling Everyone", "ดีดทุกคน"), Icon = "players", Style = "Warning", DoubleClick = true, Callback = function()
+        box:AddButton({ Text = T("Fling Everyone", "ดีดทุกคน"), Style = "Warning", DoubleClick = true, Func = function()
             task.spawn(function()
                 for _, player in ipairs(Players:GetPlayers()) do
                     if player == LocalPlayer or not xDTaraZ.Util.Root(player) then continue end
@@ -1502,218 +1651,276 @@ local function BuildInterface()
             end)
         end })
 
-        local follow = tab:AddRightGroupbox(T("Follow", "ติดตาม"), "follow")
-        follow:AddToggle("StickTo", {
+        local followBox = tab:AddRightGroupbox(T("Follow", "ติดตาม"))
+        followBox:AddToggle("StickTo", {
             Text = T("Stick To Player", "เกาะติดผู้เล่น"),
-            Description = T("Stays glued behind the selected player", "เกาะอยู่ข้างหลังผู้เล่นที่เลือกตลอด"),
-            Icon = "stick",
+            Description = T("Stays glued right behind the selected player", "เกาะอยู่ข้างหลังผู้เล่นที่เลือกตลอด"),
+            Default = false,
             Callback = function(value)
-                State.StickTarget = value and opt.TrollTarget or nil
+                State.StickTarget = value and Picked("TrollTarget") or nil
             end,
         })
-        follow:AddToggle("Spectate", {
+        followBox:AddToggle("Spectate", {
             Text = T("Spectate", "ส่องผู้เล่น"),
-            Icon = "spectate",
+            Default = false,
             Callback = function(value)
+                Picked("TrollTarget")
                 xDTaraZ.Troll.Spectate(value and xDTaraZ.Troll.Target() or nil)
             end,
         })
     end
 
-    local function BuildVisualTab(window)
-        window:AddTabSection(T("Visuals", "การมองเห็น"))
-        local tab = window:AddTab(T("Visuals", "ภาพ"), "esp", T("Roles, gun and skins", "บทบาท ปืน และสกิน"))
+    local function BuildPlayerTab(window)
+        local tab = window:AddTab(T("Player", "ผู้เล่น"), "user", T("Movement", "การเคลื่อนที่"))
 
-        local esp = tab:AddLeftGroupbox(T("ESP", "ESP"), "esp")
-        esp:AddToggle("EspPlayers", {
+        local moveBox = tab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"))
+        moveBox:AddToggle("SpeedOn", {
+            Text = T("Walk Speed", "ความเร็วเดิน"),
+            Default = false,
+            Callback = function(value)
+                opt.SpeedOn = value
+                if not value then
+                    xDTaraZ.Movement.RestoreSpeed()
+                end
+            end,
+        })
+        moveBox:AddSlider("WalkSpeed", {
+            Text = T("Speed", "ความเร็ว"), Min = 16, Max = 120, Default = opt.WalkSpeed, Rounding = 0,
+            Callback = function(value)
+                opt.WalkSpeed = tonumber(value) or Config.SpeedDefault
+            end,
+        })
+        moveBox:AddToggle("JumpOn", {
+            Text = T("Jump Power", "แรงกระโดด"),
+            Default = false,
+            Callback = function(value)
+                opt.JumpOn = value
+                if not value then
+                    xDTaraZ.Movement.RestoreJump()
+                end
+            end,
+        })
+        moveBox:AddSlider("JumpPower", {
+            Text = T("Power", "แรง"), Min = 50, Max = 200, Default = opt.JumpPower, Rounding = 0,
+            Callback = function(value)
+                opt.JumpPower = tonumber(value) or Config.JumpDefault
+            end,
+        })
+
+        local extraBox = tab:AddRightGroupbox(T("Extra", "เพิ่มเติม"))
+        extraBox:AddToggle("AntiFling", {
+            Text = T("Anti Fling", "กันโดนดีด"),
+            Description = T("Other players cannot push or launch you", "ผู้เล่นอื่นดันหรือดีดเราไม่ได้"),
+            Default = false,
+            Callback = Bind("AntiFling"),
+        })
+        extraBox:AddToggle("InfJump", { Text = T("Infinite Jump", "กระโดดไม่จำกัด"), Default = false, Callback = Bind("InfJump") })
+        extraBox:AddToggle("Noclip", {
+            Text = T("Noclip", "ทะลุวัตถุ"),
+            Default = false,
+            Callback = function(value)
+                opt.Noclip = value
+                xDTaraZ.Movement.RefreshNoclip()
+            end,
+        }):AddKeyPicker("NoclipKey", { Default = "None", Mode = "Toggle" })
+        extraBox:AddToggle("Fly", {
+            Text = T("Fly", "บิน"),
+            Description = T("Space to go up, Left Ctrl to go down", "Space ขึ้น, Left Ctrl ลง"),
+            Default = false,
+            Callback = function(value)
+                opt.Fly = value
+                xDTaraZ.Movement.SetFly(value)
+            end,
+        }):AddKeyPicker("FlyKey", { Default = "None", Mode = "Toggle" })
+    end
+
+    local function BuildVisualTab(window)
+        local tab = window:AddTab(T("Visuals", "ภาพ"), "eye", T("Roles and gun", "บทบาทและปืน"))
+
+        local espBox = tab:AddLeftGroupbox(T("ESP", "ESP"))
+        espBox:AddToggle("EspPlayers", {
             Text = T("Role ESP", "มองเห็นบทบาท"),
             Description = T("Murderer red, sheriff blue, hero yellow, innocents green", "ฆาตกรแดง นายอำเภอน้ำเงิน ฮีโร่เหลือง คนธรรมดาเขียว"),
-            Icon = "chams",
+            Default = false,
             Callback = Bind("EspPlayers"),
         })
-        esp:AddToggle("EspGun", { Text = T("Gun Drop ESP", "มองเห็นปืนที่ตก"), Icon = "gun", Callback = Bind("EspGun") })
-        esp:AddToggle("RoleNotify", {
+        espBox:AddToggle("EspGun", {
+            Text = T("Gun Drop ESP", "มองเห็นปืนที่ตก"),
+            Default = false,
+            Callback = Bind("EspGun"),
+        })
+        espBox:AddToggle("RoleNotify", {
             Text = T("Role Notify", "แจ้งบทบาท"),
             Description = T("Tells you who the murderer and sheriff are at round start", "บอกว่าใครเป็นฆาตกรและนายอำเภอตอนเริ่มรอบ"),
-            Icon = "notify",
+            Default = false,
             Callback = Bind("RoleNotify"),
         })
 
-        local world = tab:AddLeftGroupbox(T("World", "โลก"), "sun")
-        world:AddToggle("XRay", {
+        local worldBox = tab:AddRightGroupbox(T("World", "โลก"))
+        worldBox:AddToggle("XRay", {
             Text = T("X-Ray", "มองทะลุ"),
             Description = T("See through walls on every map", "มองทะลุกำแพงได้ทุกแมพ"),
-            Icon = "xray",
+            Default = false,
             Callback = Bind("XRay"),
         })
-        world:AddToggle("Fullbright", {
+        worldBox:AddToggle("Fullbright", {
             Text = T("Fullbright", "สว่างเต็มจอ"),
-            Icon = "fullbright",
+            Default = false,
             Callback = function(value)
                 opt.Fullbright = value
                 xDTaraZ.Visual.SetFullbright(value)
             end,
         })
 
-        local skins = tab:AddRightGroupbox(T("Skins", "สกิน"), "palette")
-        skins:AddDropdown("SkinSource", {
+        local skinBox = tab:AddRightGroupbox(T("Skins", "สกิน"))
+        skinBox:AddDropdown("SkinSource", {
             Text = T("Copy From", "ก๊อปจาก"),
-            Icon = "player",
             SpecialType = "Player",
             Searchable = true,
             Callback = Bind("SkinSource"),
         })
-        skins:AddButton({ Text = T("Copy Knife", "ก๊อปมีด"), Icon = "knife", Style = "Primary", Callback = function()
-            local ok = xDTaraZ.Skin.Copy(opt.SkinSource, "Knife")
-            Notify(ok and "Knife skin applied" or "That player has no knife loaded", ok and "Success" or "Warn")
-        end }):AddButton({ Text = T("Copy Gun", "ก๊อปปืน"), Icon = "gun", Callback = function()
-            local ok = xDTaraZ.Skin.Copy(opt.SkinSource, "Gun")
-            Notify(ok and "Gun skin applied" or "That player has no gun loaded", ok and "Success" or "Warn")
+        skinBox:AddButton({ Text = T("Copy Knife", "ก๊อปมีด"), Style = "Primary", Func = function()
+            local ok = xDTaraZ.Skin.Copy(Picked("SkinSource"), "Knife")
+            Notify(ok and "Knife skin applied" or "That player has no knife loaded", ok and "Success" or "Warning")
+        end }):AddButton({ Text = T("Copy Gun", "ก๊อปปืน"), Func = function()
+            local ok = xDTaraZ.Skin.Copy(Picked("SkinSource"), "Gun")
+            Notify(ok and "Gun skin applied" or "That player has no gun loaded", ok and "Success" or "Warning")
         end })
-        skins:AddButton({ Text = T("Reset Skins", "รีเซ็ตสกิน"), Icon = "refresh", Style = "Ghost", Callback = function()
+        skinBox:AddButton({ Text = T("Reset Skins", "รีเซ็ตสกิน"), Func = function()
             table.clear(State.Skins)
         end })
     end
 
-    local function BuildTeleportTab(window)
-        local tab = window:AddTab(T("Teleport", "วาร์ป"), "teleport", T("Map, lobby and players", "แมพ ล็อบบี้ และผู้เล่น"))
+    local function BuildFarmTab(window)
+        local tab = window:AddTab(T("Farm", "ฟาร์ม"), "cookie", T("Coins every round", "เหรียญทุกรอบ"))
 
-        local places = tab:AddLeftGroupbox(T("Places", "สถานที่"), "map")
-        places:AddButton({ Text = T("Lobby", "ล็อบบี้"), Icon = "home", Callback = xDTaraZ.Teleport.ToLobby })
-            :AddButton({ Text = T("Map", "แมพ"), Icon = "map", Callback = xDTaraZ.Teleport.ToMap })
-        places:AddButton({ Text = T("To Murderer", "ไปหาฆาตกร"), Icon = "knife", Callback = function()
-            local target = xDTaraZ.Round.FindByRole("Murderer")
-            xDTaraZ.Teleport.ToPlayer(target and target.Name)
-        end }):AddButton({ Text = T("To Sheriff", "ไปหานายอำเภอ"), Icon = "gun", Callback = function()
-            local target = xDTaraZ.Round.FindByRole("Sheriff")
-            xDTaraZ.Teleport.ToPlayer(target and target.Name)
-        end })
-
-        local people = tab:AddRightGroupbox(T("Players", "ผู้เล่น"), "players")
-        people:AddDropdown("TeleportTarget", {
-            Text = T("Player", "ผู้เล่น"),
-            Icon = "player",
-            SpecialType = "Player",
-            Searchable = true,
-            Callback = Bind("TeleportTarget"),
+        local coinBox = tab:AddLeftGroupbox(T("Coin Farm", "ฟาร์มเหรียญ"))
+        coinBox:AddToggle("AutoFarm", {
+            Text = T("Auto Farm Coins", "ฟาร์มเหรียญอัตโนมัติ"),
+            Description = T("Glides smoothly to every coin until your bag is full and stays away from the murderer", "ไหลไปเก็บเหรียญทุกเหรียญจนเต็มถุง และอยู่ห่างจากฆาตกร"),
+            Default = false,
+            Callback = Bind("AutoFarm"),
+        }):AddKeyPicker("AutoFarmKey", { Default = "None", Mode = "Toggle" })
+        coinBox:AddSlider("FarmSpeed", {
+            Text = T("Farm Speed", "ความเร็วฟาร์ม"),
+            Min = 16, Max = Config.FarmSpeedMax, Default = Config.FarmSpeed, Rounding = 0,
+            Callback = function(value)
+                opt.FarmSpeed = tonumber(value) or Config.FarmSpeed
+            end,
         })
-        people:AddButton({ Text = T("Teleport", "วาร์ป"), Icon = "teleport", Style = "Primary", Callback = function()
-            xDTaraZ.Teleport.ToPlayer(opt.TeleportTarget)
+        coinBox:AddToggle("ResetWhenFull", {
+            Text = T("Reset When Bag Full", "รีเซ็ตตัวเมื่อถุงเต็ม"),
+            Description = T("Respawns after the bag fills so the murderer cannot catch you", "เกิดใหม่หลังถุงเต็ม ฆาตกรจะได้ตามไม่ทัน"),
+            Default = false,
+            Callback = Bind("ResetWhenFull"),
+        })
+        live.Bag = coinBox:AddProgressBar("StatusBag", { Text = T("Coin Bag", "ถุงเหรียญ"), Max = 1, Default = 0 })
+
+        local roundBox = tab:AddRightGroupbox(T("Round", "รอบนี้"))
+        live.Role = roundBox:AddLabel("You: -")
+        live.Murderer = roundBox:AddLabel("Murderer: ?")
+        live.Sheriff = roundBox:AddLabel("Sheriff: ?")
+        live.BagCount = roundBox:AddLabel("Bag: 0 / 0")
+
+        local discordBox = tab:AddRightGroupbox("Discord", "link")
+        discordBox:AddLabel(Config.Discord)
+        discordBox:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ Discord"), Style = "Primary", Func = function()
+            local copy = setclipboard or toclipboard
+            if copy then copy(Config.Discord) end
+            Notify(copy and "Discord link copied" or Config.Discord)
         end })
     end
 
-    local function BuildPlayerTab(window)
-        local tab = window:AddTab(T("Player", "ผู้เล่น"), "player", T("Movement and session", "การเคลื่อนที่และเซสชัน"))
+    local function BuildMiscTab(window)
+        local tab = window:AddTab(T("Misc", "อื่นๆ"), "sliders-horizontal", T("Session tools", "เครื่องมือเซสชัน"))
 
-        local move = tab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "speed")
-        move:AddToggle("SpeedOn", {
-            Text = T("Walk Speed", "ความเร็วเดิน"),
-            Icon = "walkspeed",
-            Callback = function(value)
-                opt.SpeedOn = value
-                if not value then xDTaraZ.Movement.RestoreSpeed() end
-            end,
+        local box = tab:AddLeftGroupbox(T("Session", "เซสชัน"))
+        box:AddToggle("AntiAfk", {
+            Text = T("Anti AFK", "กันหลุด AFK"),
+            Default = false,
+            Callback = Bind("AntiAfk"),
         })
-        move:AddSlider("WalkSpeed", {
-            Text = T("Speed", "ความเร็ว"), Icon = "speed", Min = 16, Max = 120, Default = opt.WalkSpeed, Rounding = 0,
-            DependsOn = { "SpeedOn", true },
-            Callback = function(value)
-                opt.WalkSpeed = tonumber(value) or Config.SpeedDefault
-            end,
-        })
-        move:AddToggle("JumpOn", {
-            Text = T("Jump Power", "แรงกระโดด"),
-            Icon = "jump",
-            Callback = function(value)
-                opt.JumpOn = value
-                if not value then xDTaraZ.Movement.RestoreJump() end
-            end,
-        })
-        move:AddSlider("JumpPower", {
-            Text = T("Power", "แรง"), Icon = "jumppower", Min = 50, Max = 200, Default = opt.JumpPower, Rounding = 0,
-            DependsOn = { "JumpOn", true },
-            Callback = function(value)
-                opt.JumpPower = tonumber(value) or Config.JumpDefault
-            end,
-        })
-        move:AddToggle("InfJump", { Text = T("Infinite Jump", "กระโดดไม่จำกัด"), Icon = "infjump", Callback = Bind("InfJump") })
-        move:AddToggle("Noclip", {
-            Text = T("Noclip", "ทะลุวัตถุ"),
-            Icon = "noclip",
-            Callback = function(value)
-                opt.Noclip = value
-                xDTaraZ.Movement.RefreshNoclip()
-            end,
-        }):AddKeyPicker("NoclipKey", { Default = "None", Mode = "Toggle", Text = T("Noclip", "ทะลุวัตถุ") })
-        move:AddToggle("Fly", {
-            Text = T("Fly", "บิน"),
-            Description = T("Space to go up, Left Ctrl to go down", "Space ขึ้น, Left Ctrl ลง"),
-            Icon = "fly",
-            Callback = function(value)
-                opt.Fly = value
-                xDTaraZ.Movement.SetFly(value)
-            end,
-        }):AddKeyPicker("FlyKey", { Default = "None", Mode = "Toggle", Text = T("Fly", "บิน") })
+        box:AddButton({ Text = T("Rejoin", "เข้าเซิร์ฟเดิมใหม่"), DoubleClick = true, Func = xDTaraZ.Session.Rejoin })
+            :AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), DoubleClick = true, Func = xDTaraZ.Session.Hop })
+        box:AddButton({ Text = T("Panic - All Off", "ฉุกเฉิน ปิดทั้งหมด"), Style = "Danger", Func = function()
+            for _, toggle in pairs(Library.Toggles) do
+                if toggle.Value == true then toggle:SetValue(false) end
+            end
+        end })
 
-        local session = tab:AddRightGroupbox(T("Session", "เซสชัน"), "server")
-        session:AddToggle("AntiAfk", { Text = T("Anti AFK", "กันหลุด AFK"), Icon = "antiafk", Callback = Bind("AntiAfk") })
-        session:AddButton({ Text = T("Rejoin", "เข้าเซิร์ฟเดิมใหม่"), Icon = "rejoin", DoubleClick = true, Callback = xDTaraZ.Session.Rejoin })
-            :AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), Icon = "hop", DoubleClick = true, Callback = xDTaraZ.Session.Hop })
-
-        local codes = tab:AddRightGroupbox(T("Codes", "โค้ด"), "code")
+        local codeBox = tab:AddRightGroupbox(T("Codes", "โค้ด"))
         local codeText = ""
-        codes:AddInput("RedeemCodeInput", {
+        codeBox:AddInput("RedeemCodeInput", {
             Text = T("Code", "โค้ด"),
-            Icon = "redeem",
             Default = "",
             Placeholder = T("Enter code", "ใส่โค้ด"),
-            Save = false,
+            NoSave = true,
             Callback = function(value)
                 codeText = value
             end,
         })
-        codes:AddButton({ Text = T("Redeem", "ใช้โค้ด"), Icon = "check", Style = "Primary", Callback = function()
+        codeBox:AddButton({ Text = T("Redeem", "ใช้โค้ด"), Style = "Primary", Func = function()
             if codeText == "" then return end
             Notify(xDTaraZ.Session.RedeemCode(codeText))
         end })
     end
 
-    local function StartLive()
-        local lib = Library.Lib
-        lib.Status("StatusRole", function()
-            if not xDTaraZ.Round.IAmPlaying() then return "Lobby", "Idle" end
-            return tostring(xDTaraZ.Round.RoleOf(LocalPlayer)), "Running"
-        end, 1)
-        lib.Status("StatusMurderer", function()
-            local who = xDTaraZ.Round.FindByRole("Murderer")
-            if not who then return "?", "Waiting" end
-            return who.Name, "Warn"
-        end, 1)
-        lib.Status("StatusSheriff", function()
-            local who = xDTaraZ.Round.FindByRole("Sheriff") or xDTaraZ.Round.FindByRole("Hero")
-            if not who then return "?", "Waiting" end
-            return who.Name, "Running"
-        end, 1)
+    local function ReportHalts()
+        while #State.Halted > 0 do
+            local halt = table.remove(State.Halted, 1)
+            local job = halt[1]
+            for _, toggle in ipairs(xDTaraZ.Scheduler.OnToggles(job)) do
+                toggle:SetValue(false)
+            end
+            job.Halting = nil
+            Notify(job[1] .. " stopped: " .. halt[2], "Warning")
+        end
+    end
 
-        local bag = Library.Options.StatusBag
-        Library:Every(1, function()
-            bag:SetMax(math.max(State.Bag.Max, 1))
-            bag:SetValue(State.Bag.Current)
+    local shown = {}
+    local function Show(key, text)
+        if shown[key] == text or not live[key] then return end
+        shown[key] = text
+        live[key]:SetText(text)
+    end
+
+    local function RefreshRound()
+        local running = xDTaraZ.Round.Map() ~= nil
+        local murderer = running and xDTaraZ.Round.FindByRole("Murderer")
+        local sheriff = running and (xDTaraZ.Round.FindByRole("Sheriff") or xDTaraZ.Round.FindByRole("Hero"))
+        local role = xDTaraZ.Round.IAmPlaying() and tostring(xDTaraZ.Round.RoleOf(LocalPlayer)) or "Lobby"
+        local current, capacity = running and State.Bag.Current or 0, running and State.Bag.Max or 0
+        Show("Role", "You: " .. role)
+        Show("Murderer", "Murderer: " .. (murderer and murderer.Name or "?"))
+        Show("Sheriff", "Sheriff: " .. (sheriff and sheriff.Name or "?"))
+        Show("BagCount", string.format("Bag: %d / %d", current, capacity))
+
+        local fill = capacity > 0 and math.min(current / capacity, 1) or 0
+        if live.Bag and live.Bag.Value ~= fill then
+            live.Bag:SetValue(fill)
+        end
+    end
+
+    local function StartLive()
+        Library:Every(Config.StatusRefresh, function()
+            ReportHalts()
+            if live.Role then RefreshRound() end
         end)
     end
 
     local function BuildTabs()
         local window = Library.Window
-        BuildMainTab(window)
-        BuildFarmTab(window)
-        BuildCombatTab(window)
-        BuildTrollTab(window)
-        BuildVisualTab(window)
-        window:AddTabSection(T("Misc", "อื่นๆ"))
-        BuildTeleportTab(window)
-        BuildPlayerTab(window)
-        window:AddSettingsTab()
-        StartLive()
+        window:AddTabSection(T("Game", "เกม"))
+        xDTaraZ.Util.Try(BuildFarmTab, window)
+        xDTaraZ.Util.Try(BuildCombatTab, window)
+        xDTaraZ.Util.Try(BuildTeleportTab, window)
+        xDTaraZ.Util.Try(BuildTrollTab, window)
+        window:AddTabSection(T("Other", "อื่นๆ"))
+        xDTaraZ.Util.Try(BuildPlayerTab, window)
+        xDTaraZ.Util.Try(BuildVisualTab, window)
+        xDTaraZ.Util.Try(BuildMiscTab, window)
+        xDTaraZ.Util.Try(window.AddSettingsTab, window)
+        xDTaraZ.Util.Try(StartLive)
     end
 
     Library:OnUnload(xDTaraZ.Scheduler.Stop)
@@ -1730,18 +1937,20 @@ local function BuildInterface()
         Theme = "Overworld",
         OnUnlocked = function()
             BuildTabs()
-            xDTaraZ.Scheduler.Boot(Notify)
+            xDTaraZ.Util.Try(xDTaraZ.Scheduler.Boot, Notify)
             Notify("Loaded")
-            Library:LoadAutoloadConfig()
+            xDTaraZ.Util.Try(Library.LoadAutoloadConfig, Library)
         end,
     })
+    return true
 end
 
 if getgenv().MurderMystery2Unload then
     pcall(getgenv().MurderMystery2Unload)
 end
 
-MarioBanner.Step("Systems")
-BuildInterface()
-MarioBanner.Step("Interface")
-MarioBanner.Ready()
+pcall(MarioBanner.Step, "Systems")
+if BuildInterface() then
+    pcall(MarioBanner.Step, "Interface")
+    pcall(MarioBanner.Ready)
+end

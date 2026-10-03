@@ -8,9 +8,9 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
 local HttpService = game:GetService("HttpService")
-local CollectionService = game:GetService("CollectionService")
 local Lighting = game:GetService("Lighting")
 local TeleportService = game:GetService("TeleportService")
+local StarterGui = game:GetService("StarterGui")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local VirtualUser = game:GetService("VirtualUser")
 
@@ -21,8 +21,14 @@ if game.GameId ~= 7633926880 then
     return
 end
 
+---@return function  the game's own print when the executor exposes it
+local function RuntimePrint()
+    local ok, renv = pcall(getrenv)
+    return ok and type(renv) == "table" and type(renv.print) == "function" and renv.print or print
+end
+
 local MarioBanner = {
-    Print = type(getrenv) == "function" and getrenv().print or print,
+    Print = RuntimePrint(),
     Started = os.clock(),
     Last = os.clock(),
     Done = 0,
@@ -126,8 +132,8 @@ function MarioBanner.Ready()
     }, "\n"))
 end
 
-MarioBanner.Show()
-MarioBanner.Step("Core")
+pcall(MarioBanner.Show)
+pcall(MarioBanner.Step, "Core")
 
 local environment = getgenv and getgenv() or _G
 if environment.BloxStrikeUnload then pcall(environment.BloxStrikeUnload) end
@@ -137,7 +143,7 @@ if not LPH_OBFUSCATED then
     LPH_JIT, LPH_JIT_MAX, LPH_NO_VIRTUALIZE = Passthrough, Passthrough, Passthrough
 end
 
-local vector2New, vector3New = Vector2.new, Vector3.new
+local vector2New = Vector2.new
 local cframeLookAt = CFrame.lookAt
 local osClock = os.clock
 
@@ -150,15 +156,27 @@ local xDTaraZ = setmetatable({}, {
 })
 
 xDTaraZ.Config = {
-    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui_v2.lua",
+    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
     Discord = "https://discord.gg/FHVfmeSceA",
     SaveFolder = "BloxStrike",
     StatusInterval = 1,
     AimRenderPriority = Enum.RenderPriority.Camera.Value + 1,
     RefireGap = 0.12,
     TriggerRay = 2000,
+    MinShotDistance = 0.05,
     RedeemGap = 1.1,
     RebuyGap = 0.25,
+    AlertTries = 20,
+    AlertGap = 0.5,
+    RequireTimeout = 5,
+    MaxFails = 5,
+    FailWindow = 10,
+    CombatToggles = { "Aimbot", "Triggerbot", "Ragebot", "AimbotShowFov", "SilentShowFov" },
+    ModuleFeatures = {
+        Net = { "SilentAim", "AutoRebuy" },
+        Character = { "BunnyHop" },
+        Weapons = { "FullAuto", "RapidFire", "WeaponSpeed" },
+    },
     Codes = { "FREEDOM", "MICHAELSRETURN", "HAPPYBDAYYUUTO", "GAMEBROKE318", "OHNEPIXEL", "NEBULA", "REACTORDELAY", "BUTTERFLYCASE", "TRADEUPS" },
     BoneParts = {
         Head = { "Head" },
@@ -166,8 +184,8 @@ xDTaraZ.Config = {
     },
     BuyStates = { ["Buy Period"] = true, ["Warmup"] = true },
     StickySlack = 1.5,
-    GroundRay = 3.6,
     HopGap = 0.05,
+    HookSettle = 1,
     SkinFile = "BloxStrike/skins.json",
     SkinWears = { "Factory New", "Minimal Wear", "Field-Tested", "Well-Worn", "Battle-Scarred" },
     SkinKinds = { Melee = "Knives", Glove = "Gloves", Grenade = "Grenades", C4 = "Gear", ["Zeus x27"] = "Gear" },
@@ -179,11 +197,15 @@ xDTaraZ.Config = {
         Aimbot = Color3.fromRGB(232, 160, 76),
         Silent = Color3.fromRGB(110, 170, 255),
     },
+    EspFocusColor = Color3.fromRGB(255, 214, 64),
+    FovLayer = 50,
 }
 
 xDTaraZ.State = {
     Alive = true,
     Connections = {},
+    Halted = {},
+    Notices = {},
     AimTarget = nil,
     AimPart = nil,
     RageTarget = nil,
@@ -199,10 +221,13 @@ xDTaraZ.State = {
     LightSaved = nil,
     WeaponSaved = {},
     Hooks = {},
+    RecoilWarned = false,
+    TriggerWarned = false,
     HopAt = 0,
     HopCrouched = false,
     SpaceHeld = false,
-    HopEcho = { [true] = 0, [false] = 0 },
+    FovBound = false,
+    FovBase = 0,
 }
 
 xDTaraZ.Options = {
@@ -250,12 +275,11 @@ xDTaraZ.Options = {
     AntiAfk = false,
 }
 
-xDTaraZ.Caps = {
-    Hook = type(hookfunction) == "function",
-    Restore = type(restorefunction) == "function",
-    Gc = type(getgc) == "function",
-    Drawing = type(Drawing) == "table" and type(Drawing.new) == "function",
-}
+xDTaraZ.Caps = setmetatable({}, {
+    __index = function(_, name)
+        return Library ~= nil and Library.Compat.Caps[name] == true
+    end,
+})
 
 xDTaraZ.Util = {}
 
@@ -264,7 +288,48 @@ function xDTaraZ.Util.HttpGet(url)
     if ok and type(body) == "string" then return body end
     local req = request or http_request or (syn and syn.request)
     if not req then error("no http") end
-    return req({ Url = url, Method = "GET" }).Body
+
+    local sent, response = pcall(req, { Url = url, Method = "GET" })
+    if not sent then error(response) end
+    local status = type(response) == "table" and tonumber(response.StatusCode)
+    if status ~= 200 or type(response.Body) ~= "string" then error("http status " .. tostring(status)) end
+    return response.Body
+end
+
+---@param detail any  extra context for the warn; the player only sees `text`
+function xDTaraZ.Util.Alert(text, detail)
+    warn("[BloxStrike] menu:", detail or text)
+    task.spawn(function()
+        for _ = 1, xDTaraZ.Config.AlertTries do
+            if pcall(StarterGui.SetCore, StarterGui, "SendNotification", { Title = "Mario Hub", Text = text, Duration = 10 }) then return end
+            task.wait(xDTaraZ.Config.AlertGap)
+        end
+    end)
+end
+
+---@return table?  nil after the player was told on screen
+function xDTaraZ.Util.LoadLibrary(url)
+    local got, source = pcall(xDTaraZ.Util.HttpGet, url)
+    local whole = got and type(source) == "string" and source:sub(-64):find("return Library%s*$") ~= nil
+    if not whole then
+        xDTaraZ.Util.Alert("Could not download the menu. Check your connection and run it again.", got and "truncated or not the menu" or source)
+        return nil
+    end
+    local chunk, err = loadstring(source)
+    if type(chunk) ~= "function" then
+        xDTaraZ.Util.Alert("The menu failed to load on this executor: " .. tostring(err))
+        return nil
+    end
+    local ran, loaded = pcall(chunk)
+    if ran and type(loaded) == "table" then return loaded end
+    xDTaraZ.Util.Alert("The menu failed to load on this executor: " .. tostring(loaded))
+    return nil
+end
+
+function xDTaraZ.Util.Try(label, fn, ...)
+    local ok, err = pcall(fn, ...)
+    if not ok then warn("[BloxStrike] " .. label .. ":", err) end
+    return ok
 end
 
 function xDTaraZ.Util.Copy(text)
@@ -273,11 +338,24 @@ function xDTaraZ.Util.Copy(text)
     return pcall(fn, text)
 end
 
+---@return function?  original, nil when already hooked or the executor can't hook it
 function xDTaraZ.Util.Hook(key, fn, replacement)
-    if not xDTaraZ.Caps.Hook or type(fn) ~= "function" or xDTaraZ.State.Hooks[key] then return end
-    local original = hookfunction(fn, replacement)
+    if type(fn) ~= "function" or xDTaraZ.State.Hooks[key] or not xDTaraZ.Caps.HookFunction then return nil end
+    local ok, original = pcall(hookfunction, fn, replacement)
+    if not ok or type(original) ~= "function" then
+        warn("[BloxStrike] hook " .. key .. ":", ok and "executor returned no original" or original)
+        return nil
+    end
     xDTaraZ.State.Hooks[key] = { Fn = fn, Original = original }
     return original
+end
+
+function xDTaraZ.Util.UnhookAll()
+    for key, hook in pairs(xDTaraZ.State.Hooks) do
+        local ok, err = pcall(Library.Compat.Unhook, hook.Fn, function() hookfunction(hook.Fn, hook.Original) end)
+        if not ok then warn("[BloxStrike] unhook " .. key .. ":", err) end
+    end
+    table.clear(xDTaraZ.State.Hooks)
 end
 
 function xDTaraZ.Util.Decode(raw)
@@ -293,28 +371,44 @@ function xDTaraZ:Connect(signal, handler)
 end
 
 xDTaraZ.GameLib = {}
+
+---@return any  module, or nil when this executor can't require it (never throws)
+function xDTaraZ.GameLib.Require(inst)
+    if not (inst and inst:IsA("ModuleScript")) then return nil end
+    local ok, mod = pcall(require, inst)
+    if ok then return mod end
+
+    local done, okAgain, again = false, false, nil
+    task.spawn(function()
+        pcall(setthreadidentity, 2)
+        local read, identity = pcall(getthreadidentity)
+        if read and identity == 2 then okAgain, again = pcall(require, inst) end
+        done = true
+    end)
+    local deadline = osClock() + xDTaraZ.Config.RequireTimeout
+    while not done and osClock() < deadline do task.wait() end
+    if okAgain then return again end
+    warn("[BloxStrike] require " .. inst.Name .. ":", mod)
+    return nil
+end
+
 do
+    local database = ReplicatedStorage:FindFirstChild("Database")
+    local security = database and database:FindFirstChild("Security")
+    local custom = database and database:FindFirstChild("Custom")
     local controllers = ReplicatedStorage:FindFirstChild("Controllers")
-    local function load(inst)
-        if not inst then return nil end
-        local ok, mod = pcall(require, inst)
-        return ok and mod or nil
-    end
-    xDTaraZ.GameLib.Net = load(ReplicatedStorage:FindFirstChild("Database") and ReplicatedStorage.Database.Security:FindFirstChild("Remotes"))
-    xDTaraZ.GameLib.Camera = load(controllers and controllers:FindFirstChild("CameraController"))
-    xDTaraZ.GameLib.WeaponFolder = ReplicatedStorage:FindFirstChild("Database") and ReplicatedStorage.Database.Custom:FindFirstChild("Weapons")
+    xDTaraZ.GameLib.Net = xDTaraZ.GameLib.Require(security and security:FindFirstChild("Remotes"))
+    xDTaraZ.GameLib.Character = xDTaraZ.GameLib.Require(controllers and controllers:FindFirstChild("CharacterController"))
+    xDTaraZ.GameLib.Camera = xDTaraZ.GameLib.Require(controllers and controllers:FindFirstChild("CameraController"))
+    xDTaraZ.GameLib.WeaponFolder = custom and custom:FindFirstChild("Weapons")
 end
 
 xDTaraZ.Weapons = {}
 do
     local folder = xDTaraZ.GameLib.WeaponFolder
-    if folder then
-        for _, module in ipairs(folder:GetChildren()) do
-            if module:IsA("ModuleScript") then
-                local ok, data = pcall(require, module)
-                if ok and type(data) == "table" and data.FireRate then xDTaraZ.Weapons[module.Name] = data end
-            end
-        end
+    for _, module in ipairs(folder and folder:GetChildren() or {}) do
+        local data = module:IsA("ModuleScript") and xDTaraZ.GameLib.Require(module)
+        if type(data) == "table" and data.FireRate then xDTaraZ.Weapons[module.Name] = data end
     end
 end
 
@@ -333,6 +427,14 @@ end
 function xDTaraZ.Player.Humanoid()
     local char = xDTaraZ.Player.Character()
     return char and char:FindFirstChildOfClass("Humanoid")
+end
+
+---@return table?  the game's own local character state; nil outside a round
+function xDTaraZ.Player.Body()
+    local controller = xDTaraZ.GameLib.Character
+    if not controller then return nil end
+    local ok, body = pcall(controller.getCurrentCharacter)
+    return ok and body or nil
 end
 
 function xDTaraZ.Player.Equipped()
@@ -492,12 +594,15 @@ function xDTaraZ.Silent.Rewrite(payload)
     local target, part = xDTaraZ.Target.Pick(xDTaraZ.Silent.Config(bone, forced))
     xDTaraZ.State.SilentTarget = target
     if not part then return end
+    local material = part.Material.Name
     for _, bullet in ipairs(payload.Bullets) do
         local origin = typeof(bullet.Origin) == "Vector3" and bullet.Origin or Workspace.CurrentCamera.CFrame.Position
         local offset = part.Position - origin
-        local unit = offset.Unit
+        local dist = offset.Magnitude
+        if dist < xDTaraZ.Config.MinShotDistance then continue end
+        local unit = offset / dist
         bullet.Direction = unit
-        bullet.Hits = { { Instance = part, Position = part.Position, Normal = -unit, Material = "Plastic", Distance = offset.Magnitude, Exit = false } }
+        bullet.Hits = { { Instance = part, Position = part.Position, Normal = -unit, Material = material, Distance = dist, Exit = false } }
     end
     xDTaraZ.State.Redirected += 1
 end
@@ -568,29 +673,69 @@ end
 
 xDTaraZ.Combat = { Circles = {} }
 
+---@return ScreenGui  made once; hidden gui first, then CoreGui, then PlayerGui
+function xDTaraZ.Combat.Screen()
+    local screen = xDTaraZ.Combat.Gui
+    if screen and screen.Parent then return screen end
+
+    screen = Instance.new("ScreenGui")
+    screen.Name = "MarioHubFov"
+    screen.IgnoreGuiInset = true
+    screen.ResetOnSpawn = false
+    screen.DisplayOrder = xDTaraZ.Config.FovLayer
+
+    local function Mount(parent) screen.Parent = parent end
+    local okHui, hui = pcall(gethui)
+    local mounted = okHui and hui ~= nil and pcall(Mount, hui)
+    if not mounted then mounted = pcall(Mount, game:GetService("CoreGui")) end
+    if not mounted then Mount(LocalPlayer:FindFirstChildOfClass("PlayerGui")) end
+
+    xDTaraZ.Combat.Gui = screen
+    return screen
+end
+
+---@return table  { Drawing = circle }, or { Frame = ring } drawn with Gui when Drawing is missing
+function xDTaraZ.Combat.NewCircle(color)
+    if xDTaraZ.Caps.Drawing then
+        local circle = Drawing.new("Circle")
+        circle.Thickness, circle.NumSides, circle.Filled, circle.Color = 1.5, 64, false, color
+        return { Drawing = circle }
+    end
+    local frame = Instance.new("Frame")
+    frame.AnchorPoint = vector2New(0.5, 0.5)
+    frame.BackgroundTransparency = 1
+    local round = Instance.new("UICorner")
+    round.CornerRadius = UDim.new(1, 0)
+    round.Parent = frame
+    local edge = Instance.new("UIStroke")
+    edge.Thickness, edge.Color = 1.5, color
+    edge.Parent = frame
+    frame.Parent = xDTaraZ.Combat.Screen()
+    return { Frame = frame }
+end
+
 function xDTaraZ.Combat.Circle(key, show, radius)
     local circle = xDTaraZ.Combat.Circles[key]
-    if not show then
-        if circle then circle.Visible = false end
-        return
-    end
     if not circle then
-        circle = Drawing.new("Circle")
-        circle.Thickness, circle.NumSides, circle.Filled = 1.5, 64, false
-        circle.Color = xDTaraZ.Config.FovColors[key]
+        if not show then return end
+        circle = xDTaraZ.Combat.NewCircle(xDTaraZ.Config.FovColors[key])
         xDTaraZ.Combat.Circles[key] = circle
     end
-    circle.Position = Workspace.CurrentCamera.ViewportSize / 2
-    circle.Radius = radius
-    circle.Visible = true
+    local center = Workspace.CurrentCamera.ViewportSize / 2
+    local drawing, frame = circle.Drawing, circle.Frame
+    if drawing then
+        drawing.Visible, drawing.Position, drawing.Radius = show, center, radius
+        return
+    end
+    frame.Visible = show
+    frame.Position = UDim2.fromOffset(center.X, center.Y)
+    frame.Size = UDim2.fromOffset(radius * 2, radius * 2)
 end
 
 function xDTaraZ.Combat.Step()
     local o, state = xDTaraZ.Options, xDTaraZ.State
-    if xDTaraZ.Caps.Drawing then
-        xDTaraZ.Combat.Circle("Aimbot", o.AimbotShowFov, o.AimbotFov)
-        xDTaraZ.Combat.Circle("Silent", o.SilentShowFov, o.SilentFov)
-    end
+    xDTaraZ.Combat.Circle("Aimbot", o.AimbotShowFov, o.AimbotFov)
+    xDTaraZ.Combat.Circle("Silent", o.SilentShowFov, o.SilentFov)
     if not xDTaraZ.Player.Alive() then
         state.AimTarget, state.AimPart, state.RageTarget, state.RagePart = nil, nil, nil, nil
         xDTaraZ.Trigger.Fire(false)
@@ -601,12 +746,24 @@ function xDTaraZ.Combat.Step()
     xDTaraZ.Trigger.Fire(rage or xDTaraZ.Trigger.Wanted())
 end
 
+function xDTaraZ.Combat.Rest()
+    local state = xDTaraZ.State
+    state.AimTarget, state.AimPart, state.RageTarget, state.RagePart = nil, nil, nil, nil
+    xDTaraZ.Trigger.Fire(false)
+    for key in pairs(xDTaraZ.Combat.Circles) do
+        xDTaraZ.Combat.Circle(key, false, 0)
+    end
+end
+
 function xDTaraZ.Combat.Start()
-    xDTaraZ.Silent.InstallHook()
     RunService:BindToRenderStep("xDTaraZAim", xDTaraZ.Config.AimRenderPriority, xDTaraZ.Aimbot.Lock)
     xDTaraZ:Connect(RunService.Heartbeat, function()
         local ok, err = pcall(xDTaraZ.Combat.Step)
-        if not ok then warn("[BloxStrike] combat:", err) end
+        if ok then
+            xDTaraZ.Faults.Clear("Combat")
+        else
+            xDTaraZ.Faults.Report("Combat", err, xDTaraZ.Config.CombatToggles, xDTaraZ.Combat.Rest)
+        end
     end)
 end
 
@@ -614,12 +771,20 @@ function xDTaraZ.Combat.Unload()
     xDTaraZ.Trigger.Fire(false)
     pcall(RunService.UnbindFromRenderStep, RunService, "xDTaraZAim")
     for key, circle in pairs(xDTaraZ.Combat.Circles) do
-        pcall(function() circle:Remove() end)
         xDTaraZ.Combat.Circles[key] = nil
+        if circle.Frame then
+            circle.Frame:Destroy()
+        else
+            pcall(function() circle.Drawing:Remove() end)
+        end
+    end
+    if xDTaraZ.Combat.Gui then
+        xDTaraZ.Combat.Gui:Destroy()
+        xDTaraZ.Combat.Gui = nil
     end
 end
 
-xDTaraZ.Guns = { Signature = nil }
+xDTaraZ.Guns = { Signature = nil, Warned = false }
 
 function xDTaraZ.Guns.Save(name, data)
     local saved = xDTaraZ.State.WeaponSaved
@@ -630,11 +795,21 @@ function xDTaraZ.Guns.Save(name, data)
     return saved[name]
 end
 
+---@return boolean  false when a frozen weapon table stays read-only on this executor
 function xDTaraZ.Guns.Unfreeze(data)
-    if not setreadonly then return end
     for _, section in pairs({ data = data, spread = data.Spread, recoil = data.Recoil }) do
-        if type(section) == "table" and table.isfrozen(section) then pcall(setreadonly, section, false) end
+        if type(section) ~= "table" or not table.isfrozen(section) then continue end
+        if setreadonly then pcall(setreadonly, section, false) end
+        if table.isfrozen(section) then return false end
     end
+    return true
+end
+
+function xDTaraZ.Guns.Locked()
+    if xDTaraZ.Guns.Warned then return end
+    xDTaraZ.Guns.Warned = true
+    warn("[BloxStrike] gun mods: weapon tables are read-only on this executor")
+    table.insert(xDTaraZ.State.Notices, { "Gun Mods", "Some gun mods are not supported on this executor" })
 end
 
 function xDTaraZ.Guns.AnyActive()
@@ -644,7 +819,10 @@ end
 
 function xDTaraZ.Guns.ApplyOne(name, data)
     local opts = xDTaraZ.Options
-    xDTaraZ.Guns.Unfreeze(data)
+    if not xDTaraZ.Guns.Unfreeze(data) then
+        xDTaraZ.Guns.Locked()
+        return
+    end
     local base = xDTaraZ.Guns.Save(name, data)
     if base.Spread then
         for key, value in pairs(base.Spread) do
@@ -678,7 +856,7 @@ function xDTaraZ.Guns.Step()
     end
 end
 
-function xDTaraZ.Guns.HookRecoil()
+function xDTaraZ.Guns.HookKick()
     local cam = xDTaraZ.GameLib.Camera
     if not cam then return end
     local kick
@@ -687,15 +865,42 @@ function xDTaraZ.Guns.HookRecoil()
         if o.NoRecoil and o.RecoilKeep <= 0 then return end
         return kick(...)
     end)
-    local fov
-    fov = xDTaraZ.Util.Hook("Fov", cam.getTargetFOV, function(...)
-        if xDTaraZ.Options.CameraFov then return xDTaraZ.Options.CameraFovValue end
-        return fov(...)
-    end)
+end
+
+---@return boolean  true while any scope or zoom is up
+function xDTaraZ.Guns.Scoped()
+    if LocalPlayer:GetAttribute("IsSniperScoped") == true then return true end
+    local cam = xDTaraZ.GameLib.Camera
+    local getter = cam and cam.getTargetFOV
+    if type(getter) ~= "function" then return false end
+    local ok, target = pcall(getter)
+    if not ok or type(target) ~= "number" then return false end
+
+    local state = xDTaraZ.State
+    if target > state.FovBase then state.FovBase = target end
+    return target < state.FovBase
+end
+
+function xDTaraZ.Guns.StepFov()
+    if not xDTaraZ.Options.CameraFov or xDTaraZ.Guns.Scoped() then return end
+    local camera = Workspace.CurrentCamera
+    if camera then camera.FieldOfView = xDTaraZ.Options.CameraFovValue end
+end
+
+function xDTaraZ.Guns.BindFov()
+    local state = xDTaraZ.State
+    if state.FovBound then return end
+    state.FovBound = true
+    RunService:BindToRenderStep("xDTaraZFov", Enum.RenderPriority.Camera.Value + 3, xDTaraZ.Guns.StepFov)
+end
+
+function xDTaraZ.Guns.UnbindFov()
+    xDTaraZ.State.FovBound = false
+    pcall(RunService.UnbindFromRenderStep, RunService, "xDTaraZFov")
 end
 
 function xDTaraZ.Guns.FindClass()
-    if not xDTaraZ.Caps.Gc then return nil end
+    if not xDTaraZ.Caps.Gc or not xDTaraZ.Caps.HookFunction then return nil end
     for _, entry in ipairs(getgc(true)) do
         if type(entry) == "table" and rawget(entry, "getSpread") and rawget(entry, "shoot") and rawget(entry, "setupRecoil") then return entry end
     end
@@ -715,14 +920,18 @@ end
 function xDTaraZ.Guns.Restore()
     for name, base in pairs(xDTaraZ.State.WeaponSaved) do
         local data = xDTaraZ.Weapons[name]
-        if data then
-            xDTaraZ.Guns.Unfreeze(data)
+        if data and xDTaraZ.Guns.Unfreeze(data) then
             if base.Spread then for k, v in pairs(base.Spread) do data.Spread[k] = v end end
             if base.Recoil then for k, v in pairs(base.Recoil) do data.Recoil[k] = v end end
             data.FireRate, data.Automatic = base.FireRate, base.Automatic
             if base.WalkSpeed then data.WalkSpeed = base.WalkSpeed end
         end
     end
+end
+
+function xDTaraZ.Guns.Rest()
+    xDTaraZ.Guns.Signature = nil
+    xDTaraZ.Guns.Restore()
 end
 
 xDTaraZ.Esp = { Count = 0, Decoded = {} }
@@ -736,17 +945,17 @@ function xDTaraZ.Esp.Attr(owner, key)
     return cache[raw] or nil
 end
 
----@return number?, string[]  armor left and status tags (C4, Kit, Helmet, Scoped)
-function xDTaraZ.Esp.Status(owner)
+---@return string  " C4 Kit Helmet Scoped" style tags, "" when none
+function xDTaraZ.Esp.Flags(owner)
+    if not owner then return "" end
     local flags = {}
-    if not owner then return nil, flags end
     local armor = xDTaraZ.Esp.Attr(owner, "Armor")
     local bomb = xDTaraZ.Esp.Attr(owner, "Slot5")
     if bomb and bomb.Weapon == "C4" then flags[#flags + 1] = "C4" end
-    if owner:GetAttribute("HasDefuseKit") == true then flags[#flags + 1] = "Kit" end
+    if owner:GetAttribute("HasDefuseKit") == true then table.insert(flags, "Kit") end
     if armor and type(armor.Type) == "string" and armor.Type:find("Helmet") then flags[#flags + 1] = "Helmet" end
     if owner:GetAttribute("IsSniperScoped") == true then flags[#flags + 1] = "Scoped" end
-    return armor and tonumber(armor.Health), flags
+    return #flags > 0 and " " .. table.concat(flags, " ") or ""
 end
 
 ---@return Model?  whatever aimbot, silent aim or ragebot is locked on
@@ -755,60 +964,26 @@ function xDTaraZ.Esp.Focus()
     return state.AimTarget or state.SilentTarget or state.RageTarget
 end
 
-function xDTaraZ.Esp.DroppedGuns()
-    local list = {}
-    for _, model in ipairs(CollectionService:GetTagged("WeaponDropped")) do
-        if model:GetAttribute("CanPickup") ~= false then list[#list + 1] = model end
-    end
-    return list
-end
-
----@return BasePart[]  one plant zone part per site (the largest), so each site gets a single label
-function xDTaraZ.Esp.Sites()
-    local best = {}
-    for _, part in ipairs(CollectionService:GetTagged("PlantArea")) do
-        local site = part:IsA("BasePart") and part:GetAttribute("Site")
-        if not site then continue end
-        local current = best[site]
-        if not current or part.Size.Magnitude > current.Size.Magnitude then best[site] = part end
-    end
-    local list = {}
-    for _, part in pairs(best) do list[#list + 1] = part end
-    return list
-end
-
----@return table[]  extra Visuals categories: planted bomb, dropped guns, bombsites
-function xDTaraZ.Esp.Categories()
-    return {
-        { Name = "Bomb", Text = T("Planted C4", "C4 ที่ปักแล้ว"), Color = Color3.fromRGB(255, 70, 70), Characters = false, MaxDistance = math.huge, Source = { Tag = "Bomb" }, Label = function() return "C4" end },
-        { Name = "DroppedGuns", Text = T("Dropped Guns", "ปืนที่ตกพื้น"), Color = Color3.fromRGB(238, 196, 82), Characters = false, Source = xDTaraZ.Esp.DroppedGuns, Label = function(model) return model:GetAttribute("Weapon") end },
-        { Name = "Sites", Text = T("Bombsites", "จุดปักระเบิด"), Color = Color3.fromRGB(120, 200, 255), Characters = false, MaxDistance = math.huge, Source = xDTaraZ.Esp.Sites, Label = function(part) return "Site " .. tostring(part:GetAttribute("Site")) end },
-    }
-end
-
----@return table[]  targets in the shape Library.Visuals expects
+---@return table[]  targets in the shape Library.Visuals expects; bots count as enemies
 function xDTaraZ.Esp.Targets()
     local list = {}
+    local mine = LocalPlayer:GetAttribute("Team")
+    local focus = xDTaraZ.Esp.Focus()
     for _, model in ipairs(xDTaraZ.Target.Candidates()) do
         if tostring(model:GetAttribute("Dead")) == "true" then continue end
         local owner = xDTaraZ.Target.Owner(model)
         local equipped = owner and xDTaraZ.Util.Decode(owner:GetAttribute("CurrentEquipped"))
-        local mine = LocalPlayer:GetAttribute("Team")
-        local armor, flags = xDTaraZ.Esp.Status(owner)
+        local label = owner and owner.DisplayName or model.Name
+        if equipped and equipped.Name then label = label .. " [" .. equipped.Name .. "]" end
+
         list[#list + 1] = {
             Model = model,
-            Player = owner,
-            Name = owner and owner.DisplayName or model.Name,
-            Kind = owner and "Player" or "Bot",
-            Weapon = equipped and equipped.Name,
-            Armor = armor,
-            MaxArmor = 100,
-            Flags = flags,
+            Name = label .. xDTaraZ.Esp.Flags(owner),
             Health = tonumber(model:GetAttribute("Health")) or 100,
             MaxHealth = tonumber(model:GetAttribute("MaxHealth")) or 100,
-            Enemy = mine == nil or not owner or owner:GetAttribute("Team") ~= mine,
+            Friendly = mine ~= nil and owner ~= nil and owner:GetAttribute("Team") == mine,
             Root = model:FindFirstChild("HumanoidRootPart"),
-            Head = model:FindFirstChild("Head"),
+            Color = model == focus and xDTaraZ.Config.EspFocusColor or nil,
         }
     end
     xDTaraZ.Esp.Count = #list
@@ -858,54 +1033,50 @@ function xDTaraZ.World.OnIdled()
 end
 
 function xDTaraZ.World.OnJump()
-    if not xDTaraZ.Options.InfiniteJump then return end
+    if not xDTaraZ.Options.InfiniteJump or xDTaraZ.Player.Body() then return end
     local hum = xDTaraZ.Player.Humanoid()
     if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
-end
-
-function xDTaraZ.World.Grounded(char)
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return false end
-    local params = xDTaraZ.State.HopParams or RaycastParams.new()
-    xDTaraZ.State.HopParams = params
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = { Workspace:FindFirstChild("Characters") or char, Workspace.CurrentCamera }
-    return Workspace:Raycast(hrp.Position, vector3New(0, -xDTaraZ.Config.GroundRay, 0), params) ~= nil and hrp.AssemblyLinearVelocity.Y <= 1
 end
 
 function xDTaraZ.World.SetCrouch(down)
     local state = xDTaraZ.State
     if state.HopCrouched == down then return end
     state.HopCrouched = down
-    VirtualInputManager:SendKeyEvent(down, Enum.KeyCode.LeftControl, false, game)
+    local controller = xDTaraZ.GameLib.Character
+    if not controller then return end
+    if not down and UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then return end
+    controller.crouch(down)
 end
 
-function xDTaraZ.World.OnSpace(input, down)
+function xDTaraZ.World.OnSpace(input, down, processed)
     if input.KeyCode ~= Enum.KeyCode.Space then return end
-    local echo = xDTaraZ.State.HopEcho
-    if echo[down] > 0 then
-        echo[down] -= 1
-        return
-    end
+    if down and (processed or UserInputService:GetFocusedTextBox()) then return end
     xDTaraZ.State.SpaceHeld = down
 end
 
 function xDTaraZ.World.Hop()
     local opts, state = xDTaraZ.Options, xDTaraZ.State
-    local holding = opts.BunnyHop and xDTaraZ.Player.Alive() and state.SpaceHeld and not UserInputService:GetFocusedTextBox()
-    if not holding then
-        state.HopEcho[true], state.HopEcho[false] = 0, 0
+    local body = opts.BunnyHop and state.SpaceHeld and xDTaraZ.Player.Alive() and xDTaraZ.Player.Body()
+    if not body or UserInputService:GetFocusedTextBox() then
         xDTaraZ.World.SetCrouch(false)
         return
     end
-    local grounded = xDTaraZ.World.Grounded(xDTaraZ.Player.Character())
+    local controller = xDTaraZ.GameLib.Character
+    local grounded = body.OnGround == true
     xDTaraZ.World.SetCrouch(opts.BunnyCrouch and not grounded)
+    controller.jump(false)
     if not grounded or osClock() - state.HopAt < xDTaraZ.Config.HopGap then return end
     state.HopAt = osClock()
-    state.HopEcho[false] += 1
-    state.HopEcho[true] += 1
-    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
-    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+    controller.jump()
+end
+
+function xDTaraZ.World.HopStep()
+    local ok, err = pcall(xDTaraZ.World.Hop)
+    if ok then
+        xDTaraZ.Faults.Clear("Bunny Hop")
+    else
+        xDTaraZ.Faults.Report("Bunny Hop", err, { "BunnyHop" }, xDTaraZ.World.Hop)
+    end
 end
 
 function xDTaraZ.World.Rejoin()
@@ -1181,20 +1352,83 @@ function xDTaraZ.Spectators.Text()
     return count .. " watching" .. (#names > 0 and (" (dead: " .. table.concat(names, ", ") .. ")") or "")
 end
 
+xDTaraZ.Faults = { Streaks = {} }
+
+function xDTaraZ.Faults.Clear(name)
+    xDTaraZ.Faults.Streaks[name] = nil
+end
+
+function xDTaraZ.Faults.AnyOn(toggles)
+    for _, key in ipairs(toggles) do
+        if xDTaraZ.Options[key] then return true end
+    end
+    return false
+end
+
+---@param restore function?  the feature's own off path
+function xDTaraZ.Faults.Halt(name, err, toggles, restore)
+    warn("[BloxStrike] " .. name .. " stopped:", err)
+    for _, key in ipairs(toggles) do
+        xDTaraZ.Options[key] = false
+    end
+    if restore then xDTaraZ.Util.Try(name .. " restore", restore) end
+    local halted = xDTaraZ.State.Halted
+    halted[#halted + 1] = { name, tostring(err):match("^[^\n]*"), toggles }
+end
+
+---@param toggles string[]   turned off once the feature keeps failing; empty = keeps running, warns once per streak
+---@param restore function?  run once when the feature is stopped
+---@return boolean           true while the feature is stopped
+function xDTaraZ.Faults.Report(name, err, toggles, restore)
+    local now, streaks = osClock(), xDTaraZ.Faults.Streaks
+    local streak = streaks[name]
+    if not streak or (streak.Halted and xDTaraZ.Faults.AnyOn(toggles)) then
+        streak = { Count = 0, First = now, Warned = false, Halted = false }
+        streaks[name] = streak
+    end
+    streak.Count += 1
+    if streak.Warned then return streak.Halted end
+    if streak.Count < xDTaraZ.Config.MaxFails or now - streak.First < xDTaraZ.Config.FailWindow then return false end
+
+    streak.Warned = true
+    if #toggles == 0 then
+        warn("[BloxStrike] " .. name .. " keeps failing:", err)
+        return false
+    end
+    streak.Halted = true
+    xDTaraZ.Faults.Halt(name, err, toggles, restore)
+    return true
+end
+
 xDTaraZ.Scheduler = { Jobs = {} }
 
-function xDTaraZ.Scheduler.Every(name, interval, fn)
-    xDTaraZ.Scheduler.Jobs[name] = { Interval = interval, Fn = fn, Next = 0 }
+---@param toggles string[]   options the job serves; switched off if it keeps failing
+---@param restore function?  the job's off path, run once if it gets stopped
+function xDTaraZ.Scheduler.Every(name, interval, fn, toggles, restore)
+    xDTaraZ.Scheduler.Jobs[name] = { Interval = interval, Fn = fn, Next = 0, Toggles = toggles, Restore = restore }
+end
+
+---@return boolean  a halted job runs again once one of its toggles is back on
+function xDTaraZ.Scheduler.Resume(name, job)
+    if not xDTaraZ.Faults.AnyOn(job.Toggles) then return false end
+    job.Halted = false
+    xDTaraZ.Faults.Clear(name)
+    return true
 end
 
 function xDTaraZ.Scheduler.Boot()
     xDTaraZ:Connect(RunService.Heartbeat, function()
         local now = osClock()
         for name, job in pairs(xDTaraZ.Scheduler.Jobs) do
-            if now >= job.Next then
-                job.Next = now + job.Interval
-                local ok, err = pcall(job.Fn)
-                if not ok then warn("[BloxStrike] " .. name .. ":", err) end
+            if now < job.Next then continue end
+            job.Next = now + job.Interval
+            if job.Halted and not xDTaraZ.Scheduler.Resume(name, job) then continue end
+
+            local ok, err = pcall(job.Fn)
+            if ok then
+                xDTaraZ.Faults.Clear(name)
+            else
+                job.Halted = xDTaraZ.Faults.Report(name, err, job.Toggles, job.Restore)
             end
         end
     end)
@@ -1218,186 +1452,162 @@ function xDTaraZ.UI.Bind(widget, key)
     widget:OnChanged(Apply)
 end
 
----@param cap string  key in xDTaraZ.Caps
-function xDTaraZ.UI.NeedCap(idx, cap)
-    if xDTaraZ.Caps[cap] then return end
-    local option = Library.Options[idx]
-    if not option then return end
-    option:OnChanged(function(on)
-        if not on then return end
-        local title = option.Row and option.Row.Title
-        Library:Notify("Mario Hub", (title and title.Text or idx) .. " is not supported on this executor", 5, "Warning")
-        task.defer(function() option:SetValue(false) end)
-    end)
+function xDTaraZ.UI.AddKeyMode(group, toggleIdx, keyIdx, default)
+    group:AddDropdown(toggleIdx .. "Mode", { Text = T("Key mode", "โหมดปุ่ม"), Values = { "Hold", "Toggle", "Always" }, Default = default, Callback = function(mode)
+        local picker = Library.Options[keyIdx]
+        if picker then picker:SetValue({ picker.Value, mode }) end
+    end })
+end
+
+---Toggle that keeps its info, so the library's "not supported" / "not available" notices name the feature instead of the idx.
+function xDTaraZ.UI.NamedToggle(group, idx, info)
+    local toggle = group:AddToggle(idx, info)
+    toggle.Info = toggle.Info or info
+    return toggle
 end
 
 function xDTaraZ.UI.BuildMain(window)
     window:AddTabSection(T("Main", "หลัก"))
     local tab = window:AddTab(T("Main", "หลัก"), "mushroom", T("Status and links", "สถานะและลิงก์"))
 
-    local status = tab:AddLeftGroupbox(T("Status", "สถานะ"), "stats")
-    status:AddStatus("StatusMatch", { Text = T("Match", "แมตช์"), Icon = "map" })
-    status:AddStatus("StatusCombat", { Text = T("Target", "เป้า"), Icon = "crosshair" })
-    status:AddStatus("StatusSpectators", { Text = T("Spectators", "คนดูเรา"), Icon = "spectate" })
-    status:AddStatus("StatusEsp", { Text = T("ESP", "ESP"), Icon = "esp" })
+    local status = tab:AddLeftGroupbox(T("Status", "สถานะ"), "star")
+    xDTaraZ.UI.Labels.Match = status:AddParagraph({ Title = T("Match", "แมตช์"), Content = "-" })
+    xDTaraZ.UI.Labels.Combat = status:AddParagraph({ Title = T("Combat", "การต่อสู้"), Content = "-" })
+    xDTaraZ.UI.Labels.Spectators = status:AddParagraph({ Title = T("Spectators", "คนดูเรา"), Content = "-" })
+    xDTaraZ.UI.Labels.Esp = status:AddParagraph({ Title = T("ESP", "ESP"), Content = "-" })
 
-    local live = tab:AddLeftGroupbox(T("Live", "ตัวเลขสด"), "chart")
-    live:AddStat("StatKills", { Text = T("Kills", "คิล"), Icon = "damage", Format = "%s", Token = "Good" })
-    live:AddStat("StatShots", { Text = T("Shots fired", "นัดที่ยิง"), Icon = "ammo", Format = "%s" })
-    live:AddStat("StatAimed", { Text = T("Shots aimed", "นัดที่ช่วยเล็ง"), Icon = "silentaim", Format = "%s" })
-
-    local quick = tab:AddRightGroupbox(T("Quick", "ด่วน"), "lightning")
-    quick:AddButton({ Text = T("Panic - All Off", "ฉุกเฉิน ปิดทั้งหมด"), Icon = "stop", Style = "Danger", Callback = xDTaraZ.UI.Detach(function()
+    local quick = tab:AddRightGroupbox(T("Quick", "ด่วน"), "bomb")
+    quick:AddButton({ Text = T("Panic - all off", "ฉุกเฉิน ปิดทั้งหมด"), Style = "Danger", Func = xDTaraZ.UI.Detach(function()
         for _, toggle in pairs(Library.Toggles) do
             if toggle.Value == true then toggle:SetValue(false) end
         end
     end) })
 
-    Library.Kit.Discord.Build(tab, xDTaraZ.Config.Discord)
+    local discord = tab:AddRightGroupbox(T("Discord", "ดิสคอร์ด"), "link")
+    discord:AddLabel(xDTaraZ.Config.Discord)
+    discord:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ดิสคอร์ด"), Func = xDTaraZ.UI.Detach(function()
+        if xDTaraZ.Util.Copy(xDTaraZ.Config.Discord) then
+            Library:Notify(T("Discord", "ดิสคอร์ด"), T("Link copied", "คัดลอกลิงก์แล้ว"), 3, "Success")
+        else
+            Library:Notify(T("Discord", "ดิสคอร์ด"), xDTaraZ.Config.Discord, 6, "Info")
+        end
+    end) })
 end
 
 local priorities = { "Crosshair", "Distance", "Health" }
 
-function xDTaraZ.UI.BuildAimbot(tab)
-    local main = tab:AddLeftGroupbox(T("Aimbot", "เล็งอัตโนมัติ"), "aimbot")
-    main:AddFeature("Aimbot", {
-        Text = T("Aimbot", "เล็งอัตโนมัติ"),
-        Description = T("Locks your view onto the enemy in the FOV", "ล็อคกล้องไปที่ศัตรูในวง FOV"),
-        Icon = "aimbot",
-        Keybind = { Default = "E", Mode = "Hold" },
-        Options = function(options)
-            options:AddSlider("AimbotSmooth", { Text = T("Smoothness", "ความนุ่ม"), Description = T("1 = instant snap", "1 = หันทันที"), Icon = "sliders-horizontal", Min = 1, Max = 20, Default = 1, Rounding = 0 })
-            options:AddCheckbox("AimbotSticky", { Text = T("Sticky target", "ล็อคเป้าเดิม"), Description = T("Keeps the same enemy until it is lost", "ไม่สลับเป้าจนกว่าเป้าเดิมจะหลุด"), Icon = "lock", Default = true })
-        end,
-    })
+function xDTaraZ.UI.BuildAimbot(window)
+    window:AddTabSection(T("Combat", "การต่อสู้"))
+    local tab = window:AddTab(T("Aimbot", "เล็งอัตโนมัติ"), "crosshair", T("Locks your camera onto enemies", "ล็อคกล้องไปที่ศัตรู"))
 
-    local target = tab:AddLeftGroupbox(T("Aimbot Targeting", "การเลือกเป้า (เล็ง)"), "crosshair")
-    target:AddSegmented("AimbotBone", { Text = T("Aim part", "จุดที่เล็ง"), Icon = "headshot", Values = { "Head", "Torso" }, Default = "Head" })
-    target:AddSegmented("AimbotPriority", { Text = T("Priority", "เลือกเป้าตาม"), Icon = "sort", Values = priorities, Default = "Crosshair" })
-    target:AddCheckbox("AimbotVisible", { Text = T("Visible only", "เฉพาะที่มองเห็น"), Icon = "eye", Default = true })
-    target:AddSlider("AimbotFov", { Text = T("FOV", "ขนาดวง"), Icon = "fov", Min = 20, Max = 800, Default = 150, Suffix = "px" })
-    target:AddToggle("AimbotShowFov", { Text = T("Show FOV circle", "แสดงวง FOV"), Icon = "eye" })
-    target:AddSlider("AimbotMaxDistance", { Text = T("Max distance", "ระยะสูงสุด"), Icon = "distance", Min = 50, Max = 3000, Default = 1500, Suffix = "m" })
-    xDTaraZ.UI.NeedCap("AimbotShowFov", "Drawing")
+    local main = tab:AddLeftGroupbox(T("Aimbot", "เล็งอัตโนมัติ"), "crosshair")
+    main:AddToggle("Aimbot", { Text = T("Aimbot", "เล็งอัตโนมัติ"), Description = T("Locks your view onto the enemy in the FOV", "ล็อคกล้องไปที่ศัตรูในวง FOV") })
+        :AddKeyPicker("AimbotKey", { Default = "E", Mode = "Hold" })
+    xDTaraZ.UI.AddKeyMode(main, "Aimbot", "AimbotKey", "Hold")
+    main:AddSlider("AimbotSmooth", { Text = T("Smoothness", "ความนุ่ม"), Description = T("1 = instant snap", "1 = หันทันที"), Min = 1, Max = 20, Default = 1, Rounding = 0 })
+    main:AddCheckbox("AimbotSticky", { Text = T("Sticky target", "ล็อคเป้าเดิม"), Description = T("Keeps the same enemy until it is lost", "ไม่สลับเป้าจนกว่าเป้าเดิมจะหลุด"), Default = true })
+
+    local target = tab:AddRightGroupbox(T("Aimbot Targeting", "การเลือกเป้า (เล็ง)"), "target")
+    target:AddDropdown("AimbotBone", { Text = T("Aim part", "จุดที่เล็ง"), Values = { "Head", "Torso" }, Default = "Head" })
+    target:AddDropdown("AimbotPriority", { Text = T("Priority", "เลือกเป้าตาม"), Values = priorities, Default = "Crosshair" })
+    target:AddCheckbox("AimbotVisible", { Text = T("Visible only", "เฉพาะที่มองเห็น"), Default = true })
+    target:AddSlider("AimbotFov", { Text = T("FOV", "ขนาดวง"), Min = 20, Max = 800, Default = 150, Suffix = "px" })
+    target:AddToggle("AimbotShowFov", { Text = T("Show FOV circle", "แสดงวง FOV") })
+    target:AddSlider("AimbotMaxDistance", { Text = T("Max distance", "ระยะสูงสุด"), Min = 50, Max = 3000, Default = 1500, Suffix = "m" })
 end
 
-function xDTaraZ.UI.BuildSilent(tab)
-    local main = tab:AddRightGroupbox(T("Silent Aim", "ไซเลนต์เอม"), "silentaim")
-    main:AddFeature("SilentAim", {
-        Text = T("Silent Aim", "ไซเลนต์เอม"),
-        Description = T("Shots you fire go to the enemy in the FOV", "นัดที่ยิงพุ่งไปหาศัตรูในวง FOV"),
-        Icon = "silentaim",
-        Risky = true,
-        Keybind = { Default = "None", Mode = "Toggle" },
-        Options = function(options)
-            options:AddSlider("SilentHitChance", { Text = T("Hit chance", "โอกาสโดน"), Description = T("Lower looks more legit", "ยิ่งต่ำยิ่งดูเนียน"), Icon = "hitchance", Min = 1, Max = 100, Default = 100, Rounding = 0, Suffix = "%" })
-            options:AddSlider("SilentHeadChance", { Text = T("Headshot chance", "โอกาสเข้าหัว"), Description = T("The rest go to the body", "ที่เหลือเข้าลำตัว"), Icon = "headshot", Min = 0, Max = 100, Default = 100, Rounding = 0, Suffix = "%" })
-        end,
-    })
-    xDTaraZ.UI.NeedCap("SilentAim", "Hook")
+function xDTaraZ.UI.BuildSilent(window)
+    local tab = window:AddTab(T("Silent Aim", "ไซเลนต์เอม"), "bomb", T("Your shots find the enemy for you", "กระสุนวิ่งหาศัตรูเอง"))
+
+    local main = tab:AddLeftGroupbox(T("Silent Aim", "ไซเลนต์เอม"), "bomb")
+    xDTaraZ.UI.NamedToggle(main, "SilentAim", { Text = T("Silent aim", "ไซเลนต์เอม"), Description = T("Shots you fire go to the enemy in the FOV", "นัดที่ยิงพุ่งไปหาศัตรูในวง FOV"), Risky = true })
+        :AddKeyPicker("SilentKey", { Default = "None", Mode = "Toggle" })
+    main:AddSlider("SilentHitChance", { Text = T("Hit chance", "โอกาสโดน"), Description = T("Lower looks more legit", "ยิ่งต่ำยิ่งดูเนียน"), Min = 1, Max = 100, Default = 100, Rounding = 0, Suffix = "%" })
+    main:AddSlider("SilentHeadChance", { Text = T("Headshot chance", "โอกาสเข้าหัว"), Description = T("The rest go to the body", "ที่เหลือเข้าลำตัว"), Min = 0, Max = 100, Default = 100, Rounding = 0, Suffix = "%" })
+    Library.Compat.NeedCap("SilentAim", "HookFunction")
 
     local target = tab:AddRightGroupbox(T("Silent Targeting", "การเลือกเป้า (ไซเลนต์)"), "target")
-    target:AddSegmented("SilentPriority", { Text = T("Priority", "เลือกเป้าตาม"), Icon = "sort", Values = priorities, Default = "Crosshair" })
-    target:AddCheckbox("SilentVisible", { Text = T("Visible only", "เฉพาะที่มองเห็น"), Description = T("Off = also through walls", "ปิด = ยิงทะลุกำแพงด้วย"), Icon = "eye", Default = true })
-    target:AddSlider("SilentFov", { Text = T("FOV", "ขนาดวง"), Icon = "fov", Min = 20, Max = 1000, Default = 220, Suffix = "px" })
-    target:AddToggle("SilentShowFov", { Text = T("Show FOV circle", "แสดงวง FOV"), Icon = "eye" })
-    target:AddSlider("SilentMaxDistance", { Text = T("Max distance", "ระยะสูงสุด"), Icon = "distance", Min = 50, Max = 3000, Default = 2000, Suffix = "m" })
-    xDTaraZ.UI.NeedCap("SilentShowFov", "Drawing")
+    target:AddDropdown("SilentPriority", { Text = T("Priority", "เลือกเป้าตาม"), Values = priorities, Default = "Crosshair" })
+    target:AddCheckbox("SilentVisible", { Text = T("Visible only", "เฉพาะที่มองเห็น"), Description = T("Off = also through walls", "ปิด = ยิงทะลุกำแพงด้วย"), Default = true })
+    target:AddSlider("SilentFov", { Text = T("FOV", "ขนาดวง"), Min = 20, Max = 1000, Default = 220, Suffix = "px" })
+    target:AddToggle("SilentShowFov", { Text = T("Show FOV circle", "แสดงวง FOV") })
+    target:AddSlider("SilentMaxDistance", { Text = T("Max distance", "ระยะสูงสุด"), Min = 50, Max = 3000, Default = 2000, Suffix = "m" })
 end
 
 function xDTaraZ.UI.BuildTrigger(window)
-    local tab = window:AddTab(T("Trigger & Rage", "ยิงออโต้ & เรจ"), "triggerbot", T("Shoots for you", "ยิงให้อัตโนมัติ"))
+    local tab = window:AddTab(T("Trigger & Rage", "ยิงออโต้ & เรจ"), "zap", T("Shoots for you", "ยิงให้อัตโนมัติ"))
 
-    local trigger = tab:AddLeftGroupbox(T("Triggerbot", "ยิงอัตโนมัติ"), "triggerbot")
-    trigger:AddFeature("Triggerbot", {
-        Text = T("Triggerbot", "ยิงอัตโนมัติ"),
-        Description = T("Fires the moment an enemy is under your crosshair", "ยิงทันทีที่ศัตรูอยู่ใต้เป้า"),
-        Icon = "triggerbot",
-        Keybind = { Default = "T", Mode = "Toggle" },
-        Options = function(options)
-            options:AddSlider("TriggerDelay", { Text = T("Reaction delay", "ดีเลย์ก่อนยิง"), Icon = "timer", Min = 0, Max = 400, Default = 0, Rounding = 0, Suffix = "ms" })
-            options:AddSlider("TriggerHitChance", { Text = T("Fire chance", "โอกาสยิง"), Icon = "hitchance", Min = 1, Max = 100, Default = 100, Rounding = 0, Suffix = "%" })
-        end,
-    })
+    local trigger = tab:AddLeftGroupbox(T("Triggerbot", "ยิงอัตโนมัติ"), "zap")
+    trigger:AddToggle("Triggerbot", { Text = T("Triggerbot", "ยิงอัตโนมัติ"), Description = T("Fires the moment an enemy is under your crosshair", "ยิงทันทีที่ศัตรูอยู่ใต้เป้า") })
+        :AddKeyPicker("TriggerKey", { Default = "T", Mode = "Toggle" })
+    xDTaraZ.UI.AddKeyMode(trigger, "Triggerbot", "TriggerKey", "Toggle")
+    trigger:AddSlider("TriggerDelay", { Text = T("Reaction delay", "ดีเลย์ก่อนยิง"), Min = 0, Max = 400, Default = 0, Rounding = 0, Suffix = "ms" })
+    trigger:AddSlider("TriggerHitChance", { Text = T("Fire chance", "โอกาสยิง"), Min = 1, Max = 100, Default = 100, Rounding = 0, Suffix = "%" })
 
-    local rage = tab:AddRightGroupbox(T("Ragebot", "เรจบอท"), "ragebot")
-    rage:AddFeature("Ragebot", {
-        Text = T("Ragebot", "เรจบอท"),
-        Description = T("Snaps to and kills any enemy it can reach on its own", "หันไปยิงศัตรูที่ยิงถึงเองทันที"),
-        Icon = "ragebot",
-        Risky = true,
-        Badge = T("Risky", "เสี่ยง"),
-        Keybind = { Default = "None", Mode = "Toggle" },
-        Options = function(options)
-            options:AddCheckbox("RageVisible", { Text = T("Visible only", "เฉพาะที่มองเห็น"), Description = T("Off = also through walls", "ปิด = ยิงทะลุกำแพงด้วย"), Icon = "eye", Default = true })
-            options:AddSlider("RageMaxDistance", { Text = T("Max distance", "ระยะสูงสุด"), Icon = "distance", Min = 50, Max = 3000, Default = 2000, Suffix = "m" })
-        end,
-    })
-    xDTaraZ.UI.NeedCap("Ragebot", "Hook")
+    local rage = tab:AddRightGroupbox(T("Ragebot", "เรจบอท"), "bomb")
+    xDTaraZ.UI.NamedToggle(rage, "Ragebot", { Text = T("Ragebot", "เรจบอท"), Description = T("Snaps to and kills any enemy it can reach on its own", "หันไปยิงศัตรูที่ยิงถึงเองทันที"), Risky = true })
+        :AddKeyPicker("RageKey", { Default = "None", Mode = "Toggle" })
+    rage:AddCheckbox("RageVisible", { Text = T("Visible only", "เฉพาะที่มองเห็น"), Description = T("Off = also through walls", "ปิด = ยิงทะลุกำแพงด้วย"), Default = true })
+    rage:AddSlider("RageMaxDistance", { Text = T("Max distance", "ระยะสูงสุด"), Min = 50, Max = 3000, Default = 2000, Suffix = "m" })
+    Library.Compat.NeedCap("Ragebot", "HookFunction")
 end
 
 function xDTaraZ.UI.BuildGuns(window)
-    local tab = window:AddTab(T("Gun Mods", "ม็อดปืน"), "gun", T("Recoil, spread and fire rate", "แรงถีบ การกระจาย และอัตรายิง"))
+    local tab = window:AddTab(T("Gun Mods", "ม็อดปืน"), "swords", T("Recoil, spread and fire rate", "แรงถีบ การกระจาย และอัตรายิง"))
 
-    local mods = tab:AddLeftGroupbox(T("Gun Mods", "ม็อดปืน"), "gun")
-    mods:AddToggle("NoRecoil", { Text = T("No Recoil", "ไม่มีแรงถีบ"), Description = T("Your view and bullets stay still while spraying", "จอและกระสุนนิ่งตอนกดยิงค้าง"), Icon = "recoil" })
-    mods:AddSlider("RecoilKeep", { Text = T("Recoil left", "แรงถีบที่เหลือ"), Description = T("0 = none, 100 = normal", "0 = ไม่มีเลย, 100 = ปกติ"), Icon = "sliders-horizontal", Min = 0, Max = 100, Default = 0, Rounding = 0, Suffix = "%", DependsOn = { "NoRecoil", true } })
-    mods:AddToggle("NoSpread", { Text = T("No Spread", "ไม่มีการกระจาย"), Description = T("Every bullet lands on the crosshair", "ทุกนัดลงกลางเป้า"), Icon = "spread" })
-    mods:AddToggle("FullAuto", { Text = T("Full Auto", "ยิงรัวทุกปืน"), Description = T("Hold to spray with any gun", "กดค้างยิงรัวได้ทุกปืน"), Icon = "fullauto" })
-    xDTaraZ.UI.NeedCap("NoSpread", "Hook")
+    local mods = tab:AddLeftGroupbox(T("Gun Mods", "ม็อดปืน"), "swords")
+    xDTaraZ.UI.NamedToggle(mods, "NoRecoil", { Text = T("No recoil", "ไม่มีแรงถีบ"), Description = T("Your view and bullets stay still while spraying", "จอและกระสุนนิ่งตอนกดยิงค้าง") })
+    mods:AddSlider("RecoilKeep", { Text = T("Recoil left", "แรงถีบที่เหลือ"), Description = T("0 = none, 100 = normal", "0 = ไม่มีเลย, 100 = ปกติ"), Min = 0, Max = 100, Default = 0, Rounding = 0, Suffix = "%" })
+    xDTaraZ.UI.NamedToggle(mods, "NoSpread", { Text = T("No spread", "ไม่มีการกระจาย"), Description = T("Every bullet lands on the crosshair", "ทุกนัดลงกลางเป้า") })
+    xDTaraZ.UI.NamedToggle(mods, "FullAuto", { Text = T("Full auto", "ยิงรัวทุกปืน"), Description = T("Hold to spray with any gun", "กดค้างยิงรัวได้ทุกปืน") })
+    Library.Compat.NeedCap("NoSpread", { "HookFunction", "Gc" })
 
-    local rate = tab:AddRightGroupbox(T("Fire Rate", "อัตรายิง"), "rapidfire")
-    rate:AddToggle("RapidFire", { Text = T("Rapid Fire", "ยิงเร็ว"), Description = T("Shoots faster than normal", "ยิงเร็วกว่าปกติ"), Icon = "rapidfire", Risky = true })
-    rate:AddSlider("FireRateMult", { Text = T("Fire speed", "ความเร็วยิง"), Icon = "lightning", Min = 1, Max = 4, Default = 1.5, Rounding = 1, Suffix = "x", DependsOn = { "RapidFire", true } })
-    rate:AddToggle("WeaponSpeed", { Text = T("Move Speed", "เดินเร็ว"), Description = T("Run faster with any weapon", "วิ่งเร็วขึ้นทุกอาวุธ"), Icon = "speed", Risky = true })
-    rate:AddSlider("WeaponSpeedMult", { Text = T("Move speed", "ความเร็วเดิน"), Icon = "speed", Min = 1, Max = 2, Default = 1.3, Rounding = 1, Suffix = "x", DependsOn = { "WeaponSpeed", true } })
+    local rate = tab:AddRightGroupbox(T("Fire Rate", "อัตรายิง"), "zap")
+    xDTaraZ.UI.NamedToggle(rate, "RapidFire", { Text = T("Rapid fire", "ยิงเร็ว"), Description = T("Shoots faster than normal", "ยิงเร็วกว่าปกติ"), Risky = true })
+    rate:AddSlider("FireRateMult", { Text = T("Speed", "ความเร็ว"), Min = 1, Max = 4, Default = 1.5, Rounding = 1, Suffix = "x" })
+    xDTaraZ.UI.NamedToggle(rate, "WeaponSpeed", { Text = T("Move speed", "เดินเร็ว"), Description = T("Run faster with any weapon", "วิ่งเร็วขึ้นทุกอาวุธ"), Risky = true })
+    rate:AddSlider("WeaponSpeedMult", { Text = T("Move speed", "ความเร็วเดิน"), Min = 1, Max = 2, Default = 1.3, Rounding = 1, Suffix = "x" })
 end
 
-function xDTaraZ.UI.BuildCombat(window)
-    window:AddTabSection(T("Combat", "การต่อสู้"))
-    local aim = window:AddTab(T("Aim", "เล็ง"), "aimbot", T("Aimbot and silent aim", "เล็งอัตโนมัติและไซเลนต์เอม"))
-    xDTaraZ.UI.BuildAimbot(aim)
-    xDTaraZ.UI.BuildSilent(aim)
-    xDTaraZ.UI.BuildTrigger(window)
-    xDTaraZ.UI.BuildGuns(window)
-end
+function xDTaraZ.UI.BuildVisuals(window)
+    window:AddTabSection(T("Visuals", "การมองเห็น"))
+    xDTaraZ.Util.Try("visuals tab", function()
+        window:AddVisualsTab({ Provider = xDTaraZ.Esp.Targets, Preview = true })
+    end)
 
-function xDTaraZ.UI.BuildWorld(window)
-    local tab = window:AddTab(T("World", "โลก"), "fullbright", T("Lighting, flash and smoke", "แสง แฟลช และควัน"))
+    local tab = window:AddTab(T("World", "โลก"), "globe", T("Lighting, flash and smoke", "แสง แฟลช และควัน"))
+    local world = tab:AddLeftGroupbox(T("World", "โลก"), "flower")
+    world:AddToggle("Fullbright", { Text = T("Fullbright", "สว่างทั้งแมพ") })
+    world:AddToggle("NoFlash", { Text = T("No flash", "กันแฟลช"), Description = T("Flashbangs do not blind you", "แฟลชไม่ทำให้ตาบอด") })
+    world:AddToggle("NoSmoke", { Text = T("No smoke", "ไม่มีควัน"), Description = T("See through smoke grenades", "มองทะลุควัน") })
 
-    local world = tab:AddLeftGroupbox(T("World", "โลก"), "sun")
-    world:AddToggle("Fullbright", { Text = T("Fullbright", "สว่างทั้งแมพ"), Icon = "fullbright" })
-    world:AddToggle("NoFlash", { Text = T("No Flash", "กันแฟลช"), Description = T("Flashbangs do not blind you", "แฟลชไม่ทำให้ตาบอด"), Icon = "eyeoff" })
-    world:AddToggle("NoSmoke", { Text = T("No Smoke", "ไม่มีควัน"), Description = T("See through smoke grenades", "มองทะลุควัน"), Icon = "fog" })
-
-    local cam = tab:AddRightGroupbox(T("Camera", "กล้อง"), "camera")
-    cam:AddToggle("CameraFov", { Text = T("Custom FOV", "ปรับมุมมอง"), Icon = "camera" })
-    cam:AddSlider("CameraFovValue", { Text = T("FOV", "มุมมอง"), Icon = "fov", Min = 70, Max = 120, Default = 100, Rounding = 0, DependsOn = { "CameraFov", true } })
-    xDTaraZ.UI.NeedCap("CameraFov", "Hook")
+    local cam = tab:AddRightGroupbox(T("Camera", "กล้อง"), "eye")
+    xDTaraZ.UI.NamedToggle(cam, "CameraFov", { Text = T("Custom FOV", "ปรับมุมมอง") })
+    cam:AddSlider("CameraFovValue", { Text = T("FOV", "มุมมอง"), Min = 70, Max = 120, Default = 100, Rounding = 0 })
 end
 
 local skinTitles = {
-    Pistol = { "Pistols", "ปืนพก", "gun" },
-    SMG = { "SMGs", "ปืนกลมือ", "rapidfire" },
-    Rifle = { "Rifles", "ปืนไรเฟิล", "fullauto" },
-    Sniper = { "Snipers", "สไนเปอร์", "crosshair" },
-    Heavy = { "Heavy", "ปืนหนัก", "pow" },
-    Shotgun = { "Shotguns", "ลูกซอง", "spread" },
-    ["Machine Gun"] = { "Machine Guns", "ปืนกล", "ammo" },
-    Knives = { "Knives", "มีด", "knife" },
+    Pistol = { "Pistols", "ปืนพก", "coin" },
+    SMG = { "SMGs", "ปืนกลมือ", "zap" },
+    Rifle = { "Rifles", "ปืนไรเฟิล", "crosshair" },
+    Sniper = { "Snipers", "สไนเปอร์", "target" },
+    Heavy = { "Heavy", "ปืนหนัก", "bomb" },
+    Shotgun = { "Shotguns", "ลูกซอง", "bomb" },
+    ["Machine Gun"] = { "Machine Guns", "ปืนกล", "zap" },
+    Knives = { "Knives", "มีด", "swords" },
     Gloves = { "Gloves", "ถุงมือ", "shield" },
     Grenades = { "Grenades", "ระเบิด", "bomb" },
-    Gear = { "Gear", "อุปกรณ์", "box" },
+    Gear = { "Gear", "อุปกรณ์", "gear" },
 }
 
 function xDTaraZ.UI.SkinGroup(tab, category, side)
-    local title = skinTitles[category] or { category, category, "palette" }
+    local title = skinTitles[category] or { category, category, "star" }
     local group = side == "Left" and tab:AddLeftGroupbox(T(title[1], title[2]), title[3]) or tab:AddRightGroupbox(T(title[1], title[2]), title[3])
     for _, weapon in ipairs(xDTaraZ.Skins.Items(category)) do
         if weapon == "-" then continue end
         local values = { "Default" }
         for _, skin in ipairs(xDTaraZ.Skins.List(weapon)) do values[#values + 1] = skin end
-        group:AddDropdown("Skin_" .. weapon, { Text = weapon, Icon = "palette", Values = values, Default = xDTaraZ.Skins.Map[weapon] or "Default", Searchable = true, Callback = function(skin)
+        group:AddDropdown("Skin_" .. weapon, { Text = weapon, Values = values, Default = xDTaraZ.Skins.Map[weapon] or "Default", Searchable = true, Callback = function(skin)
             xDTaraZ.Skins.Set(weapon, skin)
         end })
     end
@@ -1413,147 +1623,205 @@ function xDTaraZ.UI.SyncSkins()
 end
 
 function xDTaraZ.UI.BuildSkins(window)
-    local tab = window:AddTab(T("Skins", "สกิน"), "palette", T("Any skin, only on your screen", "ใส่สกินไหนก็ได้ เห็นแค่บนจอคุณ"))
+    local tab = window:AddTab(T("Skins", "สกิน"), "star", T("Any skin, only on your screen", "ใส่สกินไหนก็ได้ เห็นแค่บนจอคุณ"))
 
-    local main = tab:AddLeftGroupbox(T("Skin Changer", "เปลี่ยนสกิน"), "palette")
-    main:AddToggle("SkinChanger", { Text = T("Skin Changer", "เปลี่ยนสกิน"), Description = T("Pick a skin below and it shows right away", "เลือกสกินด้านล่างแล้วขึ้นทันที"), Icon = "palette" })
-    main:AddButton({ Text = T("Rarest On Everything", "หายากสุดทุกอัน"), Icon = "crown", Style = "Primary", Callback = xDTaraZ.UI.Detach(function()
+    local main = tab:AddLeftGroupbox(T("Skin Changer", "เปลี่ยนสกิน"), "star")
+    main:AddToggle("SkinChanger", { Text = T("Skin changer", "เปลี่ยนสกิน"), Description = T("Pick a skin below and it shows right away", "เลือกสกินด้านล่างแล้วขึ้นทันที") })
+    main:AddButton({ Text = T("Rarest On Everything", "หายากสุดทุกอัน"), Style = "Primary", Func = xDTaraZ.UI.Detach(function()
         local count = xDTaraZ.Skins.SetAll(function(list) return list[1] end)
         xDTaraZ.UI.SyncSkins()
         Library:Notify("Skins", "Set " .. count .. " items", 3, "Success")
     end) })
-    main:AddButton({ Text = T("Random", "สุ่ม"), Icon = "refresh", Style = "Ghost", Callback = xDTaraZ.UI.Detach(function()
+    main:AddButton({ Text = T("Random", "สุ่ม"), Func = xDTaraZ.UI.Detach(function()
         xDTaraZ.Skins.SetAll(function(list) return list[math.random(#list)] end)
         xDTaraZ.UI.SyncSkins()
-    end) })
-    main:AddButton({ Text = T("Reset All", "ล้างทั้งหมด"), Icon = "trash", Style = "Danger", Callback = xDTaraZ.UI.Detach(function()
+    end) }):AddButton({ Text = T("Reset All", "ล้างทั้งหมด"), Style = "Danger", Func = xDTaraZ.UI.Detach(function()
         table.clear(xDTaraZ.Skins.Map)
         xDTaraZ.Skins.Save()
         xDTaraZ.UI.SyncSkins()
     end) })
 
-    xDTaraZ.UI.SkinGroup(tab, "Knives", "Right")
-    xDTaraZ.UI.SkinGroup(tab, "Gloves", "Left")
-    xDTaraZ.UI.SkinGroup(tab, "Grenades", "Right")
-    xDTaraZ.UI.SkinGroup(tab, "Gear", "Left")
+    local gear = { Knives = "Right", Gloves = "Left", Grenades = "Right", Gear = "Left" }
+    for _, category in ipairs({ "Knives", "Gloves", "Grenades", "Gear" }) do
+        xDTaraZ.Util.Try("skins " .. category, xDTaraZ.UI.SkinGroup, tab, category, gear[category])
+    end
 
-    local guns = window:AddTab(T("Gun Skins", "สกินปืน"), "gun", T("Skins for every gun", "สกินปืนทุกกระบอก"))
+    local guns = window:AddTab(T("Gun Skins", "สกินปืน"), "crosshair", T("Skins for every gun", "สกินปืนทุกกระบอก"))
     local side = "Left"
-    for _, category in ipairs(xDTaraZ.Skins.Categories()) do
-        if table.find({ "Knives", "Gloves", "Grenades", "Gear" }, category) then continue end
-        xDTaraZ.UI.SkinGroup(guns, category, side)
+    local ok, categories = pcall(xDTaraZ.Skins.Categories)
+    for _, category in ipairs(ok and categories or {}) do
+        if gear[category] then continue end
+        xDTaraZ.Util.Try("skins " .. category, xDTaraZ.UI.SkinGroup, guns, category, side)
         side = side == "Left" and "Right" or "Left"
     end
 end
 
-function xDTaraZ.UI.BuildVisuals(window)
-    window:AddTabSection(T("Visuals", "การมองเห็น"))
-    window:AddVisualsTab({ Icon = "esp", Provider = xDTaraZ.Esp.Targets, Focus = xDTaraZ.Esp.Focus, Categories = xDTaraZ.Esp.Categories(), Preview = true })
-    xDTaraZ.UI.BuildWorld(window)
-    xDTaraZ.UI.BuildSkins(window)
-end
-
 function xDTaraZ.UI.BuildMisc(window)
     window:AddTabSection(T("Misc", "อื่นๆ"))
-    local tab = window:AddTab(T("Misc", "อื่นๆ"), "misc", T("Buying, codes and movement", "ซื้อของ โค้ด และการเคลื่อนที่"))
+    local tab = window:AddTab(T("Misc", "อื่นๆ"), "gear", T("Buying, codes and utility", "ซื้อของ โค้ด และอื่นๆ"))
 
-    local buy = tab:AddLeftGroupbox(T("Auto Buy", "ซื้ออัตโนมัติ"), "buy")
-    buy:AddFeature("AutoRebuy", {
-        Text = T("Auto Rebuy", "ซื้อซ้ำอัตโนมัติ"),
-        Description = T("Buys your last loadout every round", "ซื้อชุดล่าสุดของคุณให้ทุกรอบ"),
-        Icon = "buy",
-        Now = { Text = T("Rebuy Now", "ซื้อซ้ำตอนนี้"), Icon = "cart", Callback = xDTaraZ.UI.Detach(function()
-            local sent = xDTaraZ.Economy.Rebuy()
-            Library:Notify("Auto Buy", sent > 0 and ("Bought " .. sent .. " items") or "Buy something once first", 3, sent > 0 and "Success" or "Info")
-        end) },
-    })
-    xDTaraZ.UI.NeedCap("AutoRebuy", "Hook")
-    buy:AddStatus("StatusLoadout", { Text = T("Saved loadout", "ชุดที่จำไว้"), Icon = "list" })
-    buy:AddButton({ Text = T("Clear Loadout", "ล้างชุดที่จำ"), Icon = "trash", Style = "Ghost", Callback = xDTaraZ.UI.Detach(function()
+    local buy = tab:AddLeftGroupbox(T("Auto Buy", "ซื้ออัตโนมัติ"), "shop")
+    xDTaraZ.UI.NamedToggle(buy, "AutoRebuy", { Text = T("Auto rebuy", "ซื้อซ้ำอัตโนมัติ"), Description = T("Buys your last loadout every round", "ซื้อชุดล่าสุดของคุณให้ทุกรอบ") })
+    Library.Compat.NeedCap("AutoRebuy", "HookFunction")
+    xDTaraZ.UI.Labels.Bought = buy:AddParagraph({ Title = T("Saved loadout", "ชุดที่จำไว้"), Content = "-" })
+    buy:AddButton({ Text = T("Rebuy Now", "ซื้อซ้ำตอนนี้"), Style = "Primary", Func = xDTaraZ.UI.Detach(function()
+        local sent = xDTaraZ.Economy.Rebuy()
+        Library:Notify("Auto Buy", sent > 0 and ("Bought " .. sent .. " items") or "Buy something once first", 3, sent > 0 and "Success" or "Info")
+    end) }):AddButton({ Text = T("Clear", "ล้าง"), Func = xDTaraZ.UI.Detach(function()
         table.clear(xDTaraZ.State.Bought)
     end) })
 
-    local codes = tab:AddLeftGroupbox(T("Codes", "โค้ด"), "code")
-    codes:AddButton({ Text = T("Redeem All Codes", "แลกโค้ดทั้งหมด"), Icon = "code", Style = "Primary", Callback = xDTaraZ.UI.Detach(function()
+    local codes = tab:AddRightGroupbox(T("Codes", "โค้ด"), "key")
+    codes:AddButton({ Text = T("Redeem All Codes", "แลกโค้ดทั้งหมด"), Style = "Primary", Func = xDTaraZ.UI.Detach(function()
         local sent = xDTaraZ.Economy.RedeemAll()
         Library:Notify("Codes", "Sent " .. sent .. " codes (level 5+ needed)", 4, "Coin")
     end) })
 
-    local move = tab:AddRightGroupbox(T("Movement", "การเคลื่อนที่"), "jump")
-    move:AddToggle("InfiniteJump", { Text = T("Infinite Jump", "กระโดดไม่จำกัด"), Icon = "infjump", Risky = true })
-    move:AddToggle("BunnyHop", { Text = T("Bunny Hop", "บันนี่ฮอป"), Description = T("Hold Space to keep hopping and carry your speed", "กด Space ค้างเพื่อกระโดดต่อเนื่องและรักษาความเร็ว"), Icon = "jump", Risky = true })
-    move:AddCheckbox("BunnyCrouch", { Text = T("Crouch jump", "ย่อตอนลอย"), Description = T("Crouches in the air like a CS crouch jump", "ย่อตัวกลางอากาศแบบ crouch jump ใน CS"), Icon = "down", Default = true, DependsOn = { "BunnyHop", true } })
-
-    local server = tab:AddRightGroupbox(T("Server", "เซิร์ฟเวอร์"), "server")
-    server:AddToggle("AntiAfk", { Text = T("Anti AFK", "กันหลุด AFK"), Icon = "antiafk" })
-    server:AddButton({ Text = T("Rejoin", "เข้าใหม่"), Icon = "rejoin", Callback = xDTaraZ.UI.Detach(xDTaraZ.World.Rejoin) })
-    server:AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), Icon = "hop", Callback = xDTaraZ.UI.Detach(xDTaraZ.World.ServerHop) })
+    local util = tab:AddRightGroupbox(T("Utility", "อรรถประโยชน์"), "flower")
+    util:AddToggle("InfiniteJump", { Text = T("Infinite jump", "กระโดดไม่จำกัด"), Description = T("Lobby only, use Bunny hop in rounds", "ใช้ได้เฉพาะล็อบบี้ ในรอบใช้บันนี่ฮอป"), Risky = true })
+    util:AddToggle("BunnyHop", { Text = T("Bunny hop", "บันนี่ฮอป"), Description = T("Hold Space to keep hopping and carry your speed", "กด Space ค้างเพื่อกระโดดต่อเนื่องและรักษาความเร็ว"), Risky = true })
+    util:AddCheckbox("BunnyCrouch", { Text = T("Crouch jump", "ย่อตอนลอย"), Description = T("Crouches in the air like a CS crouch jump", "ย่อตัวกลางอากาศแบบ crouch jump ใน CS"), Default = true })
+    util:AddToggle("AntiAfk", { Text = T("Anti AFK", "กันหลุด AFK") })
+    util:AddButton({ Text = T("Rejoin", "เข้าใหม่"), Func = xDTaraZ.UI.Detach(xDTaraZ.World.Rejoin) })
+        :AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), Func = xDTaraZ.UI.Detach(xDTaraZ.World.ServerHop) })
 end
 
----@return string  map | round state | money
----@return string  status kind
-function xDTaraZ.UI.MatchText()
-    local map = tostring(Workspace:GetAttribute("Map") or "-")
-    local phase = tostring(Workspace:GetAttribute("GameState") or "-")
-    return ("%s | %s | $%s"):format(map, phase, tostring(LocalPlayer:GetAttribute("Money") or 0)), "Running"
-end
-
-function xDTaraZ.UI.Live()
-    local interval = xDTaraZ.Config.StatusInterval
-    local state = xDTaraZ.State
-    local status = Library.Lib.Status
-
-    status("StatusMatch", xDTaraZ.UI.MatchText, interval)
-    status("StatusCombat", function()
+function xDTaraZ.UI.RefreshStatus()
+    local labels, state = xDTaraZ.UI.Labels, xDTaraZ.State
+    if labels.Match then
+        labels.Match:SetText(("%s | %s | $%s"):format(tostring(Workspace:GetAttribute("Map") or "-"), tostring(Workspace:GetAttribute("GameState") or "-"), tostring(LocalPlayer:GetAttribute("Money") or 0)))
+    end
+    if labels.Combat then
         local target = state.RageTarget or state.AimTarget or state.SilentTarget
-        if not target then return "none", "Idle" end
-        return target.Name, "Running"
-    end, interval)
-    status("StatusSpectators", function() return xDTaraZ.Spectators.Text(), "Idle" end, interval)
-    status("StatusEsp", function()
+        target = target and target.Name or "none"
+        labels.Combat:SetText(("Target: %s | Kills %s | Shots %d | Aimed %d"):format(target, tostring(LocalPlayer:GetAttribute("Kills") or 0), state.Shots, state.Redirected))
+    end
+    if labels.Spectators then labels.Spectators:SetText(xDTaraZ.Spectators.Text()) end
+    if labels.Esp then
         local visuals = Library.Visuals
-        if not (visuals and visuals:Get("Enabled")) then return "Off", "Idle" end
-        return xDTaraZ.Esp.Count .. " players", "Running"
-    end, interval)
-    status("StatusLoadout", function() return xDTaraZ.Economy.BoughtText(), "Idle" end, interval)
+        labels.Esp:SetText((visuals and visuals:Get("Enabled")) and (xDTaraZ.Esp.Count .. " players") or "Off")
+    end
+    if labels.Bought then labels.Bought:SetText(xDTaraZ.Economy.BoughtText()) end
+end
 
-    status("StatKills", function() return LocalPlayer:GetAttribute("Kills") or 0 end, interval)
-    status("StatShots", function() return state.Shots end, interval)
-    status("StatAimed", function() return state.Redirected end, interval)
+---Turns off what the scheduler halted and shows queued notices; runs on the UI pump, never on a game thread.
+function xDTaraZ.UI.Drain()
+    local state = xDTaraZ.State
+    if not (state.Halted[1] or state.Notices[1]) then return end
+    local stopped, notices = table.clone(state.Halted), table.clone(state.Notices)
+    table.clear(state.Halted)
+    table.clear(state.Notices)
+
+    for _, halt in ipairs(stopped) do
+        for _, key in ipairs(halt[3]) do
+            local toggle = Library.Options[key]
+            if toggle and toggle.Value == true then xDTaraZ.Util.Try("halt " .. key, toggle.SetValue, toggle, false) end
+        end
+        Library:Notify("Mario Hub", halt[1] .. " stopped: " .. halt[2], 6, "Error")
+    end
+    for _, notice in ipairs(notices) do
+        Library:Notify(notice[1], notice[2], 5, "Warning")
+    end
+end
+
+---Hooks go in the first time a feature that needs them is switched on, never at load.
+function xDTaraZ.UI.HookOnDemand()
+    local installers = {
+        SilentAim = xDTaraZ.Silent.InstallHook,
+        Ragebot = xDTaraZ.Silent.InstallHook,
+        Triggerbot = xDTaraZ.Silent.InstallHook,
+        NoRecoil = xDTaraZ.Guns.HookKick,
+        CameraFov = xDTaraZ.Guns.BindFov,
+        NoSpread = xDTaraZ.Guns.HookSpread,
+        AutoRebuy = xDTaraZ.Economy.HookBuys,
+    }
+    for idx, install in pairs(installers) do
+        local toggle = Library.Options[idx]
+        if not toggle then continue end
+        toggle:OnChanged(function(on)
+            if on then task.defer(xDTaraZ.Util.Try, "hook " .. idx, install) end
+        end)
+    end
+
+    local trigger = Library.Options.Triggerbot
+    if trigger then
+        trigger:OnChanged(function(on)
+            if on then task.delay(xDTaraZ.Config.HookSettle, xDTaraZ.UI.WarnReducedTrigger) end
+        end)
+    end
+
+    local recoil = Library.Options.NoRecoil
+    if recoil then
+        recoil:OnChanged(function(on)
+            if on then task.defer(xDTaraZ.UI.WarnPartialRecoil) end
+        end)
+    end
+end
+
+---Triggerbot fires without the shoot hook; only shot pacing is less exact, so say so once.
+function xDTaraZ.UI.WarnReducedTrigger()
+    local state = xDTaraZ.State
+    if state.Hooks.Shoot or state.TriggerWarned then return end
+    state.TriggerWarned = true
+    table.insert(state.Notices, { T("Triggerbot", "ยิงอัตโนมัติ"), T("Running in reduced mode on this executor; shot pacing is less exact", "ทำงานแบบจำกัดบน executor นี้ จังหวะยิงอาจไม่แม่นเท่าที่ควร") })
+end
+
+---No recoil still clears the gun's own recoil without hooks; the camera kick needs one, so say so once.
+function xDTaraZ.UI.WarnPartialRecoil()
+    local state = xDTaraZ.State
+    if state.Hooks.Kick or state.RecoilWarned then return end
+    state.RecoilWarned = true
+    table.insert(state.Notices, { T("No recoil", "ไม่มีแรงถีบ"), T("Your view still kicks on this executor; bullet recoil is removed", "จอยังเด้งบน executor นี้ แต่แรงถีบกระสุนหายแล้ว") })
+end
+
+function xDTaraZ.UI.BlockMissing()
+    local missing = {
+        Net = xDTaraZ.GameLib.Net == nil,
+        Character = xDTaraZ.GameLib.Character == nil,
+        Weapons = next(xDTaraZ.Weapons) == nil,
+    }
+    local reason = T("Not available on this executor", "ใช้กับ executor นี้ไม่ได้")
+    for source, features in pairs(xDTaraZ.Config.ModuleFeatures) do
+        if not missing[source] then continue end
+        for _, idx in ipairs(features) do
+            Library.Compat.Block(idx, reason)
+        end
+    end
 end
 
 function xDTaraZ.UI.Build()
     local window = Library.Window
-    for _, build in ipairs({ xDTaraZ.UI.BuildMain, xDTaraZ.UI.BuildCombat, xDTaraZ.UI.BuildVisuals, xDTaraZ.UI.BuildMisc }) do
-        local ok, err = pcall(build, window)
-        if not ok then warn("[BloxStrike] build:", err) end
+    for _, build in ipairs({ xDTaraZ.UI.BuildMain, xDTaraZ.UI.BuildAimbot, xDTaraZ.UI.BuildSilent, xDTaraZ.UI.BuildTrigger, xDTaraZ.UI.BuildGuns, xDTaraZ.UI.BuildVisuals, xDTaraZ.UI.BuildSkins, xDTaraZ.UI.BuildMisc }) do
+        xDTaraZ.Util.Try("build", build, window)
     end
-    window:AddSettingsTab()
+    xDTaraZ.Util.Try("settings tab", function() window:AddSettingsTab() end)
+
     for key in pairs(xDTaraZ.Options) do
         local widget = Library.Options[key]
-        if widget then xDTaraZ.UI.Bind(widget, key) end
+        if widget then xDTaraZ.Util.Try("bind " .. key, xDTaraZ.UI.Bind, widget, key) end
     end
-    xDTaraZ.UI.Live()
+    xDTaraZ.Util.Try("hooks", xDTaraZ.UI.HookOnDemand)
+    xDTaraZ.Util.Try("missing modules", xDTaraZ.UI.BlockMissing)
+
+    Library:Every(xDTaraZ.Config.StatusInterval, xDTaraZ.UI.RefreshStatus)
+    Library:Every(xDTaraZ.Config.StatusInterval, xDTaraZ.UI.Drain)
 end
 
 function xDTaraZ.Boot()
-    xDTaraZ.Skins.Load()
-    xDTaraZ.Combat.Start()
-    xDTaraZ.Guns.HookRecoil()
-    task.defer(xDTaraZ.Guns.HookSpread)
-    xDTaraZ.Economy.HookBuys()
+    xDTaraZ.Util.Try("skins load", xDTaraZ.Skins.Load)
+    xDTaraZ.Util.Try("combat", xDTaraZ.Combat.Start)
     xDTaraZ:Connect(LocalPlayer.Idled, xDTaraZ.World.OnIdled)
     xDTaraZ:Connect(UserInputService.JumpRequest, xDTaraZ.World.OnJump)
-    xDTaraZ:Connect(RunService.Heartbeat, xDTaraZ.World.Hop)
-    xDTaraZ:Connect(UserInputService.InputBegan, function(input) xDTaraZ.World.OnSpace(input, true) end)
+    xDTaraZ:Connect(RunService.Heartbeat, xDTaraZ.World.HopStep)
+    xDTaraZ:Connect(UserInputService.InputBegan, function(input, processed) xDTaraZ.World.OnSpace(input, true, processed) end)
     xDTaraZ:Connect(UserInputService.InputEnded, function(input) xDTaraZ.World.OnSpace(input, false) end)
     xDTaraZ:Connect(Workspace.DescendantAdded, xDTaraZ.World.OnDescendant)
 
-    xDTaraZ.Scheduler.Every("Guns", 0.25, xDTaraZ.Guns.Step)
-    xDTaraZ.Scheduler.Every("World", 0.2, xDTaraZ.World.Step)
-    xDTaraZ.Scheduler.Every("Rebuy", 0.5, xDTaraZ.Economy.Step)
-    xDTaraZ.Scheduler.Every("Skins", 0.15, xDTaraZ.Skins.Step)
-    xDTaraZ.Scheduler.Boot()
+    xDTaraZ.Scheduler.Every("Gun Mods", 0.25, xDTaraZ.Guns.Step, { "NoSpread", "NoRecoil", "FullAuto", "RapidFire", "WeaponSpeed" }, xDTaraZ.Guns.Rest)
+    xDTaraZ.Scheduler.Every("World", 0.2, xDTaraZ.World.Step, { "Fullbright", "NoFlash" }, xDTaraZ.World.Step)
+    xDTaraZ.Scheduler.Every("Auto Rebuy", 0.5, xDTaraZ.Economy.Step, { "AutoRebuy" })
+    xDTaraZ.Scheduler.Every("Skin Changer", 0.15, xDTaraZ.Skins.Step, { "SkinChanger" }, xDTaraZ.Skins.Step)
+    xDTaraZ.Util.Try("scheduler", xDTaraZ.Scheduler.Boot)
 end
 
 function xDTaraZ:Unload()
@@ -1565,21 +1833,22 @@ function xDTaraZ:Unload()
     pcall(xDTaraZ.Guns.Restore)
     pcall(xDTaraZ.World.Step)
     pcall(xDTaraZ.World.SetCrouch, false)
+    xDTaraZ.Guns.UnbindFov()
     pcall(xDTaraZ.Skins.Step)
     for _, conn in ipairs(self.State.Connections) do pcall(function() conn:Disconnect() end) end
     table.clear(self.State.Connections)
-    if xDTaraZ.Caps.Restore then
-        for _, hook in pairs(self.State.Hooks) do pcall(restorefunction, hook.Fn) end
-    end
-    table.clear(self.State.Hooks)
+    if Library then xDTaraZ.Util.UnhookAll() end
+    environment.BloxStrikeUnload = nil
 end
 
+---@return boolean  false when the menu could not be opened
 local function BuildInterface()
-    Library = loadstring(xDTaraZ.Util.HttpGet(xDTaraZ.Config.UiSource))()
-    MarioBanner.Step("UI library")
+    Library = xDTaraZ.Util.LoadLibrary(xDTaraZ.Config.UiSource)
+    if not Library then return false end
+    pcall(MarioBanner.Step, "UI library")
     xDTaraZ.Library = Library
     T = function(en, th) return Library:T(en, th) end
-    Library:CreateWindow({
+    local opened, err = pcall(Library.CreateWindow, Library, {
         Title = "Mario Hub",
         SubTitle = "BloxStrike by xDTaraZ",
         MenuKey = Enum.KeyCode.RightControl,
@@ -1589,11 +1858,16 @@ local function BuildInterface()
         Intro = true,
         OnUnlocked = function()
             xDTaraZ.UI.Build()
-            task.defer(xDTaraZ.Boot)
-            task.defer(function() Library:LoadAutoloadConfig() end)
+            task.defer(xDTaraZ.Util.Try, "boot", xDTaraZ.Boot)
+            task.defer(xDTaraZ.Util.Try, "autoload config", function() Library:LoadAutoloadConfig() end)
         end,
     })
+    if not opened then
+        xDTaraZ.Util.Alert("The menu failed to load on this executor: " .. tostring(err):match("^[^\n]*"), err)
+        return false
+    end
     Library:OnUnload(function() xDTaraZ:Unload() end)
+    return true
 end
 
 environment.BloxStrikeUnload = function()
@@ -1604,7 +1878,7 @@ environment.BloxStrikeUnload = function()
     end
 end
 
-MarioBanner.Step("Systems")
-BuildInterface()
-MarioBanner.Step("Interface")
-MarioBanner.Ready()
+pcall(MarioBanner.Step, "Systems")
+if not BuildInterface() then return end
+pcall(MarioBanner.Step, "Interface")
+pcall(MarioBanner.Ready)

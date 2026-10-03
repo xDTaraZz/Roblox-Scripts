@@ -2,6 +2,11 @@ if not game:IsLoaded() then
     game.Loaded:Wait()
 end
 
+if game.GameId ~= 6739698191 then
+    game:GetService("Players").LocalPlayer:Kick("Mario Hub: this script is for Violence District only")
+    return
+end
+
 if not LPH_OBFUSCATED then
     local function Passthrough(fn) return fn end
     LPH_JIT, LPH_JIT_MAX, LPH_NO_VIRTUALIZE = Passthrough, Passthrough, Passthrough
@@ -28,13 +33,8 @@ local vector3New, cframeNew, cframeLookAt = Vector3.new, CFrame.new, CFrame.look
 local vectorZero = Vector3.zero
 local osClock, mathHuge = os.clock, math.huge
 
-if game.GameId ~= 6739698191 then
-    LocalPlayer:Kick("Mario Hub: this script is for Violence District only")
-    return
-end
-
 local MarioBanner = {
-    Print = type(getrenv) == "function" and getrenv().print or print,
+    Print = print,
     Started = os.clock(),
     Last = os.clock(),
     Done = 0,
@@ -138,8 +138,15 @@ function MarioBanner.Ready()
     }, "\n"))
 end
 
-MarioBanner.Show()
-MarioBanner.Step("Core")
+do
+    local ok, renv = pcall(getrenv)
+    if ok and type(renv) == "table" and type(renv.print) == "function" then
+        MarioBanner.Print = renv.print
+    end
+end
+
+pcall(MarioBanner.Show)
+pcall(MarioBanner.Step, "Core")
 
 local xDTaraZ = setmetatable({}, {
     __newindex = function(self, key, value)
@@ -148,11 +155,15 @@ local xDTaraZ = setmetatable({}, {
 })
 
 xDTaraZ.Config = {
-    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui_v2.lua",
+    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
     Discord = "https://discord.gg/FHVfmeSceA",
     SaveFolder = "Violence District",
     Intro = true,
     LoadTimeout = 10,
+    AlertTries = 20,
+    AlertRetry = 0.5,
+    JobFailLimit = 5,
+    JobFailWindow = 10,
     StatusInterval = 1,
     RepairTick = 0.25,
     GenDone = 100,
@@ -271,32 +282,92 @@ local function Resolve(...)
     return nil
 end
 
-Util.Request = Resolve(request, http_request, syn and syn.request, http and http.request)
+Util.Request = Resolve(request, http_request, type(syn) == "table" and syn.request, type(http) == "table" and http.request)
 Util.SetClipboard = Resolve(setclipboard, toclipboard)
 Util.GetHui = Resolve(gethui, get_hidden_gui)
 Util.GetConnections = Resolve(getconnections, get_signal_cons)
+Util.FireSignal = Resolve(firesignal)
 Util.FireTouch = Resolve(firetouchinterest)
-Util.HookMeta = Resolve(hookmetamethod)
 Util.GetGc = Resolve(getgc, get_gc_objects)
 Util.NameCallMethod = Resolve(getnamecallmethod)
+Util.HookMetamethod = Resolve(hookmetamethod)
+Util.Closure = Resolve(newcclosure) or function(fn) return fn end
 
-xDTaraZ.Caps = {
-    Hook = Util.HookMeta ~= nil and Util.NameCallMethod ~= nil,
-    Gc = Util.GetGc ~= nil,
-    Connections = Util.GetConnections ~= nil,
+Util.RawCaps = {
+    Connections = function() return Util.GetConnections ~= nil end,
+    Signals = function() return Util.FireSignal ~= nil end,
+    Gc = function() return Util.GetGc ~= nil end,
+    Namecall = function() return Util.HookMetamethod ~= nil and Util.NameCallMethod ~= nil end,
 }
 
----@return string  response body, throws if every transport fails
+---@param cap string|string[]  Library.Compat cap name(s), false until the menu has loaded
+function Util.Can(cap)
+    local library = xDTaraZ.Library
+    if library == nil then return false end
+    if library.Compat then return (library.Compat.Has(cap)) end
+    for _, name in ipairs(type(cap) == "table" and cap or { cap }) do
+        local probe = Util.RawCaps[name]
+        if not (probe and probe()) then return false end
+    end
+    return true
+end
+
+---@return function?  original, nil when the executor refused the hook
+---@return function?  restore
+function Util.HookMeta(object, method, handler)
+    local compat = xDTaraZ.Library and xDTaraZ.Library.Compat
+    if compat then return compat.HookMeta(object, method, handler) end
+    if not Util.HookMetamethod then return nil end
+
+    local ok, original = pcall(Util.HookMetamethod, object, method, Util.Closure(handler))
+    if not ok or type(original) ~= "function" then return nil end
+    return original, function()
+        Util.HookMetamethod(object, method, original)
+    end
+end
+
+---@return string?  response body, nil when every transport failed
 function Util.HttpGet(url)
     local ok, body = pcall(function() return game:HttpGet(url) end)
     if ok and type(body) == "string" then return body end
-    if Util.Request then
-        local response = Util.Request({ Url = url, Method = "GET" })
-        if type(response) == "table" and type(response.Body) == "string" then
-            return response.Body
-        end
+    if not Util.Request then return nil end
+    local sent, response = pcall(Util.Request, { Url = url, Method = "GET" })
+    if sent and type(response) == "table" and tonumber(response.StatusCode) == 200 and type(response.Body) == "string" then
+        return response.Body
     end
-    error("HttpGet failed: " .. url)
+    return nil
+end
+
+---@param text string  shown as a Roblox notification, works before the menu exists
+function Util.Alert(text)
+    warn("[ViolenceDistrict] " .. text)
+    task.spawn(function()
+        local starterGui = game:GetService("StarterGui")
+        for _ = 1, xDTaraZ.Config.AlertTries do
+            if pcall(starterGui.SetCore, starterGui, "SendNotification", { Title = "Mario Hub", Text = text, Duration = 10 }) then return end
+            task.wait(xDTaraZ.Config.AlertRetry)
+        end
+    end)
+end
+
+---@return table?  UI library, nil after telling the player why
+function Util.LoadLibrary()
+    local source = Util.HttpGet(xDTaraZ.Config.UiSource)
+    if not source or not source:sub(-64):find("return Library%s*$") then
+        Util.Alert("Could not download the menu. Check your connection and run it again.")
+        return nil
+    end
+    local chunk, err = loadstring(source)
+    if not chunk then
+        Util.Alert("The menu failed to load on this executor: " .. tostring(err))
+        return nil
+    end
+    local ok, library = pcall(chunk)
+    if not ok or type(library) ~= "table" then
+        Util.Alert("The menu failed to load on this executor: " .. tostring(library))
+        return nil
+    end
+    return library
 end
 
 function Util.Copy(text)
@@ -305,12 +376,19 @@ function Util.Copy(text)
     return true
 end
 
-function Util.Hui()
-    if Util.GetHui then
-        local ok, gui = pcall(Util.GetHui)
-        if ok and gui then return gui end
-    end
-    return LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui")
+---@return boolean, any  pcall result, warns with the label when it fails
+function Util.Try(label, fn, ...)
+    local ok, err = pcall(fn, ...)
+    if not ok then warn("[ViolenceDistrict] " .. label .. ": " .. tostring(err)) end
+    return ok, err
+end
+
+---@param instance Instance  parented to gethui, then CoreGui, then PlayerGui
+function Util.Mount(instance)
+    local ok, hui = pcall(Util.GetHui or error)
+    if ok and typeof(hui) == "Instance" and pcall(function() instance.Parent = hui end) then return end
+    if pcall(function() instance.Parent = game:GetService("CoreGui") end) then return end
+    instance.Parent = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", xDTaraZ.Config.LoadTimeout)
 end
 
 function xDTaraZ:Connect(signal, handler)
@@ -345,8 +423,8 @@ do
         BreakGen = Remote("Generator", "BreakGenEvent"),
         BreakGenCommit = Remote("Generator", "BreakGenCommit"),
         Lunge = Remote("Attacks", "Lunge"),
-        Stun = remotes and remotes.Pallet:FindFirstChild("Jason") and remotes.Pallet.Jason:FindFirstChild("Stun"),
-        StunOver = remotes and remotes.Pallet:FindFirstChild("Jason") and remotes.Pallet.Jason:FindFirstChild("Stunover"),
+        Stun = Remote("Pallet", "Jason") and Remote("Pallet", "Jason"):FindFirstChild("Stun"),
+        StunOver = Remote("Pallet", "Jason") and Remote("Pallet", "Jason"):FindFirstChild("Stunover"),
         Attack = Remote("Attacks", "BasicAttack"),
     }
 end
@@ -421,7 +499,7 @@ function xDTaraZ.Map.Tagged(tag)
     return list
 end
 
-xDTaraZ.Map.Cache = { Map = nil, Models = {}, Scanned = {} }
+xDTaraZ.Map.Cache = { Map = nil, Models = {}, Scanned = {}, Total = 0 }
 
 ---@return Model[]  every model with this name in the current map, cached per round
 function xDTaraZ.Map.Models(name)
@@ -491,22 +569,81 @@ function xDTaraZ.Map.Nearest(parts, pos, filter)
     return best, bestDist
 end
 
-xDTaraZ.Scheduler = { Jobs = {}, Booted = false }
+xDTaraZ.Scheduler = { Jobs = {}, Halts = {}, Booted = false }
 
-function xDTaraZ.Scheduler.Every(name, interval, fn)
-    xDTaraZ.Scheduler.Jobs[name] = { Interval = interval, Fn = fn, Last = 0, Running = false }
+---@param toggles string[]?  switched off when the job keeps failing
+---@param extra table?       { Core = keeps running whatever fails, Restore = run once when it halts }
+function xDTaraZ.Scheduler.Every(name, interval, fn, toggles, extra)
+    extra = extra or {}
+    xDTaraZ.Scheduler.Jobs[name] = {
+        Interval = interval, Fn = fn, Last = 0, Running = false, Toggles = toggles or {},
+        Core = extra.Core or toggles == nil, Restore = extra.Restore,
+    }
+end
+
+---Turns the job's options off for the logic right away; the menu toggles follow on the next UI pump.
+---@return string[]  idx of every toggle that was on
+function xDTaraZ.Scheduler.SwitchOff(job)
+    local switched = {}
+    for _, idx in ipairs(job.Toggles) do
+        if xDTaraZ.Options[idx] then
+            xDTaraZ.Options[idx] = false
+            switched[#switched + 1] = idx
+        end
+    end
+    return switched
+end
+
+---Warns once per failure streak. Config.JobFailLimit errors spanning Config.JobFailWindow seconds switch the job's toggles off and run its restore; a non-core job with nothing to switch off rests until one turns back on.
+function xDTaraZ.Scheduler.Fail(name, job, err)
+    local streak = job.Streak
+    if not streak then
+        streak = { count = 0, since = osClock() }
+        job.Streak = streak
+        warn("[ViolenceDistrict] job " .. name .. ":", err)
+    end
+    streak.count += 1
+    if streak.count < xDTaraZ.Config.JobFailLimit or osClock() - streak.since < xDTaraZ.Config.JobFailWindow then return end
+
+    local switched = xDTaraZ.Scheduler.SwitchOff(job)
+    if job.Core and #switched == 0 then return end
+    job.Streak = nil
+    job.Stopped = not job.Core and #switched == 0
+    if job.Restore then Util.Try("restore " .. name, job.Restore) end
+
+    local reason = tostring(err):match("^[^\n]*")
+    warn("[ViolenceDistrict] job " .. name .. " stopped: " .. reason)
+    if #switched > 0 then
+        table.insert(xDTaraZ.Scheduler.Halts, { Toggles = switched, Message = name .. " stopped: " .. reason })
+    end
+end
+
+---@return boolean  a resting job may run again
+function xDTaraZ.Scheduler.Wakes(job)
+    for _, idx in ipairs(job.Toggles) do
+        if xDTaraZ.Options[idx] then
+            job.Stopped = nil
+            return true
+        end
+    end
+    return false
 end
 
 function xDTaraZ.Scheduler.Step()
     local now = osClock()
     for name, job in pairs(xDTaraZ.Scheduler.Jobs) do
         if job.Running or now - job.Last < job.Interval then continue end
+        if job.Stopped and not xDTaraZ.Scheduler.Wakes(job) then continue end
         job.Last = now
         job.Running = true
         task.spawn(function()
             local ok, err = pcall(job.Fn)
             job.Running = false
-            if not ok then warn("[ViolenceDistrict] job " .. name .. ": " .. tostring(err)) end
+            if ok then
+                job.Streak = nil
+            else
+                xDTaraZ.Scheduler.Fail(name, job, err)
+            end
         end)
     end
 end
@@ -539,21 +676,33 @@ function xDTaraZ.Role.Step()
     local settings = LocalPlayer.PlayerGui:FindFirstChild("Settings", true)
     local button = settings and settings:FindFirstChild("chance", true)
     button = button and button:FindFirstChildWhichIsA("GuiButton")
-    if not (button and Util.GetConnections) then return end
+    if not button or not xDTaraZ.Role.Supported() then return end
     xDTaraZ.Role.Pending = osClock() + xDTaraZ.Config.RolePending
+    if not Util.Can("Connections") then
+        Util.FireSignal(button.MouseButton1Click)
+        return
+    end
     for _, conn in ipairs(Util.GetConnections(button.MouseButton1Click)) do
         conn:Fire()
     end
 end
 
-xDTaraZ.Movement = { Collide = {}, JumpConn = nil, Walk = nil }
+---@return boolean  the executor can press the game's killer-chance button
+function xDTaraZ.Role.Supported()
+    return Util.Can("Connections") or Util.Can("Signals")
+end
+
+xDTaraZ.Movement = { Collide = {}, JumpConn = nil, Walk = nil, Lifted = nil, LiftedTo = nil }
 
 function xDTaraZ.Movement.Frame()
     local hum, char = xDTaraZ.Player.Humanoid, xDTaraZ.Player.Character
     if not hum or not char then return end
 
     if xDTaraZ.Options.Speed then
-        if not xDTaraZ.Movement.Walk then xDTaraZ.Movement.Walk = hum.WalkSpeed end
+        if not xDTaraZ.Movement.Walk then
+            xDTaraZ.Movement.Walk = xDTaraZ.Movement.Lifted or hum.WalkSpeed
+            xDTaraZ.Movement.Lifted, xDTaraZ.Movement.LiftedTo = nil, nil
+        end
         hum.WalkSpeed = xDTaraZ.Options.SpeedValue
     elseif xDTaraZ.Movement.Walk then
         hum.WalkSpeed = xDTaraZ.Movement.Walk
@@ -561,7 +710,13 @@ function xDTaraZ.Movement.Frame()
     end
     if xDTaraZ.Options.NoSlow and not xDTaraZ.Options.Speed and hum.WalkSpeed > 0 then
         local base = xDTaraZ.Movement.BaseSpeed(char)
-        if hum.WalkSpeed < base then hum.WalkSpeed = base end
+        if hum.WalkSpeed < base then
+            xDTaraZ.Movement.Lifted = hum.WalkSpeed
+            xDTaraZ.Movement.LiftedTo = base
+            hum.WalkSpeed = base
+        end
+    elseif xDTaraZ.Movement.Lifted then
+        xDTaraZ.Movement.DropLift(hum, char)
     end
 
     if xDTaraZ.Options.FreeTurn and not hum.AutoRotate and not char:GetAttribute("overridelookscript") and not char:GetAttribute("Immobile") then
@@ -591,6 +746,16 @@ function xDTaraZ.Movement.BaseSpeed(char)
     return xDTaraZ.Config.SurvivorSpeed
 end
 
+---skipped when the game has since changed the speed itself
+---@param hum  Humanoid
+---@param char Model
+function xDTaraZ.Movement.DropLift(hum, char)
+    local before, wrote = xDTaraZ.Movement.Lifted, xDTaraZ.Movement.LiftedTo
+    xDTaraZ.Movement.Lifted, xDTaraZ.Movement.LiftedTo = nil, nil
+    if char:GetAttribute("Sprinting") or hum.WalkSpeed ~= wrote then return end
+    hum.WalkSpeed = before
+end
+
 function xDTaraZ.Movement.RestoreCollide()
     for part in pairs(xDTaraZ.Movement.Collide) do
         if part.Parent then part.CanCollide = true end
@@ -614,8 +779,11 @@ end
 function xDTaraZ.Movement.Release()
     xDTaraZ.Movement.RestoreCollide()
     local hum = xDTaraZ.Player.Humanoid
+    local char = xDTaraZ.Player.Character
+    if hum and hum.Parent and char and xDTaraZ.Movement.Lifted then xDTaraZ.Movement.DropLift(hum, char) end
     if hum and hum.Parent and xDTaraZ.Movement.Walk then hum.WalkSpeed = xDTaraZ.Movement.Walk end
     xDTaraZ.Movement.Walk = nil
+    xDTaraZ.Movement.Lifted, xDTaraZ.Movement.LiftedTo = nil, nil
 end
 
 xDTaraZ.World = { Saved = nil }
@@ -676,7 +844,7 @@ function xDTaraZ.World.Restore()
     end
 end
 
-xDTaraZ.Block = { Muted = {}, Own = {}, Hooked = false }
+xDTaraZ.Block = { Muted = {}, Own = {}, Restore = nil }
 
 ---@return RBXScriptSignal?  game signal a rule silences
 local function RemoteSignal(folder, ...)
@@ -720,26 +888,39 @@ function xDTaraZ.Block.Unmute(rule)
 end
 
 function xDTaraZ.Block.Step()
-    if not Util.GetConnections then return end
+    xDTaraZ.Block.SyncFall()
+    if not Util.Can("Connections") then return end
     for _, rule in ipairs(xDTaraZ.Block.Rules) do
         if xDTaraZ.Options[rule.Option] then xDTaraZ.Block.Mute(rule) else xDTaraZ.Block.Unmute(rule) end
     end
-    if xDTaraZ.Options.NoFall and not xDTaraZ.Block.Hooked then xDTaraZ.Block.HookFall() end
 end
 
 function xDTaraZ.Block.Release()
+    xDTaraZ.Block.SyncFall()
     for _, rule in ipairs(xDTaraZ.Block.Rules) do xDTaraZ.Block.Unmute(rule) end
+end
+
+---Fall hook lives only while No Fall is on; the original namecall goes back when it turns off or on unload.
+function xDTaraZ.Block.SyncFall()
+    local wanted = xDTaraZ.Options.NoFall and xDTaraZ.State.Alive
+    if wanted and not xDTaraZ.Block.Restore then
+        xDTaraZ.Block.HookFall()
+    elseif not wanted and xDTaraZ.Block.Restore then
+        local restore = xDTaraZ.Block.Restore
+        xDTaraZ.Block.Restore = nil
+        pcall(restore)
+    end
 end
 
 function xDTaraZ.Block.HookFall()
     local fall = GameLib.Remote.Fall
-    if not (fall and Util.HookMeta and Util.NameCallMethod) then return end
-    xDTaraZ.Block.Hooked = true
-    local original
-    original = Util.HookMeta(game, "__namecall", function(self, ...)
+    if not (fall and Util.Can("Namecall")) then return end
+    local original, restore
+    original, restore = Util.HookMeta(game, "__namecall", function(self, ...)
         if self == fall and xDTaraZ.Options.NoFall and xDTaraZ.State.Alive and Util.NameCallMethod() == "FireServer" then return nil end
         return original(self, ...)
     end)
+    xDTaraZ.Block.Restore = restore
 end
 
 xDTaraZ.Survivor = {
@@ -888,9 +1069,9 @@ function xDTaraZ.Survivor.Candidate(pos)
     if opts.AutoUnhook and rank < 3 and not finishing then
         local point, char = xDTaraZ.Survivor.UnhookTarget()
         if point then
-            local job = xDTaraZ.Survivor.NewJob("Unhook", point, remote.Unhook)
-            job.Char = char
-            return job
+            local unhook = xDTaraZ.Survivor.NewJob("Unhook", point, remote.Unhook)
+            unhook.Char = char
+            return unhook
         end
     end
     if opts.AutoHeal and rank < 2 and not finishing then
@@ -1136,7 +1317,7 @@ function xDTaraZ.Parry.Threat()
 end
 
 function xDTaraZ.Parry.FindClients()
-    if not Util.GetGc or osClock() - xDTaraZ.Parry.Scanned < xDTaraZ.Config.ParryScan then return end
+    if not Util.Can("Gc") or osClock() - xDTaraZ.Parry.Scanned < xDTaraZ.Config.ParryScan then return end
     xDTaraZ.Parry.Scanned = osClock()
     for _, obj in ipairs(Util.GetGc(true)) do
         if type(obj) == "table" and rawget(obj, "isParryOnCooldown") ~= nil and rawget(obj, "parryEvent") then
@@ -1323,7 +1504,10 @@ function xDTaraZ.Killer.Enabled()
 end
 
 function xDTaraZ.Killer.Step()
-    if not xDTaraZ.Killer.Enabled() then xDTaraZ.Killer.Status = "Off" return end
+    if not xDTaraZ.Killer.Enabled() then
+        xDTaraZ.Killer.Status = "Off"
+        return
+    end
     if not xDTaraZ.State.Alive or xDTaraZ.Player.Role() ~= "Killer" or not xDTaraZ.Player:IsAlive() then
         xDTaraZ.Killer.Status = "Not the killer"
         return
@@ -1480,7 +1664,7 @@ function xDTaraZ.Esp.Holder()
     if folder and folder.Parent then return folder end
     folder = Instance.new("Folder")
     folder.Name = "MarioObjectEsp"
-    folder.Parent = Util.Hui()
+    Util.Mount(folder)
     xDTaraZ.Esp.Folder = folder
     return folder
 end
@@ -1555,11 +1739,10 @@ end
 
 function xDTaraZ.Esp.GetStatus()
     local visuals = xDTaraZ.Library and xDTaraZ.Library.Visuals
-    local players = visuals and visuals:Get("Enabled") and (xDTaraZ.Esp.Count .. " pl")
+    local players = visuals and visuals:Get("Enabled") and (xDTaraZ.Esp.Count .. " players") or "players off"
     local objects = 0
     for _ in pairs(xDTaraZ.Esp.Marks) do objects += 1 end
-    if not players and objects == 0 then return "Off" end
-    return (players or "0 pl") .. " · " .. objects .. " obj"
+    return players .. " · " .. objects .. " objects"
 end
 
 xDTaraZ.Shop = { Status = "Off", Maxed = {}, Owned = {}, LevelCost = {}, Bought = 0, Leveled = 0, Busy = false, LastWallet = nil }
@@ -1598,7 +1781,10 @@ function xDTaraZ.Shop.Locked(fn, ...)
     xDTaraZ.Shop.Busy = true
     local ok, got = pcall(fn, ...)
     xDTaraZ.Shop.Busy = false
-    if not ok then warn("[ViolenceDistrict] shop: " .. tostring(got)) return 0 end
+    if not ok then
+        warn("[ViolenceDistrict] shop: " .. tostring(got))
+        return 0
+    end
     return got
 end
 
@@ -1704,7 +1890,7 @@ function xDTaraZ.Shop.Step()
     xDTaraZ.Shop.Status = ("bought %d · leveled %d · %d screws · %d gears"):format(xDTaraZ.Shop.Bought, xDTaraZ.Shop.Leveled, screws, gears)
 end
 
-xDTaraZ.UI = { FarmSaved = nil }
+xDTaraZ.UI = { Labels = {}, FarmSaved = nil }
 local Library, T
 
 function xDTaraZ.UI.Detach(fn)
@@ -1717,17 +1903,54 @@ function xDTaraZ.UI.Detach(fn)
     end
 end
 
----@param cap string  key in xDTaraZ.Caps
-function xDTaraZ.UI.NeedCap(idx, cap)
-    if xDTaraZ.Caps[cap] then return end
-    local option = Library.Options[idx]
-    if not option then return end
-    option:OnChanged(function(on)
-        if not on then return end
-        local title = option.Info and option.Info.Text
-        Library:Notify("Mario Hub", (type(title) == "string" and title or idx) .. " is not supported on this executor", 5, "Warn")
-        task.defer(option.SetValue, option, false)
+---@return table  list read from the game, empty when reading failed
+function xDTaraZ.UI.List(read, ...)
+    local ok, list = pcall(read, ...)
+    return ok and type(list) == "table" and list or {}
+end
+
+---@param allow    fun(value: any): boolean
+---@param refusal  table  { title, message, value the widget snaps back to }
+function xDTaraZ.UI.Guard(widget, allow, refusal)
+    local function Refuse()
+        Library:Notify(refusal[1], refusal[2], 4, "Warning")
+        task.defer(widget.SetValue, widget, refusal[3])
+    end
+
+    if type(widget.AddGuard) == "function" then
+        widget:AddGuard(function(value)
+            if allow(value) then return true end
+            Refuse()
+            return false
+        end)
+        return widget
+    end
+
+    widget:OnChanged(function(value)
+        if not allow(value) then Refuse() end
     end)
+    return widget
+end
+
+---@param cap string|string[]  needed before the toggle may turn on
+function xDTaraZ.UI.NeedCap(idx, cap)
+    if Library.Compat then
+        Library.Compat.NeedCap(idx, cap)
+        return
+    end
+    local toggle = Library.Toggles[idx]
+    if not toggle then return end
+    local title = toggle.Info and toggle.Info.Text or "Mario Hub"
+    xDTaraZ.UI.Guard(toggle, function(value)
+        return value ~= true or Util.Can(cap)
+    end, { title, T("Not supported on this executor", "ใช้กับ executor นี้ไม่ได้"), false })
+end
+
+---@param role table  RoleMode widget, kept on "Any" when the executor cannot press the game's button
+function xDTaraZ.UI.GuardRole(role)
+    return xDTaraZ.UI.Guard(role, function(value)
+        return value == "Any" or xDTaraZ.Role.Supported()
+    end, { "Mario Hub", T("Role choice is not supported on this executor", "เลือกบทบาทใช้กับ executor นี้ไม่ได้"), "Any" })
 end
 
 ---@param widget table  option whose value mirrors an Options key
@@ -1737,52 +1960,40 @@ function xDTaraZ.UI.Bind(widget, key)
     return widget
 end
 
----@return string  status kind for AddStatus
-function xDTaraZ.UI.Kind(text)
-    if text == nil or text == "" or text == "Off" then return "Idle" end
-    if string.find(text, "Waiting", 1, true) or string.find(text, "Not ", 1, true) then return "Waiting" end
-    if string.find(text, "Downed", 1, true) then return "Warn" end
-    return "Running"
-end
+function xDTaraZ.UI.BuildMain(window)
+    window:AddTabSection(T("Main", "หลัก"))
+    local tab = window:AddTab(T("Main", "หลัก"), "mushroom", T("Status and links", "สถานะและลิงก์"))
 
-function xDTaraZ.UI.RegisterIcons()
-    if Library:HasIcon("generator") then return end
-    Library:AddIcon("generator", {
-        "...kkkkkk...",
-        "..kYYYYYYk..",
-        ".kkkkkkkkkk.",
-        ".kGGGGGGGGk.",
-        ".kGkkGGkkGk.",
-        ".kGkYGGkYGk.",
-        ".kGkkGGkkGk.",
-        ".kGGGGGGGGk.",
-        ".kGGRRRRGGk.",
-        ".kkkkkkkkkk.",
-        "..kk....kk..",
-        "............",
-    }, {
-        k = Color3.fromRGB(28, 26, 30),
-        G = Color3.fromRGB(96, 112, 96),
-        Y = Color3.fromRGB(246, 206, 72),
-        R = Color3.fromRGB(214, 58, 50),
-    })
-    Library:AddIcon("hook", {
-        ".....kkk....",
-        "....kSSSk...",
-        "....kSkSk...",
-        ".....kSk....",
-        ".....kSk....",
-        ".....kSk....",
-        ".k...kSk....",
-        "kSk..kSk....",
-        "kSSk.kSk....",
-        ".kSSkSSk....",
-        "..kSSSk.....",
-        "...kkk......",
-    }, {
-        k = Color3.fromRGB(28, 26, 30),
-        S = Color3.fromRGB(196, 202, 212),
-    })
+    local farm = tab:AddLeftGroupbox(T("Auto Farm", "ฟาร์มอัตโนมัติ"), "star")
+    farm:AddToggle("AutoFarm", { Text = T("Auto Farm", "ฟาร์มอัตโนมัติ"), Description = T("Plays both roles for you: repairs, escapes, hunts and hooks", "เล่นให้ทั้งสองฝั่ง ซ่อม หนี ล่า แขวน"), Risky = true, Callback = xDTaraZ.UI.Detach(xDTaraZ.UI.SetFarm) }):AddKeyPicker("AutoFarmKey", { Default = "None", Mode = "Toggle" })
+    xDTaraZ.UI.GuardRole(farm:AddDropdown("RoleMode", { Text = T("Role", "บทบาท"), Description = T("Survivor only never gets killer; Prefer killer keeps you in the killer pool", "Survivor only ไม่ถูกสุ่มเป็นฆาตกร / Prefer killer อยู่ในกลุ่มสุ่มฆาตกรเสมอ"), Values = { "Any", "Survivor only", "Prefer killer" }, Default = "Any" }))
+    farm:AddSlider("FarmEscapeAfter", { Text = T("Survivor: escape after", "ผู้รอด: หนีหลัง"), Description = T("0 = never escape, stay and farm the whole round", "0 = ไม่หนี อยู่ฟาร์มจนจบรอบ"), Min = 0, Max = 900, Default = 0, Suffix = "s" })
+
+    local status = tab:AddLeftGroupbox(T("Status", "สถานะ"), "star")
+    local labels = xDTaraZ.UI.Labels
+    labels.Role = status:AddParagraph({ Title = T("Role", "บทบาท"), Content = "-" })
+    labels.Survivor = status:AddParagraph({ Title = T("Survivor", "ผู้รอดชีวิต"), Content = "-" })
+    labels.Killer = status:AddParagraph({ Title = T("Killer", "ฆาตกร"), Content = "-" })
+    labels.Esp = status:AddParagraph({ Title = T("ESP", "ESP"), Content = "-" })
+    labels.Shop = status:AddParagraph({ Title = T("Shop", "ร้านค้า"), Content = "-" })
+
+    local panic = tab:AddLeftGroupbox(T("Quick", "ด่วน"), "bomb")
+    panic:AddButton({ Text = T("Panic — all off", "ฉุกเฉิน ปิดทั้งหมด"), Style = "Danger", Func = xDTaraZ.UI.Detach(function()
+        xDTaraZ.UI.FarmSaved = nil
+        for _, toggle in pairs(Library.Toggles) do
+            if toggle.Value == true then toggle:SetValue(false) end
+        end
+    end) })
+
+    local discord = tab:AddRightGroupbox(T("Discord", "ดิสคอร์ด"), "link")
+    discord:AddLabel(xDTaraZ.Config.Discord)
+    discord:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ดิสคอร์ด"), Func = xDTaraZ.UI.Detach(function()
+        if Util.Copy(xDTaraZ.Config.Discord) then
+            Library:Notify(T("Discord", "ดิสคอร์ด"), T("Link copied", "คัดลอกลิงก์แล้ว"), 3, "Success")
+        else
+            Library:Notify(T("Discord", "ดิสคอร์ด"), xDTaraZ.Config.Discord, 6, "Info")
+        end
+    end) })
 end
 
 xDTaraZ.UI.FarmKeys = {
@@ -1811,261 +2022,183 @@ function xDTaraZ.UI.SetFarm(on)
     end
 end
 
-function xDTaraZ.UI.BuildMain(window)
-    window:AddTabSection(T("Main", "หลัก"))
-    local tab = window:AddTab(T("Main", "หลัก"), "mushroom", T("Auto farm, status and links", "ฟาร์ม สถานะ และลิงก์"))
-
-    local farm = tab:AddLeftGroupbox(T("Auto Farm", "ฟาร์มอัตโนมัติ"), "autofarm")
-    farm:AddFeature("AutoFarm", {
-        Text = T("Auto Farm", "ฟาร์มอัตโนมัติ"),
-        Description = T("Plays both roles: repairs, escapes, hunts and hooks", "เล่นให้ทั้งสองฝั่ง ซ่อม หนี ล่า แขวน"),
-        Icon = "autofarm",
-        Risky = true,
-        Badge = T("Risky", "เสี่ยง"),
-        Keybind = { Default = "None", Mode = "Toggle" },
-        Callback = xDTaraZ.UI.Detach(xDTaraZ.UI.SetFarm),
-        Options = function(options)
-            options:AddSegmented("RoleMode", { Text = T("Role", "บทบาท"), Icon = "players", Values = { "Any", "Survivor only", "Prefer killer" }, Default = "Any" })
-            options:AddSlider("FarmEscapeAfter", { Text = T("Survivor: escape after", "ผู้รอด: หนีหลัง"), Description = T("0 = stay and farm the whole round", "0 = อยู่ฟาร์มจนจบรอบ"), Icon = "timer", Min = 0, Max = 900, Default = 0, Suffix = "s" })
-        end,
-    })
-
-    local status = tab:AddLeftGroupbox(T("Status", "สถานะ"), "stats")
-    status:AddStatus("StatusRole", { Text = T("Round", "รอบ"), Icon = "players" })
-    status:AddStatus("StatusSurvivor", { Text = T("Survivor", "ผู้รอดชีวิต"), Icon = "heal" })
-    status:AddStatus("StatusKiller", { Text = T("Killer", "ฆาตกร"), Icon = "knife" })
-    status:AddStatus("StatusEsp", { Text = T("ESP", "ESP"), Icon = "esp" })
-    status:AddStatus("StatusShop", { Text = T("Shop", "ร้านค้า"), Icon = "shop" })
-
-    local live = tab:AddRightGroupbox(T("Live", "ตัวเลขสด"), "chart")
-    live:AddStat("StatGensLeft", { Text = T("Generators left", "เครื่องที่เหลือ"), Icon = "generator", Format = "%s" })
-    live:AddStat("StatChecks", { Text = T("Skill checks hit", "สกิลเช็คที่ผ่าน"), Icon = "success", Format = "%s", Token = "Good" })
-    live:AddStat("StatEscapes", { Text = T("Escapes", "หนีสำเร็จ"), Icon = "rejoin", Format = "%s", Token = "Good" })
-    live:AddStat("StatDowns", { Text = T("Downs", "ล้มเป้า"), Icon = "damage", Format = "%s" })
-
-    local quick = tab:AddRightGroupbox(T("Quick", "ด่วน"), "lightning")
-    quick:AddButton({ Text = T("Panic - All Off", "ฉุกเฉิน ปิดทั้งหมด"), Icon = "stop", Style = "Danger", Callback = xDTaraZ.UI.Detach(function()
-        xDTaraZ.UI.FarmSaved = nil
-        for _, toggle in pairs(Library.Toggles) do
-            if toggle.Value == true then toggle:SetValue(false) end
-        end
-    end) })
-
-    Library.Kit.Discord.Build(tab, xDTaraZ.Config.Discord)
-end
-
 function xDTaraZ.UI.BuildSurvivor(window)
     window:AddTabSection(T("Roles", "บทบาท"))
-    local tab = window:AddTab(T("Survivor", "ผู้รอดชีวิต"), "heal", T("Generators, team and escape", "เครื่องปั่นไฟ ทีม และการหนี"))
+    local tab = window:AddTab(T("Survivor", "ผู้รอดชีวิต"), "heart", T("Generators, team and escape", "เครื่องปั่นไฟ ทีม และการหนี"))
 
-    local work = tab:AddLeftGroupbox(T("Objectives", "ภารกิจ"), "generator")
-    work:AddToggle("AutoRepair", { Text = T("Auto Repair", "ซ่อมอัตโนมัติ"), Description = T("Repairs the best generator hands-free", "ซ่อมเครื่องที่ดีที่สุดให้เอง"), Icon = "generator", Risky = true })
-    work:AddToggle("PerfectSkillCheck", { Text = T("Auto Skill Check", "สกิลเช็คอัตโนมัติ"), Icon = "success" })
-    work:AddToggle("AutoHeal", { Text = T("Auto Heal Teammates", "รักษาเพื่อนอัตโนมัติ"), Icon = "heal", Risky = true })
-    work:AddToggle("AutoUnhook", { Text = T("Auto Unhook Teammates", "ปลดเพื่อนจากตะขอ"), Icon = "hook", Risky = true })
+    local work = tab:AddLeftGroupbox(T("Objectives", "ภารกิจ"), "gear")
+    work:AddToggle("AutoRepair", { Text = T("Auto repair", "ซ่อมอัตโนมัติ"), Description = T("Repairs the best generator hands-free", "ซ่อมเครื่องที่ดีที่สุดให้เอง"), Risky = true })
+    work:AddToggle("PerfectSkillCheck", { Text = T("Auto Skill Check", "สกิลเช็คอัตโนมัติ") })
+    work:AddToggle("AutoHeal", { Text = T("Auto heal teammates", "รักษาเพื่อนอัตโนมัติ"), Risky = true })
+    work:AddToggle("AutoUnhook", { Text = T("Auto unhook teammates", "ปลดเพื่อนจากตะขอ"), Risky = true })
 
     local escape = tab:AddLeftGroupbox(T("Escape", "หนี"), "flag")
-    escape:AddFeature("InstantEscape", {
-        Text = T("Instant Escape", "หนีออกทันที"),
-        Description = T("Leaves the round without repairing anything", "ออกจากรอบโดยไม่ต้องซ่อม"),
-        Icon = "flag",
-        Risky = true,
-        Badge = T("Risky", "เสี่ยง"),
-        Now = { Text = T("Escape Now", "หนีออกตอนนี้"), Icon = "rejoin", Style = "Warning", Callback = xDTaraZ.UI.Detach(function()
-            if not xDTaraZ.Survivor.EscapeNow() then
-                Library:Notify(T("Escape", "หนี"), T("No exit found this round", "ไม่พบทางออกในรอบนี้"), 3, "Warn")
-            end
-        end) },
-        Options = function(options)
-            options:AddSlider("EscapeDelay", { Text = T("Escape after", "หนีหลังเริ่มรอบ"), Icon = "timer", Min = 0, Max = 900, Default = 0, Suffix = "s" })
-        end,
-    })
-
-    local safety = tab:AddRightGroupbox(T("Safety", "ความปลอดภัย"), "shield")
-    safety:AddFeature("AutoDodge", {
-        Text = T("Auto Dodge Killer", "หลบฆาตกรอัตโนมัติ"),
-        Description = T("Gets away when the killer comes close", "หนีเมื่อฆาตกรเข้าใกล้"),
-        Icon = "speed",
-        Risky = true,
-        Options = function(options)
-            options:AddSlider("DodgeRadius", { Text = T("Dodge distance", "ระยะหลบ"), Icon = "distance", Min = 6, Max = 40, Default = 20, Suffix = "m" })
-        end,
-    })
-    safety:AddToggle("AutoSelfUnhook", { Text = T("Auto Self Unhook", "ปลดตัวเองจากตะขอ"), Icon = "hook", Risky = true })
-    safety:AddToggle("KillerAlert", { Text = T("Killer Alert", "เตือนฆาตกรเข้าใกล้"), Icon = "notify" })
-    safety:AddButton({ Text = T("Sacrifice Self", "สละชีพตัวเอง"), Icon = "trash", Style = "Danger", Callback = xDTaraZ.UI.Detach(function()
-        if not xDTaraZ.Survivor.Sacrifice() then
-            Library:Notify(T("Sacrifice", "สละชีพ"), T("Only works as a survivor", "ใช้ได้ตอนเป็นผู้รอดเท่านั้น"), 3, "Warn")
+    escape:AddToggle("InstantEscape", { Text = T("Instant escape", "หนีออกทันที"), Description = T("Leaves the round without repairing anything", "ออกจากรอบโดยไม่ต้องซ่อม"), Risky = true })
+    escape:AddSlider("EscapeDelay", { Text = T("Escape after", "หนีหลังเริ่มรอบ"), Min = 0, Max = 900, Default = 0, Suffix = "s" })
+    escape:AddButton({ Text = T("Escape Now", "หนีออกตอนนี้"), Style = "Warning", Func = xDTaraZ.UI.Detach(function()
+        if not xDTaraZ.Survivor.EscapeNow() then
+            Library:Notify(T("Escape", "หนี"), T("No exit found this round", "ไม่พบทางออกในรอบนี้"), 3, "Warning")
         end
     end) })
 
-    local parry = tab:AddRightGroupbox(T("Parry", "ปัดป้อง"), "sword")
-    parry:AddToggle("AutoParry", { Text = T("Auto Parry", "ปัดป้องอัตโนมัติ"), Description = T("Needs the Parrying Dagger equipped", "ต้องใส่ Parrying Dagger"), Icon = "sword", Badge = T("Beta", "เบต้า") })
-    parry:AddToggle("NoParryCooldown", { Text = T("No Parry Cooldown", "ปัดป้องไม่มีคูลดาวน์"), Icon = "cooldown", Badge = T("Beta", "เบต้า") })
+    local safety = tab:AddRightGroupbox(T("Safety", "ความปลอดภัย"), "boo")
+    safety:AddToggle("AutoDodge", { Text = T("Auto dodge killer", "หลบฆาตกรอัตโนมัติ"), Description = T("Teleports away when the killer gets close and keeps other jobs away from him", "วาร์ปหนีเมื่อฆาตกรเข้าใกล้ และไม่ไปทำงานใกล้ฆาตกร"), Risky = true })
+    safety:AddSlider("DodgeRadius", { Text = T("Dodge distance", "ระยะหลบ"), Min = 6, Max = 40, Default = 20, Suffix = "m" })
+    safety:AddToggle("AutoSelfUnhook", { Text = T("Auto self-unhook", "ปลดตัวเองจากตะขอ"), Risky = true })
+    safety:AddToggle("AutoParry", { Text = T("Auto parry (beta)", "ปัดป้องอัตโนมัติ (beta)"), Description = T("Needs the Parrying Dagger equipped", "ต้องใส่ Parrying Dagger") })
+    safety:AddToggle("NoParryCooldown", { Text = T("No parry cooldown (beta)", "ปัดป้องไม่มีคูลดาวน์ (beta)") })
     xDTaraZ.UI.NeedCap("NoParryCooldown", "Gc")
+    safety:AddToggle("KillerAlert", { Text = T("Killer alert", "เตือนฆาตกรเข้าใกล้") })
+    safety:AddButton({ Text = T("Sacrifice Self", "สละชีพตัวเอง"), Style = "Danger", Func = xDTaraZ.UI.Detach(function()
+        if not xDTaraZ.Survivor.Sacrifice() then
+            Library:Notify(T("Sacrifice", "สละชีพ"), T("Only works as a survivor", "ใช้ได้ตอนเป็นผู้รอดเท่านั้น"), 3, "Warning")
+        end
+    end) })
 end
 
 function xDTaraZ.UI.BuildKiller(window)
-    local tab = window:AddTab(T("Killer", "ฆาตกร"), "knife", T("Hunting and hooking", "ล่าและแขวน"))
+    local tab = window:AddTab(T("Killer", "ฆาตกร"), "swords", T("Hunting and hooking", "ล่าและแขวน"))
 
-    local hunt = tab:AddLeftGroupbox(T("Hunt", "ล่า"), "killaura")
-    hunt:AddFeature("KillAura", {
-        Text = T("Auto Slash", "ฟันอัตโนมัติ"),
-        Description = T("Rage hits anyone in range, Legit only whoever is in front", "Rage ฟันทุกคนในระยะ / Legit ฟันเฉพาะคนตรงหน้า"),
-        Icon = "killaura",
-        Risky = true,
-        Badge = T("Risky", "เสี่ยง"),
-        Keybind = { Default = "None", Mode = "Toggle" },
-        Options = function(options)
-            options:AddSegmented("SlashMode", { Text = T("Mode", "โหมด"), Icon = "sort", Values = { "Rage", "Legit" }, Default = "Rage" })
-            options:AddSlider("AuraRange", { Text = T("Range", "ระยะ"), Icon = "distance", Min = 10, Max = 500, Default = 500, Suffix = "m" })
-            options:AddToggle("SmartHitbox", { Text = T("Reach Assist", "ช่วยเพิ่มระยะฟัน"), Description = T("Legit swings land a few studs further", "โหมด Legit ฟันโดนไกลขึ้นนิดหน่อย"), Icon = "fov", Risky = true, DependsOn = { "SlashMode", "Legit" } })
-        end,
-    })
-
-    local carry = tab:AddLeftGroupbox(T("Hook & Sabotage", "แขวนและทำลาย"), "hook")
-    carry:AddToggle("AutoHook", { Text = T("Auto Carry + Hook", "แบกและแขวนอัตโนมัติ"), Description = T("Picks up anyone downed and hooks them", "แบกคนล้มแล้วแขวนตะขอให้"), Icon = "hook", Risky = true })
-    carry:AddToggle("AutoBreakGens", { Text = T("Auto Kick Generators", "เตะเครื่องปั่นไฟอัตโนมัติ"), Description = T("Kicks the most repaired generator when nobody is near", "เตะเครื่องที่ซ่อมไปเยอะสุดตอนไม่มีเป้า"), Icon = "generator", Risky = true })
+    local hunt = tab:AddLeftGroupbox(T("Hunt", "ล่า"), "target")
+    hunt:AddToggle("KillAura", { Text = T("Auto slash", "ฟันอัตโนมัติ"), Description = T("Rage jumps behind anyone in range, Legit only swings at whoever is in front of you", "Rage วาร์ปไปฟันทุกคนในระยะ / Legit ฟันเฉพาะคนตรงหน้า"), Risky = true }):AddKeyPicker("KillAuraKey", { Default = "None", Mode = "Toggle" })
+    hunt:AddToggle("SmartHitbox", { Text = T("Reach Assist", "ช่วยเพิ่มระยะฟัน"), Description = T("Legit swings still land on targets a few studs out of reach", "โหมด Legit ฟันโดนแม้เป้าอยู่เกินระยะนิดหน่อย"), Risky = true })
+    hunt:AddDropdown("SlashMode", { Text = T("Slash mode", "โหมดฟัน"), Values = { "Rage", "Legit" }, Default = "Rage" })
+    hunt:AddToggle("AutoHook", { Text = T("Auto carry + hook", "แบกและแขวนอัตโนมัติ"), Description = T("Picks up anyone downed and hooks them", "แบกคนล้มแล้วแขวนตะขอให้"), Risky = true })
+    hunt:AddToggle("AutoBreakGens", { Text = T("Auto kick generators", "เตะเครื่องปั่นไฟอัตโนมัติ"), Description = T("Kicks the most repaired generator when nobody is in range", "เตะเครื่องที่ซ่อมไปเยอะสุดตอนไม่มีเป้า"), Risky = true })
+    hunt:AddSlider("AuraRange", { Text = T("Range", "ระยะ"), Min = 10, Max = 500, Default = 500, Suffix = "m" })
 
     local defense = tab:AddRightGroupbox(T("Defense", "ป้องกัน"), "shield")
-    defense:AddToggle("AntiStun", { Text = T("Anti Pallet Stun", "กันพาเลทสตัน"), Icon = "freeze", Badge = T("Beta", "เบต้า") })
+    defense:AddToggle("AntiStun", { Text = T("Anti pallet stun (beta)", "กันพาเลทสตัน (beta)") })
     xDTaraZ.UI.NeedCap("AntiStun", "Connections")
-    defense:AddToggle("AntiBlind", { Text = T("Anti Blind", "กันแสงไฟฉาย"), Description = T("Flashlights no longer blind you", "ไม่โดนไฟฉายแยงตา"), Icon = "eyeoff", Badge = T("Beta", "เบต้า") })
+    defense:AddToggle("AntiBlind", { Text = T("Anti blind (beta)", "กันแสงไฟฉาย (beta)"), Description = T("Flashlights no longer blind you", "ไม่โดนไฟฉายแยงตา") })
     xDTaraZ.UI.NeedCap("AntiBlind", "Connections")
-    defense:AddToggle("FreeTurn", { Text = T("No Turn Limit", "หมุนตัวได้อิสระ"), Description = T("Keep turning while attacking or lunging", "หันตัวได้ตอนฟันและพุ่ง"), Icon = "orbit" })
+    defense:AddToggle("FreeTurn", { Text = T("No turn limit", "หมุนตัวได้อิสระ"), Description = T("Keep turning while attacking or lunging", "หันตัวได้ตอนฟันและพุ่ง") })
 end
 
 function xDTaraZ.UI.BuildPlayer(window)
-    window:AddTabSection(T("Misc", "อื่นๆ"))
+    window:AddTabSection(T("Player", "ผู้เล่น"))
     local tab = window:AddTab(T("Player", "ผู้เล่น"), "player", T("Movement and world", "การเคลื่อนที่และโลก"))
 
-    local move = tab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "speed")
-    move:AddFeature("Speed", {
-        Text = T("Speed", "วิ่งเร็ว"),
-        Icon = "speed",
-        Risky = true,
-        Keybind = { Default = "None", Mode = "Toggle" },
-        Options = function(options)
-            options:AddSlider("SpeedValue", { Text = T("Walk speed", "ความเร็ว"), Icon = "speed", Min = 16, Max = 60, Default = 24 })
-        end,
-    })
-    move:AddToggle("NoSlow", { Text = T("No Slow", "ไม่โดนสโลว์"), Description = T("Never drops below your normal run speed", "ความเร็วไม่ต่ำกว่าวิ่งปกติ"), Icon = "lightning" })
-    move:AddToggle("NoFall", { Text = T("No Fall", "ไม่เซตอนตก"), Description = T("No landing stumble after a drop", "ลงพื้นแล้วไม่เซ"), Icon = "nofall", Badge = T("Beta", "เบต้า") })
-    xDTaraZ.UI.NeedCap("NoFall", "Hook")
-    move:AddFeature("Noclip", { Text = T("Noclip", "เดินทะลุ"), Icon = "noclip", Keybind = { Default = "None", Mode = "Toggle" } })
-    move:AddToggle("InfiniteJump", { Text = T("Infinite Jump", "กระโดดไม่จำกัด"), Icon = "infjump" })
+    local move = tab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "zap")
+    move:AddToggle("Speed", { Text = T("Speed", "วิ่งเร็ว"), Risky = true }):AddKeyPicker("SpeedKey", { Default = "None", Mode = "Toggle" })
+    move:AddSlider("SpeedValue", { Text = T("Walk speed", "ความเร็ว"), Min = 16, Max = 60, Default = 24 })
+    move:AddToggle("NoSlow", { Text = T("No slow", "ไม่โดนสโลว์"), Description = T("Never drops below your normal run speed", "ความเร็วไม่ต่ำกว่าวิ่งปกติ") })
+    move:AddToggle("NoFall", { Text = T("No fall (beta)", "ไม่เซตอนตก (beta)"), Description = T("No landing stumble after a drop", "ลงพื้นแล้วไม่เซ") })
+    xDTaraZ.UI.NeedCap("NoFall", "Namecall")
+    move:AddToggle("Noclip", { Text = T("Noclip", "เดินทะลุ") }):AddKeyPicker("NoclipKey", { Default = "None", Mode = "Toggle" })
+    move:AddToggle("InfiniteJump", { Text = T("Infinite jump", "กระโดดไม่จำกัด"), Description = T("Jump anywhere, even mid-air", "กระโดดได้ทุกที่ แม้กลางอากาศ") })
 
-    local world = tab:AddRightGroupbox(T("World", "โลก"), "sun")
-    world:AddToggle("Fullbright", { Text = T("Fullbright", "สว่างทั้งแมพ"), Icon = "fullbright" })
-    world:AddToggle("NoFog", { Text = T("No Fog", "ไม่มีหมอก"), Icon = "fog" })
-    world:AddToggle("AntiShake", { Text = T("Anti Camera Shake", "กันจอสั่น"), Icon = "camera" })
+    local world = tab:AddRightGroupbox(T("World", "โลก"), "star")
+    world:AddToggle("Fullbright", { Text = T("Fullbright", "สว่างทั้งแมพ") })
+    world:AddToggle("AntiShake", { Text = T("Anti camera shake", "กันจอสั่น") })
     xDTaraZ.UI.NeedCap("AntiShake", "Connections")
-    world:AddToggle("AntiAfk", { Text = T("Anti AFK", "กันหลุด AFK"), Icon = "antiafk", Callback = xDTaraZ.UI.Detach(xDTaraZ.Player.AntiAfk.Arm) })
-
-    local travel = tab:AddRightGroupbox(T("Teleport", "วาร์ป"), "teleport")
-    local places = travel:AddDropdown("TeleportTarget", { Text = T("Destination", "ปลายทาง"), Icon = "waypoint", Values = xDTaraZ.Teleport.Places(), Default = "Nearest Generator", Searchable = true })
-    travel:AddButton({ Text = T("Teleport Now", "วาร์ปตอนนี้"), Icon = "teleport", Style = "Primary", Callback = xDTaraZ.UI.Detach(function()
-        if not xDTaraZ.Teleport.Go(places.Value) then
-            Library:Notify(T("Teleport", "วาร์ป"), T("Destination not found this round", "ไม่พบปลายทางในรอบนี้"), 3, "Warn")
-        end
-    end) })
-    travel:AddButton({ Text = T("Refresh List", "รีเฟรชรายการ"), Icon = "refresh", Style = "Ghost", Callback = xDTaraZ.UI.Detach(function()
-        places:SetValues(xDTaraZ.Teleport.Places())
-    end) })
+    world:AddToggle("NoFog", { Text = T("No fog", "ไม่มีหมอก") })
+    world:AddToggle("AntiAfk", { Text = T("Anti AFK", "กันหลุด AFK"), Callback = xDTaraZ.UI.Detach(xDTaraZ.Player.AntiAfk.Arm) })
 end
 
 function xDTaraZ.UI.BuildShop(window)
-    window:AddTabSection(T("Progression", "ความก้าวหน้า"))
     local tab = window:AddTab(T("Shop", "ร้านค้า"), "shop", T("Perks, items and killers", "เพิร์ค ไอเทม ฆาตกร"))
 
-    local perks = tab:AddLeftGroupbox(T("Perks", "เพิร์ค"), "upgrade")
-    perks:AddFeature("AutoBuyPerks", {
-        Text = T("Auto Buy Perks", "ซื้อเพิร์คอัตโนมัติ"),
-        Description = T("Unlocks every perk you can afford", "ปลดล็อกเพิร์คทุกตัวที่ซื้อได้"),
-        Icon = "buy",
-        Now = { Text = T("Buy + Level Now", "ซื้อ + อัปตอนนี้"), Icon = "upgrade", Style = "Primary", Callback = xDTaraZ.UI.Detach(function()
-            local bought, leveled = xDTaraZ.Shop.Locked(xDTaraZ.Shop.BuyPerks), xDTaraZ.Shop.Locked(xDTaraZ.Shop.LevelPerks)
-            Library:Notify(T("Perks", "เพิร์ค"), ("Bought %d, leveled %d"):format(bought, leveled), 4, "Success")
-        end) },
-    })
-    perks:AddToggle("AutoLevelPerks", { Text = T("Auto Level Perks", "อัปเลเวลเพิร์คอัตโนมัติ"), Description = T("Spends Screws on owned perks", "ใช้ Screws อัปเพิร์คที่มี"), Icon = "upgrade" })
-    perks:AddSlider("KeepScrews", { Text = T("Keep Screws", "เก็บ Screws ไว้"), Description = T("Never spends below this", "ไม่ใช้ต่ำกว่าจำนวนนี้"), Icon = "money", Min = 0, Max = 20000, Default = 0 })
+    local perks = tab:AddLeftGroupbox(T("Perks", "เพิร์ค"), "star")
+    perks:AddToggle("AutoBuyPerks", { Text = T("Auto buy perks", "ซื้อเพิร์คอัตโนมัติ"), Description = T("Unlocks every perk you can afford with Gears", "ปลดล็อกเพิร์คทุกตัวที่ Gears พอ") })
+    perks:AddToggle("AutoLevelPerks", { Text = T("Auto level perks", "อัปเลเวลเพิร์คอัตโนมัติ"), Description = T("Spends Screws to level owned perks", "ใช้ Screws อัปเลเวลเพิร์คที่มี") })
+    perks:AddSlider("KeepScrews", { Text = T("Keep Screws", "เก็บ Screws ไว้"), Description = T("Never spends below this", "ไม่ใช้ต่ำกว่าจำนวนนี้"), Min = 0, Max = 20000, Default = 0 })
+    perks:AddButton({ Text = T("Buy + Level Now", "ซื้อ + อัปตอนนี้"), Style = "Primary", Func = xDTaraZ.UI.Detach(function()
+        local bought, leveled = xDTaraZ.Shop.Locked(xDTaraZ.Shop.BuyPerks), xDTaraZ.Shop.Locked(xDTaraZ.Shop.LevelPerks)
+        Library:Notify(T("Perks", "เพิร์ค"), ("Bought %d, leveled %d"):format(bought, leveled), 4, "Success")
+    end) })
 
-    local store = tab:AddRightGroupbox(T("Items & Killers", "ไอเทมและฆาตกร"), "cart")
-    local items = store:AddDropdown("ShopItems", { Text = T("Items", "ไอเทม"), Icon = "box", Values = xDTaraZ.Shop.Names("Items"), Multi = true, Default = {}, AllowNull = true, Searchable = true })
-    store:AddButton({ Text = T("Buy Selected Items", "ซื้อไอเทมที่เลือก"), Icon = "buy", Callback = xDTaraZ.UI.Detach(function()
+    local store = tab:AddRightGroupbox(T("Items & Killers", "ไอเทมและฆาตกร"), "coin")
+    local items = store:AddDropdown("ShopItems", { Text = T("Items", "ไอเทม"), Values = xDTaraZ.UI.List(xDTaraZ.Shop.Names, "Items"), Multi = true, Default = {}, AllowNull = true, Searchable = true })
+    store:AddButton({ Text = T("Buy Selected Items", "ซื้อไอเทมที่เลือก"), Func = xDTaraZ.UI.Detach(function()
         Library:Notify(T("Shop", "ร้านค้า"), ("Bought %d items"):format(xDTaraZ.Shop.Locked(xDTaraZ.Shop.BuyList, "Item", items.Value)), 4, "Coin")
     end) })
-    local killers = store:AddDropdown("ShopKillers", { Text = T("Killers", "ฆาตกร"), Icon = "knife", Values = xDTaraZ.Shop.Names("Killers"), Multi = true, Default = {}, AllowNull = true, Searchable = true })
-    store:AddButton({ Text = T("Buy Selected Killers", "ซื้อฆาตกรที่เลือก"), Icon = "buy", Callback = xDTaraZ.UI.Detach(function()
+    local killers = store:AddDropdown("ShopKillers", { Text = T("Killers", "ฆาตกร"), Values = xDTaraZ.UI.List(xDTaraZ.Shop.Names, "Killers"), Multi = true, Default = {}, AllowNull = true, Searchable = true })
+    store:AddButton({ Text = T("Buy Selected Killers", "ซื้อฆาตกรที่เลือก"), Func = xDTaraZ.UI.Detach(function()
         Library:Notify(T("Shop", "ร้านค้า"), ("Bought %d killers"):format(xDTaraZ.Shop.Locked(xDTaraZ.Shop.BuyList, "Killer", killers.Value)), 4, "Coin")
     end) })
-    store:AddButton({ Text = T("Refresh Lists", "รีเฟรชรายการ"), Icon = "refresh", Style = "Ghost", Callback = xDTaraZ.UI.Detach(function()
+    store:AddButton({ Text = T("Refresh lists", "รีเฟรชรายการ"), Func = xDTaraZ.UI.Detach(function()
         items:SetValues(xDTaraZ.Shop.Names("Items"))
         killers:SetValues(xDTaraZ.Shop.Names("Killers"))
     end) })
 end
 
+function xDTaraZ.UI.BuildTeleport(window)
+    local tab = window:AddTab(T("Teleport", "วาร์ป"), "pipe", T("Jump anywhere on the map", "วาร์ปไปทุกจุดในแมพ"))
+    local box = tab:AddLeftGroupbox(T("Teleport", "วาร์ป"), "pipe")
+    local places = box:AddDropdown("TeleportTarget", { Text = T("Destination", "ปลายทาง"), Values = xDTaraZ.UI.List(xDTaraZ.Teleport.Places), Default = "Nearest Generator", Searchable = true })
+    box:AddButton({ Text = T("Teleport Now", "วาร์ปตอนนี้"), Style = "Primary", Func = xDTaraZ.UI.Detach(function()
+        if not xDTaraZ.Teleport.Go(places.Value) then
+            Library:Notify(T("Teleport", "วาร์ป"), T("Destination not found this round", "ไม่พบปลายทางในรอบนี้"), 3, "Warning")
+        end
+    end) })
+    box:AddButton({ Text = T("Refresh list", "รีเฟรชรายการ"), Func = xDTaraZ.UI.Detach(function()
+        places:SetValues(xDTaraZ.Teleport.Places())
+    end) })
+end
+
 function xDTaraZ.UI.BuildVisuals(window)
     window:AddTabSection(T("Visuals", "การมองเห็น"))
-    local tab = window:AddVisualsTab({ Icon = "esp", Provider = xDTaraZ.Esp.Targets, Preview = true })
-
+    local tab = window:AddVisualsTab({ Provider = xDTaraZ.Esp.Targets, Preview = true })
     local objects = tab:AddRightGroupbox(T("Objects", "วัตถุ"), "eye")
-    objects:AddToggle("EspGenerators", { Text = T("Generators + Progress", "เครื่องปั่นไฟ + ความคืบหน้า"), Icon = "generator" })
-    objects:AddToggle("EspHooks", { Text = T("Hooks", "ตะขอ"), Icon = "hook" })
-    objects:AddToggle("EspGates", { Text = T("Exit Gates", "ประตูทางออก"), Icon = "flag" })
-    objects:AddToggle("EspPallets", { Text = T("Pallets", "พาเลท"), Icon = "box" })
-    objects:AddToggle("EspWindows", { Text = T("Windows", "หน้าต่าง"), Icon = "grid" })
+    objects:AddToggle("EspGenerators", { Text = T("Generators + progress", "เครื่องปั่นไฟ + ความคืบหน้า") })
+    objects:AddToggle("EspHooks", { Text = T("Hooks", "ตะขอ") })
+    objects:AddToggle("EspGates", { Text = T("Exit gates", "ประตูทางออก") })
+    objects:AddToggle("EspPallets", { Text = T("Pallets", "พาเลท") })
+    objects:AddToggle("EspWindows", { Text = T("Windows", "หน้าต่าง") })
 end
 
-function xDTaraZ.UI.RoleText()
+function xDTaraZ.UI.RefreshStatus()
+    local labels = xDTaraZ.UI.Labels
+    if not (labels.Role and labels.Survivor and labels.Killer and labels.Esp and labels.Shop) then return end
     local dist = xDTaraZ.Alert.Distance
-    return (xDTaraZ.Player.Role() or "-") .. (dist and (" · killer %dm"):format(dist) or "")
+    labels.Role:SetContent((xDTaraZ.Player.Role() or "-") .. " · gens left " .. xDTaraZ.Map.GensLeft() .. (dist and (" · killer %dm"):format(dist) or ""))
+    labels.Survivor:SetContent(("%s · checks %d · dodges %d · escapes %d"):format(xDTaraZ.Survivor.Status, xDTaraZ.SkillCheck.Checks, xDTaraZ.Guard.Dodges, xDTaraZ.Survivor.Escapes))
+    labels.Killer:SetContent(xDTaraZ.Killer.Status .. " · stuns dodged " .. xDTaraZ.AntiStun.Count)
+    labels.Esp:SetContent(xDTaraZ.Esp.GetStatus())
+    labels.Shop:SetContent(xDTaraZ.Shop.Status)
 end
 
-function xDTaraZ.UI.Live()
-    local interval = xDTaraZ.Config.StatusInterval
-    local feeds = {
-        StatusRole = xDTaraZ.UI.RoleText,
-        StatusSurvivor = function() return xDTaraZ.Survivor.Status end,
-        StatusKiller = function() return xDTaraZ.Killer.Status end,
-        StatusEsp = xDTaraZ.Esp.GetStatus,
-        StatusShop = function() return xDTaraZ.Shop.Status end,
-    }
-    for idx, read in pairs(feeds) do
-        Library.Lib.Status(idx, function()
-            local text = read()
-            return text, xDTaraZ.UI.Kind(text)
-        end, interval)
+---Flips the menu toggles of jobs the scheduler halted and says why; runs on the library's own clean thread.
+function xDTaraZ.UI.DrainHalts()
+    local halts = xDTaraZ.Scheduler.Halts
+    if not halts[1] then return end
+    xDTaraZ.Scheduler.Halts = {}
+    for _, halt in ipairs(halts) do
+        Util.Try("halt", function()
+            for _, idx in ipairs(halt.Toggles) do
+                local toggle = Library.Toggles[idx]
+                if toggle and toggle.Value then toggle:SetValue(false) end
+            end
+            Library:Notify("Violence District", halt.Message, 6, "Warning")
+        end)
     end
+end
 
-    Library.Lib.Status("StatGensLeft", function() return xDTaraZ.Map.GensLeft() end, interval)
-    Library.Lib.Status("StatChecks", function() return xDTaraZ.SkillCheck.Checks end, interval)
-    Library.Lib.Status("StatEscapes", function() return xDTaraZ.Survivor.Escapes end, interval)
-    Library.Lib.Status("StatDowns", function() return xDTaraZ.Killer.Hits end, interval)
+function xDTaraZ.UI.Pump()
+    xDTaraZ.UI.DrainHalts()
+    xDTaraZ.UI.RefreshStatus()
 end
 
 function xDTaraZ.UI.Build()
     local window = Library.Window
-    xDTaraZ.UI.RegisterIcons()
-    xDTaraZ.UI.BuildMain(window)
-    xDTaraZ.UI.BuildSurvivor(window)
-    xDTaraZ.UI.BuildKiller(window)
-    xDTaraZ.UI.BuildVisuals(window)
-    xDTaraZ.UI.BuildShop(window)
-    xDTaraZ.UI.BuildPlayer(window)
-    window:AddSettingsTab()
+    for _, section in ipairs({ "BuildMain", "BuildSurvivor", "BuildKiller", "BuildPlayer", "BuildTeleport", "BuildShop", "BuildVisuals" }) do
+        Util.Try("ui " .. section, xDTaraZ.UI[section], window)
+    end
+    window:AddTabSection(T("Other", "อื่นๆ"))
+    Util.Try("ui settings", window.AddSettingsTab, window)
 
     for key in pairs(xDTaraZ.Options) do
         local widget = Library.Options[key] or Library.Toggles[key]
         if widget then xDTaraZ.UI.Bind(widget, key) end
     end
-    xDTaraZ.UI.Live()
 end
 
+---@return boolean  false when the menu could not load
 local function BuildInterface()
-    Library = loadstring(Util.HttpGet(xDTaraZ.Config.UiSource))()
-    MarioBanner.Step("UI library")
+    Library = Util.LoadLibrary()
+    if not Library then return false end
+    pcall(MarioBanner.Step, "UI library")
     xDTaraZ.Library = Library
     T = function(en, th) return Library:T(en, th) end
     Library:CreateWindow({
@@ -2078,13 +2211,15 @@ local function BuildInterface()
         Intro = xDTaraZ.Config.Intro,
         OnUnlocked = function()
             xDTaraZ.UI.Build()
-            task.defer(xDTaraZ.Boot)
-            task.defer(function() Library:LoadAutoloadConfig() end)
+            task.defer(Util.Try, "boot", xDTaraZ.Boot)
+            Library:Every(xDTaraZ.Config.StatusInterval, xDTaraZ.UI.Pump)
+            task.defer(Util.Try, "autoload", Library.LoadAutoloadConfig, Library)
         end,
     })
     Library:OnUnload(function()
         xDTaraZ:Unload()
     end)
+    return true
 end
 
 function xDTaraZ.Boot()
@@ -2098,21 +2233,22 @@ function xDTaraZ.Boot()
     xDTaraZ.SkillCheck.Start()
     xDTaraZ.AntiStun.Start()
 
-    xDTaraZ.Scheduler.Every("Survivor", xDTaraZ.Config.RepairTick, xDTaraZ.Survivor.Step)
-    xDTaraZ.Scheduler.Every("Guard", xDTaraZ.Config.GuardTick, xDTaraZ.Guard.Step)
-    xDTaraZ.Scheduler.Every("Block", 1, xDTaraZ.Block.Step)
-    xDTaraZ.Scheduler.Every("Parry", xDTaraZ.Config.GuardTick, xDTaraZ.Parry.Step)
-    xDTaraZ.Scheduler.Every("Killer", 0.1, xDTaraZ.Killer.Step)
-    xDTaraZ.Scheduler.Every("World", 0.5, xDTaraZ.World.Step)
+    xDTaraZ.Scheduler.Every("Survivor", xDTaraZ.Config.RepairTick, xDTaraZ.Survivor.Step, { "AutoRepair", "AutoHeal", "AutoUnhook", "InstantEscape" }, { Core = true, Restore = xDTaraZ.Survivor.Finish })
+    xDTaraZ.Scheduler.Every("Guard", xDTaraZ.Config.GuardTick, xDTaraZ.Guard.Step, { "AutoDodge", "AutoSelfUnhook" })
+    xDTaraZ.Scheduler.Every("Block", 1, xDTaraZ.Block.Step, { "PerfectSkillCheck", "AntiStun", "AntiBlind", "AntiShake", "NoFall" }, { Restore = xDTaraZ.Block.Release })
+    xDTaraZ.Scheduler.Every("Parry", xDTaraZ.Config.GuardTick, xDTaraZ.Parry.Step, { "AutoParry", "NoParryCooldown" })
+    xDTaraZ.Scheduler.Every("Killer", 0.1, xDTaraZ.Killer.Step, { "KillAura", "AutoHook", "AutoBreakGens" })
+    xDTaraZ.Scheduler.Every("World", 0.5, xDTaraZ.World.Step, { "Fullbright", "NoFog" }, { Restore = xDTaraZ.World.Restore })
     xDTaraZ.Scheduler.Every("Role", 3, xDTaraZ.Role.Step)
-    xDTaraZ.Scheduler.Every("Alert", 0.5, xDTaraZ.Alert.Step)
-    xDTaraZ.Scheduler.Every("Shop", xDTaraZ.Config.ShopInterval, xDTaraZ.Shop.Step)
-    xDTaraZ.Scheduler.Every("ObjectEsp", xDTaraZ.Config.ObjectEspRefresh, xDTaraZ.Esp.Step)
+    xDTaraZ.Scheduler.Every("Alert", 0.5, xDTaraZ.Alert.Step, { "KillerAlert" }, { Core = true })
+    xDTaraZ.Scheduler.Every("Shop", xDTaraZ.Config.ShopInterval, xDTaraZ.Shop.Step, { "AutoBuyPerks", "AutoLevelPerks" })
+    xDTaraZ.Scheduler.Every("ObjectEsp", xDTaraZ.Config.ObjectEspRefresh, xDTaraZ.Esp.Step, { "EspGenerators", "EspHooks", "EspGates", "EspPallets", "EspWindows" }, { Core = true })
     xDTaraZ.Scheduler.Boot()
 end
 
 function xDTaraZ:Unload()
     self.State.Alive = false
+    if environment.ViolenceDistrictUnload == self.UnloadFn then environment.ViolenceDistrictUnload = nil end
     table.clear(xDTaraZ.Scheduler.Jobs)
     xDTaraZ.Survivor.Finish()
     xDTaraZ.Block.Release()
@@ -2125,19 +2261,21 @@ function xDTaraZ:Unload()
     table.clear(self.State.Connections)
 end
 
-environment.ViolenceDistrictUnload = function()
+xDTaraZ.UnloadFn = function()
     if xDTaraZ.Library and not xDTaraZ.Library.Unloaded then
         xDTaraZ.Library:Unload()
     else
         xDTaraZ:Unload()
     end
 end
+environment.ViolenceDistrictUnload = xDTaraZ.UnloadFn
 
 if LocalPlayer.Character then
     xDTaraZ.Player:Bind(LocalPlayer.Character)
 end
 
-MarioBanner.Step("Systems")
-BuildInterface()
-MarioBanner.Step("Interface")
-MarioBanner.Ready()
+pcall(MarioBanner.Step, "Systems")
+if BuildInterface() then
+    pcall(MarioBanner.Step, "Interface")
+    pcall(MarioBanner.Ready)
+end

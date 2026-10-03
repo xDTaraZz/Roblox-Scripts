@@ -8,7 +8,7 @@ if game.GameId ~= 1202096104 then
 end
 
 local MarioBanner = {
-    Print = type(getrenv) == "function" and getrenv().print or print,
+    Print = print,
     Started = os.clock(),
     Last = os.clock(),
     Done = 0,
@@ -112,8 +112,15 @@ function MarioBanner.Ready()
     }, "\n"))
 end
 
-MarioBanner.Show()
-MarioBanner.Step("Core")
+do
+    local ok, renv = pcall(getrenv)
+    if ok and type(renv) == "table" and type(renv.print) == "function" then
+        MarioBanner.Print = renv.print
+    end
+end
+
+pcall(MarioBanner.Show)
+pcall(MarioBanner.Step, "Core")
 
 if not LPH_OBFUSCATED then
     local function Passthrough(fn) return fn end
@@ -138,19 +145,16 @@ local xDTaraZ = setmetatable({}, {
         rawset(self, key, type(value) == "function" and LPH_JIT(value) or value)
     end,
 })
-local Modules = ReplicatedStorage.Modules
-local RemoteFolder = ReplicatedStorage.Remotes
-local Remotes = require(Modules.Shared.Remotes)
-local Data = require(Modules.Shared.Data)
-local JobsController = require(Modules.Client.Jobs.JobsController)
-local VehicleController = require(Modules.Client.Vehicles.VehicleController)
-local TeleportGuard = require(Modules.Client.Exploit.VehicleTeleportDetectionController)
-local PlayRewardUtil = require(Modules.Shared.PlayRewards.PlayRewardUtil)
 
 xDTaraZ.Config = {
     Discord = "https://discord.gg/FHVfmeSceA",
-    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui_v2.lua",
+    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
     SaveFolder = "Driving Empire",
+    LoadTimeout = 10,
+    AlertTries = 20,
+    AlertRetry = 0.5,
+    JobFailLimit = 5,
+    JobFailWindow = 10,
     SpawnerCacheFile = "Driving Empire/atm_spawners.json",
     TickDelay = 0.5,
     BustWait = 2.6,
@@ -162,16 +166,25 @@ xDTaraZ.Config = {
     SweepMin = Vector3.new(-3500, 0, -6500),
     SweepMax = Vector3.new(7500, 0, 5000),
     CashOutCrimes = 5,
-    CashOutWait = 12,
-    DropOffApproach = 80,
+    DropOffStage = 8,
+    DropOffSettle = 2.5,
+    DropOffPayWait = 4,
+    DropOffTries = 2,
     WantedSafety = 25,
     CopAvoidRadius = 45,
     RewardInterval = 60,
     EspInterval = 1,
     HopDelay = 4,
-    DriveCenter = Vector3.new(-2053, 22, 235),
-    DriveRadius = 150,
-    DriveSpeed = 150,
+    DriveSpeed = 200,
+    DriveAlign = 2,
+    DriveLift = 3,
+    DriveEdge = 120,
+    DriveRoadMin = 1200,
+    DriveRoadWidth = 30,
+    DriveRoadFlat = 0.05,
+    DriveRoadSeed = Vector3.new(-822, 21, -487),
+    SpawnWait = 10,
+    SpawnTries = 2,
     DropOffSeeds = {
         Vector3.new(-2543.3, 11.9, 4030.3),
         Vector3.new(7322.1, 197.8, -2811.6),
@@ -196,13 +209,19 @@ local Config = xDTaraZ.Config
 xDTaraZ.State = {
     Alive = true,
     Messages = {},
+    Halted = {},
     Busy = false,
     Stats = nil,
     Spawners = {},
     LastReward = 0,
     LastEsp = 0,
     AtmSession = { Busted = 0, Earned = 0, CashedOut = 0, StartCash = 0 },
+    AtmWarn = nil,
+    Banking = false,
+    BankOnStop = false,
     DriveConn = nil,
+    DriveRoad = nil,
+    CollideBackup = setmetatable({}, { __mode = "k" }),
     Conns = {},
     EspObjects = {},
     LightingBackup = nil,
@@ -245,39 +264,82 @@ function xDTaraZ.Util.Try(fn, ...)
     return ok, err
 end
 
+---@return string?  body, nil when every way to fetch failed
 function xDTaraZ.Util.HttpGet(url)
     local ok, body = pcall(game.HttpGet, game, url)
     if ok and type(body) == "string" then
         return body
     end
-    local requestFn = request or http_request or (syn and syn.request)
-    if not requestFn then
-        error("No HTTP function available")
+    local requestFn = (type(request) == "function" and request) or (type(http_request) == "function" and http_request)
+        or (type(syn) == "table" and syn.request)
+    if type(requestFn) ~= "function" then
+        return nil
     end
-    local response = requestFn({ Url = url, Method = "GET" })
-    if type(response) ~= "table" or type(response.Body) ~= "string" then
-        error("HTTP request failed: " .. url)
+    local sent, response = pcall(requestFn, { Url = url, Method = "GET" })
+    if not sent or type(response) ~= "table" or tonumber(response.StatusCode) ~= 200 or type(response.Body) ~= "string" then
+        return nil
     end
     return response.Body
 end
 
-function xDTaraZ.Util.GuiRoot()
-    if gethui then
-        return gethui()
+---@param text string  shown as a Roblox notification, works before the menu exists
+function xDTaraZ.Util.Alert(text)
+    warn("[Driving Empire] " .. text)
+    task.spawn(function()
+        local starterGui = game:GetService("StarterGui")
+        for _ = 1, Config.AlertTries do
+            if pcall(starterGui.SetCore, starterGui, "SendNotification", { Title = "Mario Hub", Text = text, Duration = 10 }) then
+                return
+            end
+            task.wait(Config.AlertRetry)
+        end
+    end)
+end
+
+---@return table?  UI library, nil after telling the player why
+function xDTaraZ.Util.LoadLibrary()
+    local source = xDTaraZ.Util.HttpGet(Config.UiSource)
+    if not source or not source:sub(-64):find("return Library%s*$") then
+        xDTaraZ.Util.Alert("Could not download the menu. Check your connection and run it again.")
+        return nil
     end
-    return game:GetService("CoreGui")
+    local chunk, err = loadstring(source)
+    if not chunk then
+        xDTaraZ.Util.Alert("The menu failed to load on this executor: " .. tostring(err))
+        return nil
+    end
+    local ok, library = pcall(chunk)
+    if not ok or type(library) ~= "table" then
+        xDTaraZ.Util.Alert("The menu failed to load on this executor: " .. tostring(library))
+        return nil
+    end
+    return library
+end
+
+---@param instance Instance  parented to gethui, then CoreGui, then PlayerGui
+function xDTaraZ.Util.Mount(instance)
+    local ok, hui = pcall(gethui)
+    if ok and typeof(hui) == "Instance" and pcall(function() instance.Parent = hui end) then
+        return
+    end
+    if pcall(function() instance.Parent = game:GetService("CoreGui") end) then
+        return
+    end
+    instance.Parent = LocalPlayer:FindFirstChildOfClass("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", Config.LoadTimeout)
 end
 
 function xDTaraZ.Util.Stats()
     if State.Stats and State.Stats.Parent then return State.Stats end
     local folder = LocalPlayer:FindFirstChild("PlayerGui") and LocalPlayer.PlayerGui:FindFirstChild(LocalPlayer.Name .. "'s Stats")
-    State.Stats = folder or Data.GetLoadedStatsFolder(LocalPlayer)
+    local data = xDTaraZ.GameLib.Data
+    State.Stats = folder or (data and data.GetLoadedStatsFolder(LocalPlayer))
     return State.Stats
 end
 
 function xDTaraZ.Util.Cash()
     local stats = xDTaraZ.Util.Stats()
-    return stats and stats.Cash.Value or 0
+    local cash = stats and stats:FindFirstChild("Cash")
+    return cash and cash.Value or 0
 end
 
 function xDTaraZ.Util.Commas(number)
@@ -289,11 +351,74 @@ function xDTaraZ.Util.Commas(number)
     return text
 end
 
+xDTaraZ.GameLib = {}
+local GameLib = xDTaraZ.GameLib
+
+---@return Instance?  child at the end of the path, nil when any step is missing
+function GameLib.Find(root, ...)
+    local node = root
+    for _, name in ipairs({ ... }) do
+        node = node and node:FindFirstChild(name)
+    end
+    return node
+end
+
+---Plain require first; identity-3 executors get "Cannot require a non-RobloxScript module", so retry once from a fresh identity-2 thread.
+---@return table?  module, nil when this executor cannot load it
+function GameLib.Require(module)
+    if not module or not module:IsA("ModuleScript") then return nil end
+    local ok, loaded = pcall(require, module)
+    if ok then return loaded end
+    local setIdentity = setthreadidentity or setidentity
+    local getIdentity = getthreadidentity or getidentity
+    if type(setIdentity) ~= "function" or type(getIdentity) ~= "function" then return nil end
+    local done, retried = false, nil
+    task.spawn(function()
+        pcall(setIdentity, 2)
+        local switched = select(2, pcall(getIdentity)) == 2
+        local again, value = false, nil
+        if switched then again, value = pcall(require, module) end
+        done, retried = true, again and value or nil
+    end)
+    local deadline = os.clock() + Config.LoadTimeout
+    repeat
+        if not done then task.wait() end
+    until done or os.clock() > deadline
+    return retried
+end
+
+do
+    local modules = ReplicatedStorage:WaitForChild("Modules", Config.LoadTimeout)
+    GameLib.RemoteFolder = ReplicatedStorage:WaitForChild("Remotes", Config.LoadTimeout)
+    GameLib.Remotes = GameLib.Require(GameLib.Find(modules, "Shared", "Remotes"))
+    GameLib.Data = GameLib.Require(GameLib.Find(modules, "Shared", "Data"))
+    GameLib.JobsController = GameLib.Require(GameLib.Find(modules, "Client", "Jobs", "JobsController"))
+    GameLib.VehicleController = GameLib.Require(GameLib.Find(modules, "Client", "Vehicles", "VehicleController"))
+    GameLib.TeleportGuard = GameLib.Require(GameLib.Find(modules, "Client", "Exploit", "VehicleTeleportDetectionController"))
+    GameLib.PlayRewardUtil = GameLib.Require(GameLib.Find(modules, "Shared", "PlayRewards", "PlayRewardUtil"))
+end
+
+GameLib.Needs = {
+    AtmFarm = { "Remotes", "JobsController" },
+    DriveFarm = { "VehicleController", "TeleportGuard", "JobsController" },
+    AutoPlaytime = { "Remotes", "PlayRewardUtil" },
+    AutoClaimMisc = { "Remotes" },
+}
+
+---@return string?  first game module the feature needs that did not load
+function GameLib.Missing(idx)
+    for _, name in ipairs(GameLib.Needs[idx] or {}) do
+        if not GameLib[name] then return name end
+    end
+    return nil
+end
+
 function xDTaraZ.Player.Character()
     local character = LocalPlayer.Character
     if character and character.Parent and character:FindFirstChild("HumanoidRootPart") then
         return character
     end
+    return nil
 end
 
 function xDTaraZ.Player.Humanoid()
@@ -321,7 +446,8 @@ function xDTaraZ.Player.TeleportTo(cframe)
 end
 
 function xDTaraZ.Vehicle.Current()
-    local vehicle = VehicleController.getVehicle()
+    if not GameLib.VehicleController then return nil end
+    local vehicle = GameLib.VehicleController.getVehicle()
     return vehicle and vehicle.Object
 end
 
@@ -349,8 +475,8 @@ function xDTaraZ.Vehicle.Spawn(vehicleId)
     if not vehicleId then
         return nil
     end
-    RemoteFolder.VehicleEvent:FireServer("Spawn", vehicleId)
-    local deadline = os.clock() + 8
+    GameLib.RemoteFolder.VehicleEvent:FireServer("Spawn", vehicleId)
+    local deadline = os.clock() + Config.SpawnWait
     repeat
         task.wait(0.25)
     until xDTaraZ.Vehicle.Current() or os.clock() > deadline
@@ -358,7 +484,7 @@ function xDTaraZ.Vehicle.Spawn(vehicleId)
 end
 
 function xDTaraZ.Vehicle.Despawn()
-    RemoteFolder.VehicleEvent:FireServer("Despawn")
+    GameLib.RemoteFolder.VehicleEvent:FireServer("Despawn")
 end
 
 ---@return boolean  moved the car, or the character when on foot
@@ -371,7 +497,10 @@ function xDTaraZ.Vehicle.TeleportTo(cframe)
         end
         return root ~= nil
     end
-    TeleportGuard.AuthorizeNextTeleport()
+    if not GameLib.TeleportGuard then
+        return xDTaraZ.Player.TeleportTo(cframe)
+    end
+    GameLib.TeleportGuard.AuthorizeNextTeleport()
     car:PivotTo(cframe)
     if car.PrimaryPart then
         car.PrimaryPart.AssemblyLinearVelocity = Vector3.zero
@@ -407,7 +536,10 @@ function xDTaraZ.Jobs.Start(jobId)
     if xDTaraZ.Jobs.Current() == jobId then
         return true
     end
-    JobsController.RequestStartJobSession(jobId, "jobPad")
+    if not GameLib.JobsController then
+        return false
+    end
+    GameLib.JobsController.RequestStartJobSession(jobId, "jobPad")
     local deadline = os.clock() + 4
     repeat
         task.wait(0.2)
@@ -416,16 +548,19 @@ function xDTaraZ.Jobs.Start(jobId)
 end
 
 function xDTaraZ.Jobs.Leave()
-    if xDTaraZ.Jobs.Current() then
-        JobsController.RequestEndJobSession("jobPad")
+    if xDTaraZ.Jobs.Current() and GameLib.JobsController then
+        GameLib.JobsController.RequestEndJobSession("jobPad")
     end
 end
 
 function xDTaraZ.Atm.LoadCache()
-    if not (isfile and readfile) or not isfile(Config.SpawnerCacheFile) then
+    local read, text = pcall(function()
+        return isfile(Config.SpawnerCacheFile) and readfile(Config.SpawnerCacheFile)
+    end)
+    if not read or type(text) ~= "string" then
         return
     end
-    local ok, decoded = pcall(HttpService.JSONDecode, HttpService, readfile(Config.SpawnerCacheFile))
+    local ok, decoded = pcall(HttpService.JSONDecode, HttpService, text)
     if not ok or type(decoded) ~= "table" then
         return
     end
@@ -439,13 +574,15 @@ function xDTaraZ.Atm.SaveCache()
     for id, position in pairs(State.Spawners) do
         encoded[id] = { position.X, position.Y, position.Z }
     end
-    if not (writefile and makefolder and isfolder) then
-        return
+    local saved, err = pcall(function()
+        if not isfolder("Driving Empire") then
+            makefolder("Driving Empire")
+        end
+        writefile(Config.SpawnerCacheFile, HttpService:JSONEncode(encoded))
+    end)
+    if not saved then
+        warn("[Driving Empire] atm cache:", err)
     end
-    if not isfolder("Driving Empire") then
-        makefolder("Driving Empire")
-    end
-    writefile(Config.SpawnerCacheFile, HttpService:JSONEncode(encoded))
 end
 
 function xDTaraZ.Atm.SpawnerCount()
@@ -495,6 +632,7 @@ local function FindAtm(spawnerId)
             return spawner:FindFirstChild("CriminalATM")
         end
     end
+    return nil
 end
 
 function xDTaraZ.Atm.IsAvailable(atm)
@@ -528,6 +666,9 @@ end
 ---@return boolean, string?  robbed, else the server's reason
 function xDTaraZ.Atm.Bust(atm)
     local character = xDTaraZ.Player.Character()
+    if not GameLib.Remotes then
+        return false, "Not available on this executor"
+    end
     if not character or not xDTaraZ.Atm.IsAvailable(atm) then
         return false, "Unavailable"
     end
@@ -539,13 +680,13 @@ function xDTaraZ.Atm.Bust(atm)
     WaitForDebounce(character)
     character.HumanoidRootPart.CFrame = CFrame.lookAt(target + atm:GetPivot().LookVector * 3, target)
     task.wait(0.25)
-    local started, reason = Remotes.invokeServer("AttemptATMBustStart", atm)
+    local started, reason = GameLib.Remotes.invokeServer("AttemptATMBustStart", atm)
     if not started then
         return false, reason
     end
     task.wait(Config.BustWait)
     local earnedBefore = character:GetAttribute("CurrencyEarned") or 0
-    local done, failReason = Remotes.invokeServer("AttemptATMBustComplete", atm)
+    local done, failReason = GameLib.Remotes.invokeServer("AttemptATMBustComplete", atm)
     if not done then
         return false, failReason
     end
@@ -585,32 +726,46 @@ function xDTaraZ.Atm.Crimes()
     return character and character:GetAttribute("CrimesCommitted") or 0
 end
 
+---@return boolean        paid
+---@return number|string  cash gained, or why it did not pay
 function xDTaraZ.Atm.CashOut()
     if xDTaraZ.Atm.Crimes() < Config.CashOutCrimes then
-        return false
+        return false, "Need 5 stars first"
     end
-    local target = xDTaraZ.Atm.NearestDropOff()
-    if not target then
-        return false
-    end
+    local seed = xDTaraZ.Atm.NearestDropOff()
+    if not seed then return false, "No drop-off found" end
+
+    local stage = Vector3.new(0, 3, Config.DropOffStage)
     local cashBefore = xDTaraZ.Util.Cash()
-    xDTaraZ.Player.TeleportTo(CFrame.new(target + Vector3.new(0, 4, Config.DropOffApproach)))
-    task.wait(1)
-    target = xDTaraZ.Atm.NearestDropOff()
-    xDTaraZ.Player.TeleportTo(CFrame.new(target + Vector3.new(0, 3, 0)))
-    local deadline = os.clock() + Config.CashOutWait
-    repeat
-        task.wait(0.25)
-    until xDTaraZ.Util.Cash() > cashBefore or os.clock() > deadline
+    State.Banking = true
+    xDTaraZ.Player.TeleportTo(CFrame.new(seed + stage))
+    task.wait(Config.StreamWait)
+    local target = xDTaraZ.Atm.NearestDropOff() or seed
+
+    for _ = 1, Config.DropOffTries do
+        xDTaraZ.Player.TeleportTo(CFrame.new(target + stage))
+        task.wait(Config.DropOffSettle)
+        xDTaraZ.Player.TeleportTo(CFrame.new(target + Vector3.new(0, 3, 0)))
+        local deadline = os.clock() + Config.DropOffPayWait
+        repeat
+            task.wait(0.25)
+        until xDTaraZ.Util.Cash() > cashBefore or os.clock() > deadline
+        if xDTaraZ.Util.Cash() > cashBefore or xDTaraZ.Atm.Crimes() < Config.CashOutCrimes then break end
+    end
+    State.Banking = false
+
     local gained = xDTaraZ.Util.Cash() - cashBefore
-    State.AtmSession.CashedOut += math.max(0, gained)
-    return gained > 0, gained
+    if gained <= 0 then return false, "The drop-off did not pay" end
+    State.AtmSession.CashedOut += gained
+    return true, gained
 end
 
 function xDTaraZ.Atm.RunPass()
     if not xDTaraZ.Jobs.Start("Criminal") then
-        return 0
+        State.AtmWarn = "Could not start the Criminal job"
+        error(State.AtmWarn, 0)
     end
+    State.AtmWarn = nil
     if xDTaraZ.Atm.SpawnerCount() == 0 then
         xDTaraZ.Atm.Sweep()
     end
@@ -659,6 +814,7 @@ end
 
 function xDTaraZ.Atm.NearestAvailable()
     local root = xDTaraZ.Player.Root()
+    if not root then return nil end
     local best, bestDistance
     for _, spawner in ipairs(workspace.Game.Jobs.CriminalATMSpawners:GetChildren()) do
         local atm = spawner:FindFirstChild("CriminalATM")
@@ -672,36 +828,101 @@ function xDTaraZ.Atm.NearestAvailable()
     return best
 end
 
-function xDTaraZ.Drive.Start()
-    if State.DriveConn then
+---@return boolean, string?  robbed, else why not
+function xDTaraZ.Atm.RobNearest()
+    if not xDTaraZ.Jobs.Start("Criminal") then
+        return false, "Could not start the Criminal job"
+    end
+    local atm = xDTaraZ.Atm.NearestAvailable()
+    if not atm then
+        return false, "No ATM nearby"
+    end
+    return xDTaraZ.Atm.Bust(atm)
+end
+
+---@return table?  Center, Axis, Half, Top of the longest flat asphalt road; nil if none is loaded
+function xDTaraZ.Drive.FindRoad()
+    local road = State.DriveRoad
+    if road and road.Part.Parent then return road end
+    local best, bestLength = nil, Config.DriveRoadMin
+    for _, part in ipairs(workspace.Map:GetDescendants()) do
+        if not part:IsA("BasePart") or part.Material ~= Enum.Material.Asphalt or not part.CanCollide then continue end
+        local size = part.Size
+        local length, width = math.max(size.X, size.Z), math.min(size.X, size.Z)
+        local axis = size.X >= size.Z and part.CFrame.RightVector or part.CFrame.LookVector
+        if length > bestLength and width >= Config.DriveRoadWidth and math.abs(axis.Y) < Config.DriveRoadFlat then
+            best, bestLength = { Part = part, Axis = (axis * Vector3.new(1, 0, 1)).Unit, Length = length }, length
+        end
+    end
+    if not best then return nil end
+    local part = best.Part
+    State.DriveRoad = {
+        Part = part,
+        Center = part.Position,
+        Axis = best.Axis,
+        Half = best.Length / 2 - Config.DriveEdge,
+        Top = part.Position.Y + part.Size.Y / 2 + Config.DriveLift,
+    }
+    return State.DriveRoad
+end
+
+---@return table?  road, streamed in when it is not loaded yet
+function xDTaraZ.Drive.LoadRoad()
+    local road = xDTaraZ.Drive.FindRoad()
+    if road then return road end
+    pcall(LocalPlayer.RequestStreamAroundAsync, LocalPlayer, Config.DriveRoadSeed, Config.LoadTimeout)
+    task.wait(Config.StreamWait)
+    return xDTaraZ.Drive.FindRoad()
+end
+
+function xDTaraZ.Drive.Warp(road)
+    local start = road.Center - road.Axis * road.Half
+    local spot = Vector3.new(start.X, road.Top, start.Z)
+    xDTaraZ.Vehicle.TeleportTo(CFrame.lookAt(spot, spot + road.Axis))
+end
+
+function xDTaraZ.Drive.Step(road)
+    local car = xDTaraZ.Vehicle.Current()
+    local root = car and car.PrimaryPart
+    if not root or not xDTaraZ.Vehicle.IsSeated() then return end
+    local offset = root.Position - road.Center
+    local along = offset:Dot(road.Axis)
+    if along > road.Half then
+        xDTaraZ.Drive.Warp(road)
         return
     end
+    local side = offset - road.Axis * along
+    side = Vector3.new(side.X, 0, side.Z)
+    local fall = math.min(root.AssemblyLinearVelocity.Y, 0)
+    root.AssemblyLinearVelocity = road.Axis * Config.DriveSpeed - side * Config.DriveAlign + Vector3.new(0, fall, 0)
+end
+
+function xDTaraZ.Drive.Board()
+    local carId = State.Opt.DriveCar or xDTaraZ.Vehicle.Owned()[1]
+    for _ = 1, Config.SpawnTries do
+        local car = xDTaraZ.Vehicle.Spawn(carId)
+        if car then return car end
+    end
+    return nil
+end
+
+---@return boolean, string?  started, else why not
+function xDTaraZ.Drive.Start()
+    if State.DriveConn then return true end
     xDTaraZ.Jobs.Leave()
+    local road = xDTaraZ.Drive.LoadRoad()
+    if not road then return false, "No paved road found" end
     local car = xDTaraZ.Vehicle.Current()
     if not car or not xDTaraZ.Vehicle.IsSeated() then
-        car = xDTaraZ.Vehicle.Spawn(State.Opt.DriveCar or xDTaraZ.Vehicle.Owned()[1])
+        car = xDTaraZ.Drive.Board()
     end
-    if not car then
-        return false
-    end
+    if not car then return false, "No car to drive" end
     task.wait(1)
-    xDTaraZ.Vehicle.TeleportTo(CFrame.new(Config.DriveCenter + Vector3.new(Config.DriveRadius, 4, 0)))
+    xDTaraZ.Drive.Warp(road)
     task.wait(1)
+    if not State.Opt.DriveFarm or State.DriveConn then return true end
     State.DriveConn = RunService.Heartbeat:Connect(function()
-        local current = xDTaraZ.Vehicle.Current()
-        local root = current and current.PrimaryPart
-        if not root then
-            return
-        end
-        local offset = (root.Position - Config.DriveCenter) * Vector3.new(1, 0, 1)
-        if offset.Magnitude < 1 then
-            return
-        end
-        local tangent = Vector3.new(-offset.Z, 0, offset.X).Unit
-        local pull = offset.Unit * (Config.DriveRadius - offset.Magnitude) * 1.5
-        local fall = math.min(root.AssemblyLinearVelocity.Y, 0)
-        root.AssemblyLinearVelocity = tangent * Config.DriveSpeed + pull + Vector3.new(0, fall, 0)
-        root.AssemblyAngularVelocity = Vector3.new(0, -Config.DriveSpeed / Config.DriveRadius, 0)
+        xDTaraZ.Drive.Step(road)
     end)
     return true
 end
@@ -719,7 +940,7 @@ end
 
 function xDTaraZ.Rewards.ClaimPlaytime()
     local ok, unclaimed = pcall(function()
-        local pending = PlayRewardUtil.getUnclaimedRewards(LocalPlayer)
+        local pending = GameLib.PlayRewardUtil.getUnclaimedRewards(LocalPlayer)
         if type(pending) == "table" and pending.expect then
             pending = pending:expect()
         end
@@ -730,7 +951,7 @@ function xDTaraZ.Rewards.ClaimPlaytime()
     end
     local count = 0
     for index in pairs(unclaimed) do
-        Remotes.fireServer("PlayRewards", tonumber(index) or index, false)
+        GameLib.Remotes.fireServer("PlayRewards", tonumber(index) or index, false)
         count += 1
         task.wait(0.5)
     end
@@ -738,8 +959,9 @@ function xDTaraZ.Rewards.ClaimPlaytime()
 end
 
 function xDTaraZ.Rewards.ClaimMisc()
-    Remotes.fireServer("ClaimRewards")
-    Remotes.fireServer("RaceLeaderboardClaimRewards")
+    if not GameLib.Remotes then return end
+    GameLib.Remotes.fireServer("ClaimRewards")
+    GameLib.Remotes.fireServer("RaceLeaderboardClaimRewards")
 end
 
 function xDTaraZ.Rewards.Redeemed()
@@ -755,7 +977,7 @@ function xDTaraZ.Rewards.RedeemCodes(codes)
     local success = 0
     for _, code in ipairs(codes) do
         if not redeemedBefore[code] then
-            RemoteFolder.Code:FireServer(code)
+            GameLib.RemoteFolder.Code:FireServer(code)
             task.wait(Config.CodeDelay)
             if xDTaraZ.Rewards.Redeemed()[code] then
                 success += 1
@@ -829,12 +1051,23 @@ function xDTaraZ.Movement.Step()
     end
     if opt.Noclip then
         for _, part in ipairs(character:GetChildren()) do
-            if part:IsA("BasePart") then
+            if part:IsA("BasePart") and part.CanCollide then
+                State.CollideBackup[part] = true
                 part.CanCollide = false
             end
         end
     end
     xDTaraZ.Vehicle.ApplySpeed()
+end
+
+function xDTaraZ.Movement.SetNoclip(enabled)
+    if enabled then return end
+    for part, original in pairs(State.CollideBackup) do
+        if part.Parent then
+            part.CanCollide = original
+        end
+    end
+    table.clear(State.CollideBackup)
 end
 
 function xDTaraZ.Movement.ResetSpeed()
@@ -869,7 +1102,7 @@ end
 
 function xDTaraZ.Movement.Bind()
     table.insert(State.Conns, RunService.Stepped:Connect(function()
-        xDTaraZ.Util.Try(xDTaraZ.Movement.Step)
+        xDTaraZ.Scheduler.Run(xDTaraZ.Scheduler.MovementJob)
     end))
     table.insert(State.Conns, UserInputService.JumpRequest:Connect(function()
         local humanoid = xDTaraZ.Player.Humanoid()
@@ -895,13 +1128,13 @@ local function EspMark(key, adornee, text, color)
     highlight.OutlineColor = color
     highlight.Adornee = adornee
     highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    highlight.Parent = xDTaraZ.Util.GuiRoot()
+    xDTaraZ.Util.Mount(highlight)
     local billboard = Instance.new("BillboardGui")
     billboard.Size = UDim2.fromOffset(160, 28)
     billboard.StudsOffset = Vector3.new(0, 5, 0)
     billboard.AlwaysOnTop = true
     billboard.Adornee = adornee
-    billboard.Parent = xDTaraZ.Util.GuiRoot()
+    xDTaraZ.Util.Mount(billboard)
     local label = Instance.new("TextLabel")
     label.Size = UDim2.fromScale(1, 1)
     label.BackgroundTransparency = 1
@@ -976,11 +1209,11 @@ function xDTaraZ.Session.Bind()
 end
 
 function xDTaraZ.Session.Hop()
-    local ok, body = pcall(xDTaraZ.Util.HttpGet, ("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100"):format(game.PlaceId))
-    if not ok then
+    local body = xDTaraZ.Util.HttpGet(("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100"):format(game.PlaceId))
+    local ok, decoded = pcall(HttpService.JSONDecode, HttpService, body or "")
+    if not ok or type(decoded) ~= "table" then
         return false
     end
-    local decoded = HttpService:JSONDecode(body)
     local candidates = {}
     for _, server in ipairs(decoded.data or {}) do
         if server.id ~= game.JobId and server.playing < server.maxPlayers - 1 then
@@ -994,25 +1227,99 @@ function xDTaraZ.Session.Hop()
     return true
 end
 
-function xDTaraZ.Scheduler.Step()
+function xDTaraZ.Scheduler.AtmStep()
+    if State.Opt.AtmFarm then
+        xDTaraZ.Atm.FarmStep()
+        return
+    end
+    if not State.BankOnStop then return end
+    State.BankOnStop = false
+    if xDTaraZ.Atm.Crimes() < Config.CashOutCrimes then return end
+
+    local ok, got = xDTaraZ.Atm.CashOut()
+    if ok then
+        xDTaraZ.UI.Notify("Banked $" .. xDTaraZ.Util.Commas(got) .. " before stopping", "Success")
+    else
+        xDTaraZ.UI.Notify("Wanted cash not banked: " .. got, "Warning")
+    end
+end
+
+function xDTaraZ.Scheduler.RewardStep()
     local opt = State.Opt
     local now = os.clock()
-    if opt.AtmFarm then
-        xDTaraZ.Atm.FarmStep()
+    if not (opt.AutoPlaytime or opt.AutoClaimMisc) or now - State.LastReward <= Config.RewardInterval then
+        return
     end
-    if (opt.AutoPlaytime or opt.AutoClaimMisc) and now - State.LastReward > Config.RewardInterval then
-        State.LastReward = now
-        if opt.AutoPlaytime then
-            xDTaraZ.Rewards.ClaimPlaytime()
-        end
-        if opt.AutoClaimMisc then
-            xDTaraZ.Rewards.ClaimMisc()
-        end
+    State.LastReward = now
+    if opt.AutoPlaytime then
+        xDTaraZ.Rewards.ClaimPlaytime()
     end
+    if opt.AutoClaimMisc then
+        xDTaraZ.Rewards.ClaimMisc()
+    end
+end
+
+function xDTaraZ.Scheduler.EspStep()
+    local now = os.clock()
     if now - State.LastEsp > Config.EspInterval then
         State.LastEsp = now
         xDTaraZ.Esp.Refresh()
     end
+end
+
+xDTaraZ.Scheduler.Jobs = {
+    { "ATM Farm", xDTaraZ.Scheduler.AtmStep, { "AtmFarm" } },
+    { "Rewards", xDTaraZ.Scheduler.RewardStep, { "AutoPlaytime", "AutoClaimMisc" } },
+    { "ESP", xDTaraZ.Scheduler.EspStep, { "EspAtm", "EspCops", "EspDropOff" }, Core = true },
+}
+
+xDTaraZ.Scheduler.MovementJob = { "Movement", xDTaraZ.Movement.Step, { "SpeedEnabled", "Noclip" } }
+
+---@param job table  { label, step, toggle idxs }
+---@return boolean   any of the job's features is on
+function xDTaraZ.Scheduler.Wanted(job)
+    for _, idx in ipairs(job[3]) do
+        if State.Opt[idx] then return true end
+    end
+    return false
+end
+
+---Turns the job's features off after Config.JobFailLimit errors spanning Config.JobFailWindow seconds; the UI pump flips the toggles (this thread has touched game modules) and their callbacks restore.
+---@param job table  { label, step, toggle idxs, Core = never rests }
+function xDTaraZ.Scheduler.Run(job)
+    if job.Stopped then
+        if not xDTaraZ.Scheduler.Wanted(job) then return end
+        job.Stopped = nil
+    end
+    local ok, err = pcall(job[2])
+    if ok then
+        job.Streak = nil
+        return
+    end
+
+    local streak = job.Streak
+    if not streak then
+        streak = { count = 0, since = os.clock() }
+        job.Streak = streak
+        warn("[Driving Empire] " .. job[1] .. ":", err)
+    end
+    streak.count += 1
+    if streak.count < Config.JobFailLimit or os.clock() - streak.since < Config.JobFailWindow then return end
+
+    local switched = xDTaraZ.Scheduler.Wanted(job)
+    if job.Core and not switched then return end
+    job.Streak = nil
+    job.Stopped = not job.Core and not switched
+    for _, idx in ipairs(job[3]) do
+        if State.Opt[idx] then
+            State.Opt[idx] = false
+            table.insert(State.Halted, idx)
+        end
+    end
+
+    local reason = tostring(err):match("^[^\n]*")
+    warn("[Driving Empire] " .. job[1] .. " stopped:", reason)
+    if switched then xDTaraZ.UI.Notify(job[1] .. " stopped: " .. reason, "Warning") end
 end
 
 function xDTaraZ.Scheduler.Boot()
@@ -1023,7 +1330,9 @@ function xDTaraZ.Scheduler.Boot()
         while State.Alive do
             if not State.Busy then
                 State.Busy = true
-                xDTaraZ.Util.Try(xDTaraZ.Scheduler.Step)
+                for _, job in ipairs(xDTaraZ.Scheduler.Jobs) do
+                    xDTaraZ.Scheduler.Run(job)
+                end
                 State.Busy = false
             end
             task.wait(Config.TickDelay)
@@ -1039,6 +1348,7 @@ function xDTaraZ.Scheduler.Stop()
         end
     end
     xDTaraZ.Drive.Stop()
+    xDTaraZ.Movement.SetNoclip(false)
     xDTaraZ.Movement.ResetSpeed()
     xDTaraZ.Movement.SetFullbright(false)
     for _, conn in ipairs(State.Conns) do
@@ -1051,8 +1361,9 @@ end
 xDTaraZ.UI = {}
 local Library, T
 
-function xDTaraZ.UI.Notify(text)
-    State.Messages[#State.Messages + 1] = text
+---@param kind string?  Info, Success, Warning or Error
+function xDTaraZ.UI.Notify(text, kind)
+    State.Messages[#State.Messages + 1] = { text, kind }
 end
 
 function xDTaraZ.UI.Spawn(action)
@@ -1062,208 +1373,189 @@ function xDTaraZ.UI.Spawn(action)
 end
 
 ---@param onChange function?  runs after State.Opt is updated
-function xDTaraZ.UI.Write(key, onChange)
-    return function(value)
-        State.Opt[key] = value
-        if onChange then xDTaraZ.Util.Try(onChange, value) end
+function xDTaraZ.UI.StartDrive()
+    local started, reason = xDTaraZ.Drive.Start()
+    if started then return end
+    State.Opt.DriveFarm = false
+    table.insert(State.Halted, "DriveFarm")
+    xDTaraZ.UI.Notify(reason or "Could not start driving", "Warning")
+end
+
+function xDTaraZ.UI.Toggle(group, key, text, description, onChange, risky)
+    return group:AddToggle(key, {
+        Text = text,
+        Description = description,
+        Default = State.Opt[key],
+        Risky = risky,
+        Callback = function(value)
+            State.Opt[key] = value
+            if onChange then
+                xDTaraZ.Util.Try(onChange, value)
+            end
+        end,
+    })
+end
+
+function xDTaraZ.UI.Slider(group, key, text, description, min, max)
+    local opt = State.Opt
+    return group:AddSlider(key, {
+        Text = text,
+        Description = description,
+        Min = min, Max = max, Default = opt[key], Rounding = 0,
+        Callback = function(value)
+            opt[key] = tonumber(value) or opt[key]
+        end,
+    })
+end
+
+function xDTaraZ.UI.Panic()
+    for idx, toggle in pairs(Library.Toggles) do
+        if type(State.Opt[idx]) == "boolean" and toggle.Value == true then
+            toggle:SetValue(false)
+        end
     end
 end
 
-function xDTaraZ.UI.RegisterIcons()
-    if Library:HasIcon("car") then return end
-    Library:AddIcon("car", {
-        ".........",
-        ".........",
-        "..RRRR...",
-        ".RWWRWR..",
-        "RRRRRRRRR",
-        "RRRRRRRRY",
-        "RKKRRRKKR",
-        ".KK...KK.",
-        ".........",
-    }, {
-        R = Color3.fromRGB(226, 60, 52),
-        W = Color3.fromRGB(170, 220, 255),
-        Y = Color3.fromRGB(255, 220, 90),
-        K = Color3.fromRGB(40, 40, 48),
-    })
-end
-
----@return string, string  status text, status kind
+---@return string  one line for the status label
 function xDTaraZ.UI.AtmStatus()
-    if not State.Opt.AtmFarm then return "Off", "Idle" end
-    local crimes = xDTaraZ.Atm.Crimes()
-    if crimes >= State.Opt.CashOutCrimes then return "Cashing out", "Busy" end
-    return ("Robbing · %d stars"):format(crimes), "Running"
+    if State.Banking then return "Cashing out" end
+    if State.AtmWarn then return "Warn: " .. State.AtmWarn end
+    if not State.Opt.AtmFarm then return "Off" end
+    return ("Robbing · %d stars"):format(xDTaraZ.Atm.Crimes())
 end
 
-function xDTaraZ.UI.BuildMain(window)
-    window:AddTabSection(T("Main", "หลัก"))
-    local tab = window:AddTab(T("Main", "หลัก"), "mushroom", T("Status and links", "สถานะและลิงก์"))
-
-    local status = tab:AddLeftGroupbox(T("Status", "สถานะ"), "stats")
-    status:AddStatus("StatusAtm", { Text = T("ATM Farm", "ฟาร์ม ATM"), Icon = "money" })
-    status:AddStatus("StatusDrive", { Text = T("Auto Drive", "ขับรถอัตโนมัติ"), Icon = "car" })
-    status:AddStatus("StatusJob", { Text = T("Job", "อาชีพ"), Icon = "quest" })
-
-    local live = tab:AddLeftGroupbox(T("Live", "ตัวเลขสด"), "chart")
-    live:AddStat("StatCash", { Text = T("Cash", "เงิน"), Icon = "money", Format = "$%s", Token = "Coin" })
-    live:AddStat("StatRobbed", { Text = T("ATMs robbed", "ATM ที่ปล้น"), Icon = "loot", Format = "%s" })
-    live:AddStat("StatWanted", { Text = T("Cash on you", "เงินที่ถืออยู่"), Icon = "warn", Format = "$%s" })
-    live:AddStat("StatCashedOut", { Text = T("Cashed out", "ส่งเงินแล้ว"), Icon = "success", Format = "$%s", Token = "Good" })
-    live:AddStat("StatSpots", { Text = T("ATM spots known", "จุด ATM ที่รู้"), Icon = "map", Format = "%s" })
-
-    local quick = tab:AddRightGroupbox(T("Quick", "ด่วน"), "lightning")
-    quick:AddButton({ Text = T("Panic - All Off", "ฉุกเฉิน ปิดทั้งหมด"), Icon = "stop", Style = "Danger", Callback = function()
-        for _, toggle in pairs(Library.Toggles) do
-            if toggle.Value == true then toggle:SetValue(false) end
-        end
-    end })
-
-    Library.Kit.Discord.Build(tab, Config.Discord)
+function xDTaraZ.UI.StatusText()
+    local session = State.AtmSession
+    local char = xDTaraZ.Player.Character()
+    local carried = char and char:GetAttribute("CurrencyEarned") or 0
+    return ("ATM Farm: %s · Drive: %s\nCash $%s · Job %s · Stars %d\nATMs robbed %d · Wanted cash $%s · Cashed out $%s\nATM spots known %d"):format(
+        xDTaraZ.UI.AtmStatus(), State.Opt.DriveFarm and "Driving" or "Off",
+        xDTaraZ.Util.Commas(xDTaraZ.Util.Cash()), tostring(xDTaraZ.Jobs.Current() or "Citizen"), xDTaraZ.Atm.Crimes(),
+        session.Busted, xDTaraZ.Util.Commas(carried), xDTaraZ.Util.Commas(session.CashedOut), xDTaraZ.Atm.SpawnerCount())
 end
 
-function xDTaraZ.UI.BuildAtm(tab)
-    local opt = State.Opt
-    local atm = tab:AddLeftGroupbox(T("ATM Farm", "ฟาร์ม ATM"), "money")
-    atm:AddFeature("AtmFarm", {
-        Text = T("Auto ATM Farm", "ฟาร์ม ATM อัตโนมัติ"),
-        Description = T("Robs every ATM on the map, then cashes out", "ปล้น ATM ทุกตู้ในแมพ แล้วส่งเงิน"),
-        Icon = "money",
-        Risky = true,
-        Badge = T("Risky", "เสี่ยง"),
-        Keybind = { Default = "None", Mode = "Toggle" },
-        Callback = xDTaraZ.UI.Write("AtmFarm"),
-        Now = { Text = T("Rob Nearest", "ปล้นตู้ใกล้สุด"), Icon = "loot", Callback = xDTaraZ.UI.Spawn(function()
-            xDTaraZ.Jobs.Start("Criminal")
-            local target = xDTaraZ.Atm.NearestAvailable()
-            if not target then
-                xDTaraZ.UI.Notify("No ATM nearby")
-                return
-            end
-            local ok, reason = xDTaraZ.Atm.Bust(target)
-            xDTaraZ.UI.Notify(ok and "ATM robbed" or ("Failed: " .. tostring(reason)))
-        end) },
-        Options = function(options)
-            options:AddToggle("HopWhenEmpty", { Text = T("Hop when empty", "ย้ายเซิร์ฟเมื่อ ATM หมด"), Icon = "hop", Callback = xDTaraZ.UI.Write("HopWhenEmpty") })
-            options:AddToggle("AvoidCops", { Text = T("Avoid police", "หลบตำรวจ"), Icon = "shield", Callback = xDTaraZ.UI.Write("AvoidCops") })
-        end,
-    })
-    atm:AddStepper("CashOutCrimes", {
-        Text = T("Cash out at robberies", "ส่งเงินเมื่อปล้นครบ"),
-        Description = T("Higher = more cash per trip, more risk", "ยิ่งมากยิ่งได้ต่อรอบ แต่เสี่ยงขึ้น"),
-        Icon = "trophy",
-        Min = 5, Max = 30, Step = 1, Default = opt.CashOutCrimes,
-        Callback = function(value) opt.CashOutCrimes = tonumber(value) or opt.CashOutCrimes end,
-    })
-    atm:AddButton({ Text = T("Cash Out Now", "ส่งเงินเดี๋ยวนี้"), Icon = "money", Style = "Success", Callback = xDTaraZ.UI.Spawn(function()
-        local ok, gained = xDTaraZ.Atm.CashOut()
-        xDTaraZ.UI.Notify(ok and ("Cashed out $" .. xDTaraZ.Util.Commas(gained)) or "Need 5 stars first")
-    end) }):AddButton({ Text = T("Scan Map", "สแกนแมพ"), Icon = "radar", Style = "Ghost", Callback = xDTaraZ.UI.Spawn(function()
+function xDTaraZ.UI.BuildAtm(farmTab)
+    local atmBox = farmTab:AddLeftGroupbox(T("ATM Farm", "ฟาร์ม ATM"))
+    local wasOn = false
+    xDTaraZ.UI.Toggle(atmBox, "AtmFarm", T("Auto ATM Farm", "ฟาร์ม ATM อัตโนมัติ"), T("Robs every ATM on the map with the full crime bonus, then cashes out", "ปล้น ATM ทุกตู้ในแมพพร้อมโบนัสอาชญากรรมเต็ม แล้วส่งเงิน"), function(on)
+        if on then State.AtmWarn = nil end
+        State.BankOnStop = wasOn and not on and xDTaraZ.Atm.Crimes() >= Config.CashOutCrimes
+        wasOn = on
+    end, true):AddKeyPicker("AtmFarmKey", { Default = "None", Mode = "Toggle" })
+    xDTaraZ.UI.Toggle(atmBox, "HopWhenEmpty", T("Server Hop When Empty", "ย้ายเซิร์ฟเมื่อ ATM หมด"), T("Moves to a new server once every ATM is taken", "ย้ายไปเซิร์ฟใหม่เมื่อ ATM ถูกปล้นหมดแล้ว"))
+    xDTaraZ.UI.Toggle(atmBox, "AvoidCops", T("Avoid Police", "หลบตำรวจ"), T("Skips ATMs with police standing close", "ข้าม ATM ที่มีตำรวจอยู่ใกล้"))
+    xDTaraZ.UI.Slider(atmBox, "CashOutCrimes", T("Cash Out At Robberies", "ส่งเงินเมื่อปล้นครบ"), T("Banks the loot after this many robberies (higher = more risk)", "ส่งเงินหลังปล้นครบจำนวนนี้ (ยิ่งมากยิ่งเสี่ยง)"), 5, 30)
+
+    atmBox:AddButton({ Text = T("Rob Nearest ATM", "ปล้น ATM ที่ใกล้ที่สุด"), Style = "Primary", Func = xDTaraZ.UI.Spawn(function()
+        local ok, reason = xDTaraZ.Atm.RobNearest()
+        xDTaraZ.UI.Notify(ok and "ATM robbed" or ("Failed: " .. tostring(reason)), ok and "Success" or "Warning")
+    end) }):AddButton({ Text = T("Cash Out Now", "ส่งเงินเดี๋ยวนี้"), Func = xDTaraZ.UI.Spawn(function()
+        local ok, got = xDTaraZ.Atm.CashOut()
+        xDTaraZ.UI.Notify(ok and ("Cashed out $" .. xDTaraZ.Util.Commas(got)) or got, ok and "Success" or "Warning")
+    end) })
+    atmBox:AddButton({ Text = T("Scan Map For ATMs", "สแกนหา ATM ทั้งแมพ"), Func = xDTaraZ.UI.Spawn(function()
         xDTaraZ.UI.Notify(("Found %d ATM spots"):format(xDTaraZ.Atm.Sweep()))
     end) })
 end
 
 function xDTaraZ.UI.BuildFarm(window)
-    window:AddTabSection(T("Farming", "ฟาร์ม"))
-    local tab = window:AddTab(T("Farm", "ฟาร์ม"), "autofarm", T("ATMs, jobs and driving", "ATM อาชีพ และขับรถ"))
-    xDTaraZ.UI.BuildAtm(tab)
+    local farmTab = window:AddTab(T("Farm", "ฟาร์ม"), "zap", T("Money farming", "ฟาร์มเงิน"))
 
-    local drive = tab:AddRightGroupbox(T("Drive Farm", "ฟาร์มขับรถ"), "car")
-    drive:AddFeature("DriveFarm", {
-        Text = T("Auto Drive", "ขับรถอัตโนมัติ"),
-        Description = T("Drives laps on its own for cash", "ขับวนเองเพื่อรับเงิน"),
-        Icon = "car",
-        Keybind = { Default = "None", Mode = "Toggle" },
-        Callback = xDTaraZ.UI.Write("DriveFarm", function(on)
-            if not on then return xDTaraZ.Drive.Stop() end
-            if not xDTaraZ.Drive.Start() then xDTaraZ.UI.Notify("No car to drive") end
-        end),
-    })
+    local statusBox = farmTab:AddLeftGroupbox(T("Status", "สถานะ"))
+    xDTaraZ.UI.StatusLabel = statusBox:AddLabel("Loading...", true)
+    statusBox:AddButton({ Text = T("Panic - All Off", "ฉุกเฉิน ปิดทั้งหมด"), Style = "Danger", Func = xDTaraZ.UI.Panic })
 
-    local jobs = tab:AddRightGroupbox(T("Jobs", "อาชีพ"), "quest")
-    jobs:AddSegmented("JobPick", {
-        Text = T("Job", "อาชีพ"),
-        Icon = "players",
+    xDTaraZ.UI.BuildAtm(farmTab)
+
+    local discordBox = farmTab:AddRightGroupbox(T("Discord", "Discord"), "link")
+    discordBox:AddLabel(Config.Discord)
+    discordBox:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ Discord"), Style = "Primary", Func = function()
+        local copy = setclipboard or toclipboard
+        local copied = type(copy) == "function" and pcall(copy, Config.Discord)
+        xDTaraZ.UI.Notify(copied and "Discord link copied" or Config.Discord)
+    end })
+
+    local jobBox = farmTab:AddRightGroupbox(T("Jobs", "อาชีพ"))
+    jobBox:AddDropdown("JobPick", {
+        Text = T("Switch Job", "เปลี่ยนอาชีพ"),
         Values = { "Criminal", "Security", "Delivery" },
-        Default = "Criminal",
-        Callback = xDTaraZ.UI.Write("JobPick"),
+        Default = 1,
+        Callback = function(value)
+            State.Opt.JobPick = value
+        end,
     })
-    jobs:AddButton({ Text = T("Start Job", "เริ่มงาน"), Icon = "play", Style = "Primary", Callback = xDTaraZ.UI.Spawn(function()
+    jobBox:AddButton({ Text = T("Start Job", "เริ่มงาน"), Style = "Primary", Func = xDTaraZ.UI.Spawn(function()
         xDTaraZ.UI.Notify(xDTaraZ.Jobs.Start(State.Opt.JobPick or "Criminal") and "Job started" or "Could not start job")
-    end) }):AddButton({ Text = T("Quit Job", "ออกจากงาน"), Icon = "close", Callback = xDTaraZ.UI.Spawn(xDTaraZ.Jobs.Leave) })
+    end) }):AddButton({ Text = T("Quit Job", "ออกจากงาน"), Func = xDTaraZ.UI.Spawn(xDTaraZ.Jobs.Leave) })
+
+    local driveBox = farmTab:AddRightGroupbox(T("Drive Farm", "ฟาร์มขับรถ"))
+    xDTaraZ.UI.Toggle(driveBox, "DriveFarm", T("Auto Drive", "ขับรถอัตโนมัติ"), T("Drives laps on its own for passive cash", "ขับวนเองเพื่อรับเงินจากการขับ"), function(on)
+        if not on then
+            xDTaraZ.Drive.Stop()
+            return
+        end
+        task.spawn(xDTaraZ.Util.Try, xDTaraZ.UI.StartDrive)
+    end):AddKeyPicker("DriveFarmKey", { Default = "None", Mode = "Toggle" })
 end
 
 function xDTaraZ.UI.BuildRewards(window)
-    local tab = window:AddTab(T("Rewards", "รางวัล"), "loot", T("Codes and claims", "โค้ดและรับรางวัล"))
+    local rewardTab = window:AddTab(T("Rewards", "รางวัล"), "bell", T("Codes and claims", "โค้ดและรับรางวัล"))
 
-    local claims = tab:AddLeftGroupbox(T("Claims", "รับรางวัล"), "loot")
-    claims:AddFeature("AutoPlaytime", {
-        Text = T("Auto Playtime Rewards", "รับรางวัลเวลาเล่นอัตโนมัติ"),
-        Description = T("Cash, cars and packs as soon as they unlock", "เงิน รถ และแพ็กทันทีที่ปลดล็อก"),
-        Icon = "clock",
-        Callback = xDTaraZ.UI.Write("AutoPlaytime"),
-        Now = { Text = T("Claim All Now", "รับทั้งหมดเดี๋ยวนี้"), Icon = "loot", Callback = xDTaraZ.UI.Spawn(function()
-            local count = xDTaraZ.Rewards.ClaimPlaytime()
-            xDTaraZ.Rewards.ClaimMisc()
-            xDTaraZ.UI.Notify(("Claimed %d playtime rewards"):format(count))
-        end) },
-    })
-    claims:AddToggle("AutoClaimMisc", {
-        Text = T("Auto Claim Pending", "รับรางวัลค้างอัตโนมัติ"),
-        Description = T("Race and event rewards", "รางวัลแข่งและอีเวนต์"),
-        Icon = "trophy",
-        Callback = xDTaraZ.UI.Write("AutoClaimMisc"),
-    })
-
-    local codes = tab:AddRightGroupbox(T("Codes", "โค้ด"), "code")
-    codes:AddButton({ Text = T("Redeem All Codes", "ใช้โค้ดทั้งหมด"), Icon = "code", Style = "Primary", Callback = xDTaraZ.UI.Spawn(function()
+    local codeBox = rewardTab:AddLeftGroupbox(T("Codes", "โค้ด"))
+    codeBox:AddButton({ Text = T("Redeem All Codes", "ใช้โค้ดทั้งหมด"), Style = "Primary", Func = xDTaraZ.UI.Spawn(function()
         local count, cash = xDTaraZ.Rewards.RedeemCodes(Config.Codes)
         xDTaraZ.UI.Notify(("Redeemed %d new codes (+$%s)"):format(count, xDTaraZ.Util.Commas(cash)))
     end) })
-    codes:AddInput("Code", {
-        Text = T("Custom code", "ใส่โค้ดเอง"),
-        Icon = "edit",
+    codeBox:AddInput("Code", {
+        Text = T("Custom Code", "ใส่โค้ดเอง"),
         Default = "",
         Finished = true,
-        Save = false,
-        Callback = xDTaraZ.UI.Write("Code"),
+        NoSave = true,
+        Callback = function(value)
+            State.Opt.Code = value
+        end,
     })
-    codes:AddButton({ Text = T("Redeem", "ใช้โค้ด"), Icon = "check", Callback = xDTaraZ.UI.Spawn(function()
+    codeBox:AddButton({ Text = T("Redeem", "ใช้โค้ด"), Func = xDTaraZ.UI.Spawn(function()
         local count = xDTaraZ.Rewards.RedeemCodes({ State.Opt.Code })
         xDTaraZ.UI.Notify(count > 0 and "Code redeemed" or "Code invalid or already used")
+    end) })
+
+    local claimBox = rewardTab:AddRightGroupbox(T("Claims", "รับรางวัล"))
+    xDTaraZ.UI.Toggle(claimBox, "AutoPlaytime", T("Auto Playtime Rewards", "รับรางวัลเวลาเล่นอัตโนมัติ"), T("Claims cash, cars and packs as soon as they unlock", "รับเงิน รถ และแพ็กทันทีที่ปลดล็อก"))
+        :AddKeyPicker("AutoPlaytimeKey", { Default = "None", Mode = "Toggle" })
+    xDTaraZ.UI.Toggle(claimBox, "AutoClaimMisc", T("Auto Claim Pending", "รับรางวัลค้างอัตโนมัติ"), T("Claims pending race and event rewards", "รับรางวัลแข่งและอีเวนต์ที่ค้างอยู่"))
+    claimBox:AddButton({ Text = T("Claim All Now", "รับทั้งหมดเดี๋ยวนี้"), Style = "Primary", Func = xDTaraZ.UI.Spawn(function()
+        local count = xDTaraZ.Rewards.ClaimPlaytime()
+        xDTaraZ.Rewards.ClaimMisc()
+        xDTaraZ.UI.Notify(("Claimed %d playtime rewards"):format(count))
     end) })
 end
 
 function xDTaraZ.UI.BuildVehicle(window)
-    local tab = window:AddTab(T("Vehicle", "รถ"), "car", T("Garage and speed", "โรงรถและความเร็ว"))
-    local owned = xDTaraZ.Vehicle.Owned()
+    local carTab = window:AddTab(T("Vehicle", "รถ"), "play", T("Cars and driving", "รถและการขับ"))
+    local read, owned = pcall(xDTaraZ.Vehicle.Owned)
+    owned = read and owned or {}
     State.Opt.DriveCar = owned[1]
 
-    local garage = tab:AddLeftGroupbox(T("Garage", "โรงรถ"), "car")
-    local picker = garage:AddDropdown("DriveCar", {
+    local carBox = carTab:AddLeftGroupbox(T("Garage", "โรงรถ"))
+    local carDropdown = carBox:AddDropdown("DriveCar", {
         Text = T("Car", "รถ"),
-        Icon = "car",
         Values = owned,
-        Default = owned[1],
+        Default = 1,
         Searchable = true,
-        Callback = xDTaraZ.UI.Write("DriveCar"),
+        Callback = function(value)
+            State.Opt.DriveCar = value
+        end,
     })
-    garage:AddButton({ Text = T("Spawn", "เรียกรถ"), Icon = "play", Style = "Primary", Callback = xDTaraZ.UI.Spawn(function()
+    carBox:AddButton({ Text = T("Spawn Car", "เรียกรถ"), Style = "Primary", Func = xDTaraZ.UI.Spawn(function()
         xDTaraZ.UI.Notify(xDTaraZ.Vehicle.Spawn(State.Opt.DriveCar) and "Car spawned" or "Spawn failed")
-    end) }):AddButton({ Text = T("Despawn", "เก็บรถ"), Icon = "trash", Callback = xDTaraZ.UI.Spawn(xDTaraZ.Vehicle.Despawn) })
-    garage:AddButton({ Text = T("Refresh Garage", "รีเฟรชโรงรถ"), Icon = "refresh", Style = "Ghost", Callback = function()
-        picker:SetValues(xDTaraZ.Vehicle.Owned())
+    end) }):AddButton({ Text = T("Despawn", "เก็บรถ"), Func = xDTaraZ.UI.Spawn(xDTaraZ.Vehicle.Despawn) })
+    carBox:AddButton({ Text = T("Refresh Garage", "รีเฟรชโรงรถ"), Func = function()
+        carDropdown:SetValues(xDTaraZ.Vehicle.Owned())
     end })
 
-    local tune = tab:AddRightGroupbox(T("Performance", "สมรรถนะ"), "speed")
-    tune:AddSlider("CarSpeed", {
-        Text = T("Car speed boost", "เร่งความเร็วรถ"),
-        Description = T("Holds this speed while pressing W (0 = off)", "คงความเร็วนี้ขณะกด W (0 = ปิด)"),
-        Icon = "speed",
-        Min = 0, Max = 600, Default = State.Opt.CarSpeed, Rounding = 0,
-        Callback = function(value) State.Opt.CarSpeed = tonumber(value) or 0 end,
-    })
+    local tuneBox = carTab:AddRightGroupbox(T("Performance", "สมรรถนะ"))
+    xDTaraZ.UI.Slider(tuneBox, "CarSpeed", T("Car Speed Boost", "เร่งความเร็วรถ"), T("Holds this speed while pressing W (0 = off)", "คงความเร็วนี้ขณะกด W (0 = ปิด)"), 0, 600)
 end
 
 local function PlayerNames()
@@ -1275,128 +1567,131 @@ local function PlayerNames()
 end
 
 function xDTaraZ.UI.BuildTeleport(window)
-    local tab = window:AddTab(T("Teleport", "วาร์ป"), "teleport", T("Go anywhere", "ไปได้ทุกที่"))
-    local destNames, destinations = xDTaraZ.Teleport.Destinations()
+    local teleportTab = window:AddTab(T("Teleport", "วาร์ป"), "globe", T("Go anywhere", "ไปได้ทุกที่"))
+    local read, destNames, destinations = pcall(xDTaraZ.Teleport.Destinations)
+    if not read then destNames, destinations = {}, {} end
 
-    local places = tab:AddLeftGroupbox(T("Places", "สถานที่"), "waypoint")
-    local placePicker = places:AddDropdown("Place", {
+    local placeBox = teleportTab:AddLeftGroupbox(T("Places", "สถานที่"))
+    local placeDropdown = placeBox:AddDropdown("Place", {
         Text = T("Destination", "จุดหมาย"),
-        Icon = "map",
         Values = destNames,
-        Default = destNames[1],
+        Default = 1,
         Searchable = true,
-        Callback = xDTaraZ.UI.Write("Place"),
+        Callback = function(value)
+            State.Opt.Place = value
+        end,
     })
-    places:AddButton({ Text = T("Teleport", "วาร์ป"), Icon = "teleport", Style = "Primary", Callback = xDTaraZ.UI.Spawn(function()
+    placeBox:AddButton({ Text = T("Teleport", "วาร์ป"), Style = "Primary", Func = xDTaraZ.UI.Spawn(function()
         xDTaraZ.Teleport.Go(destinations[State.Opt.Place or destNames[1]])
-    end) }):AddButton({ Text = T("Refresh", "รีเฟรช"), Icon = "refresh", Style = "Ghost", Callback = function()
+    end) }):AddButton({ Text = T("Refresh", "รีเฟรช"), Func = function()
         destNames, destinations = xDTaraZ.Teleport.Destinations()
-        placePicker:SetValues(destNames)
+        placeDropdown:SetValues(destNames)
     end })
 
-    local people = tab:AddRightGroupbox(T("Players", "ผู้เล่น"), "players")
-    local playerPicker = people:AddDropdown("TargetPlayer", {
+    local playerBox = teleportTab:AddRightGroupbox(T("Players", "ผู้เล่น"))
+    local playerDropdown = playerBox:AddDropdown("TargetPlayer", {
         Text = T("Player", "ผู้เล่น"),
-        Icon = "player",
         Values = PlayerNames(),
         Searchable = true,
         AllowNull = true,
-        Save = false,
-        Callback = xDTaraZ.UI.Write("TargetPlayer"),
+        NoSave = true,
+        Callback = function(value)
+            State.Opt.TargetPlayer = value
+        end,
     })
-    people:AddButton({ Text = T("Teleport To Player", "วาร์ปไปหาผู้เล่น"), Icon = "follow", Style = "Primary", Callback = xDTaraZ.UI.Spawn(function()
+    playerBox:AddButton({ Text = T("Teleport To Player", "วาร์ปไปหาผู้เล่น"), Style = "Primary", Func = xDTaraZ.UI.Spawn(function()
         xDTaraZ.Teleport.ToPlayer(State.Opt.TargetPlayer)
-    end) }):AddButton({ Text = T("Refresh", "รีเฟรช"), Icon = "refresh", Style = "Ghost", Callback = function()
-        playerPicker:SetValues(PlayerNames())
+    end) }):AddButton({ Text = T("Refresh", "รีเฟรช"), Func = function()
+        playerDropdown:SetValues(PlayerNames())
     end })
 end
 
 function xDTaraZ.UI.BuildPlayer(window)
-    local opt = State.Opt
-    local tab = window:AddTab(T("Player", "ผู้เล่น"), "player", T("Movement, world and server", "การเคลื่อนที่ โลก และเซิร์ฟ"))
+    local playerTab = window:AddTab(T("Player", "ผู้เล่น"), "user", T("Movement", "การเคลื่อนที่"))
 
-    local move = tab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "speed")
-    move:AddFeature("SpeedEnabled", {
-        Text = T("Custom Speed", "ปรับความเร็วเอง"),
-        Description = T("Walk speed and jump while on foot", "ความเร็วเดินและแรงกระโดดตอนเดิน"),
-        Icon = "speed",
-        Keybind = { Default = "None", Mode = "Toggle" },
-        Callback = xDTaraZ.UI.Write("SpeedEnabled", function(on)
-            if not on then xDTaraZ.Movement.ResetSpeed() end
-        end),
-        Options = function(options)
-            options:AddSlider("WalkSpeed", { Text = T("Walk speed", "ความเร็วเดิน"), Icon = "speed", Min = 16, Max = 200, Default = opt.WalkSpeed, Rounding = 0, Callback = function(value) opt.WalkSpeed = tonumber(value) or opt.WalkSpeed end })
-            options:AddSlider("JumpPower", { Text = T("Jump power", "แรงกระโดด"), Icon = "jump", Min = 50, Max = 300, Default = opt.JumpPower, Rounding = 0, Callback = function(value) opt.JumpPower = tonumber(value) or opt.JumpPower end })
-        end,
-    })
-    move:AddToggle("Noclip", { Text = T("Noclip", "ทะลุวัตถุ"), Icon = "noclip", Callback = xDTaraZ.UI.Write("Noclip") })
-    move:AddToggle("InfiniteJump", { Text = T("Infinite Jump", "กระโดดไม่จำกัด"), Icon = "infjump", Callback = xDTaraZ.UI.Write("InfiniteJump") })
+    local moveBox = playerTab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"))
+    xDTaraZ.UI.Toggle(moveBox, "SpeedEnabled", T("Custom Speed", "ปรับความเร็วเอง"), T("Uses the speed and jump below while on foot", "ใช้ความเร็วและแรงกระโดดด้านล่างตอนเดิน"), function(on)
+        if not on then xDTaraZ.Movement.ResetSpeed() end
+    end):AddKeyPicker("SpeedEnabledKey", { Default = "None", Mode = "Toggle" })
+    xDTaraZ.UI.Slider(moveBox, "WalkSpeed", T("Walk Speed", "ความเร็วเดิน"), nil, 16, 200)
+    xDTaraZ.UI.Slider(moveBox, "JumpPower", T("Jump Power", "แรงกระโดด"), nil, 50, 300)
+    xDTaraZ.UI.Toggle(moveBox, "Noclip", T("Noclip", "ทะลุวัตถุ"), T("Walk through walls", "เดินทะลุกำแพง"), xDTaraZ.Movement.SetNoclip)
+    xDTaraZ.UI.Toggle(moveBox, "InfiniteJump", T("Infinite Jump", "กระโดดไม่จำกัด"), T("Jump again in mid air", "กระโดดซ้ำกลางอากาศได้"))
 
-    local world = tab:AddRightGroupbox(T("World", "โลก"), "sun")
-    world:AddToggle("Fullbright", { Text = T("Fullbright", "สว่างเต็มจอ"), Icon = "fullbright", Callback = xDTaraZ.UI.Write("Fullbright", xDTaraZ.Movement.SetFullbright) })
-
-    local server = tab:AddRightGroupbox(T("Server", "เซิร์ฟเวอร์"), "server")
-    server:AddToggle("AntiAfk", { Text = T("Anti AFK", "กันหลุด AFK"), Icon = "antiafk", Callback = xDTaraZ.UI.Write("AntiAfk") })
-    server:AddToggle("AutoRejoin", { Text = T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), Icon = "rejoin", Callback = xDTaraZ.UI.Write("AutoRejoin") })
-    server:AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), Icon = "hop", Callback = xDTaraZ.UI.Spawn(xDTaraZ.Session.Hop) })
+    local worldBox = playerTab:AddRightGroupbox(T("World", "โลก"))
+    xDTaraZ.UI.Toggle(worldBox, "Fullbright", T("Fullbright", "สว่างเต็มจอ"), T("Always daylight", "กลางวันตลอด"), xDTaraZ.Movement.SetFullbright)
 end
 
 function xDTaraZ.UI.BuildVisuals(window)
-    local tab = window:AddTab(T("Visuals", "การมองเห็น"), "esp", T("ATMs, players and drop-offs", "ATM ผู้เล่น และจุดส่งเงิน"))
-    local esp = tab:AddLeftGroupbox(T("ESP", "ESP"), "esp")
-    esp:AddToggle("EspAtm", { Text = T("ATMs", "ATM"), Description = T("Every ATM you can rob with its rarity", "ATM ที่ปล้นได้ทุกตู้พร้อมระดับ"), Icon = "money", Callback = xDTaraZ.UI.Write("EspAtm") })
-    esp:AddToggle("EspCops", { Text = T("Players By Job", "ผู้เล่นตามอาชีพ"), Description = T("Blue = police, red = outlaw, orange = delivery", "น้ำเงิน = ตำรวจ, แดง = โจร, ส้ม = ส่งของ"), Icon = "players", Callback = xDTaraZ.UI.Write("EspCops") })
-    esp:AddToggle("EspDropOff", { Text = T("Drop-off Points", "จุดส่งเงิน"), Description = T("Where outlaws cash out", "จุดที่โจรไปส่งเงิน"), Icon = "waypoint", Callback = xDTaraZ.UI.Write("EspDropOff") })
+    local visualTab = window:AddTab(T("Visuals", "ภาพ"), "eye", T("ESP", "ESP"))
+    local espBox = visualTab:AddLeftGroupbox(T("ESP", "ESP"))
+    xDTaraZ.UI.Toggle(espBox, "EspAtm", T("ATMs", "ATM"), T("Shows every ATM you can rob with its rarity", "โชว์ ATM ที่ปล้นได้ทุกตู้พร้อมระดับ"))
+    xDTaraZ.UI.Toggle(espBox, "EspCops", T("Players By Job", "ผู้เล่นตามอาชีพ"), T("Blue = police, red = outlaw, orange = delivery", "น้ำเงิน = ตำรวจ, แดง = โจร, ส้ม = ส่งของ"))
+    xDTaraZ.UI.Toggle(espBox, "EspDropOff", T("Drop-off Points", "จุดส่งเงิน"), T("Where outlaws cash out", "จุดที่โจรไปส่งเงิน"))
 end
 
-function xDTaraZ.UI.Live()
-    local status = Library.Lib.Status
-    local session = State.AtmSession
-    status("StatusAtm", xDTaraZ.UI.AtmStatus, 1)
-    status("StatusDrive", function()
-        if not State.Opt.DriveFarm then return "Off", "Idle" end
-        return "Driving", "Running"
-    end, 1)
-    status("StatusJob", function() return tostring(xDTaraZ.Jobs.Current() or "Citizen"), "Idle" end, 1)
+function xDTaraZ.UI.BuildSettings(window)
+    local settingsTab = window:AddSettingsTab()
+    local sessionBox = settingsTab:AddLeftGroupbox(T("Session", "เซสชัน"))
+    xDTaraZ.UI.Toggle(sessionBox, "AntiAfk", T("Anti AFK", "กันหลุด AFK"), T("Never get kicked for idling", "ไม่โดนเตะเพราะยืนนิ่ง"))
+    xDTaraZ.UI.Toggle(sessionBox, "AutoRejoin", T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), T("Rejoins after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"))
+    sessionBox:AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), Func = xDTaraZ.UI.Spawn(xDTaraZ.Session.Hop) })
+end
 
-    status("StatCash", xDTaraZ.Util.Cash, 1)
-    status("StatRobbed", function() return session.Busted end, 1)
-    status("StatWanted", function()
-        local char = xDTaraZ.Player.Character()
-        return char and char:GetAttribute("CurrencyEarned") or 0
-    end, 1)
-    status("StatCashedOut", function() return session.CashedOut end, 1)
-    status("StatSpots", xDTaraZ.Atm.SpawnerCount, 5)
-
-    Library:Every(1, function()
-        while #State.Messages > 0 do
-            Library:Notify("Driving Empire", table.remove(State.Messages, 1), 5)
+---Features whose game module did not load refuse to turn on and say why, instead of erroring every tick.
+function xDTaraZ.UI.GateModules()
+    local reason = T("Not available on this executor", "ใช้กับ executor นี้ไม่ได้")
+    local en, th = {}, {}
+    for idx in pairs(GameLib.Needs) do
+        local option = Library.Options[idx]
+        if option and GameLib.Missing(idx) then
+            Library.Compat.Block(option, reason)
+            en[#en + 1] = option.Info.Text.EN
+            table.insert(th, option.Info.Text.TH)
         end
-    end)
+    end
+    if #en == 0 then return end
+
+    Library:Notify("Driving Empire", T("Not available on this executor: " .. table.concat(en, ", "), "ใช้กับ executor นี้ไม่ได้: " .. table.concat(th, ", ")), 8, "Warning")
+end
+
+---Runs on the UI's own thread: game-module threads cannot touch widgets, so halts and messages wait here.
+function xDTaraZ.UI.Pump()
+    while #State.Messages > 0 do
+        local msg = table.remove(State.Messages, 1)
+        Library:Notify("Driving Empire", msg[1], 5, msg[2])
+    end
+    while #State.Halted > 0 do
+        local toggle = Library.Toggles[table.remove(State.Halted, 1)]
+        if toggle and toggle.Value then toggle:SetValue(false) end
+    end
+    local label = xDTaraZ.UI.StatusLabel
+    if label then label:SetText(xDTaraZ.UI.StatusText()) end
 end
 
 function xDTaraZ.UI.Build()
     local window = Library.Window
-    xDTaraZ.UI.RegisterIcons()
-    xDTaraZ.UI.BuildMain(window)
-    xDTaraZ.UI.BuildFarm(window)
-    xDTaraZ.UI.BuildRewards(window)
-
-    window:AddTabSection(T("Misc", "อื่นๆ"))
-    xDTaraZ.UI.BuildVehicle(window)
-    xDTaraZ.UI.BuildTeleport(window)
-    xDTaraZ.UI.BuildPlayer(window)
-    xDTaraZ.UI.BuildVisuals(window)
-    window:AddSettingsTab()
-    xDTaraZ.UI.Live()
+    local try = xDTaraZ.Util.Try
+    window:AddTabSection(T("Main", "หลัก"))
+    for _, build in ipairs({ xDTaraZ.UI.BuildFarm, xDTaraZ.UI.BuildRewards, xDTaraZ.UI.BuildVehicle, xDTaraZ.UI.BuildTeleport, xDTaraZ.UI.BuildPlayer, xDTaraZ.UI.BuildVisuals, xDTaraZ.UI.BuildSettings }) do
+        try(build, window)
+    end
+    try(xDTaraZ.UI.GateModules)
+    Library:Every(1, xDTaraZ.UI.Pump)
 end
 
+---@return boolean  false when the menu could not load
 local function BuildInterface()
-    Library = loadstring(xDTaraZ.Util.HttpGet(Config.UiSource))()
-    MarioBanner.Step("UI library")
+    Library = xDTaraZ.Util.LoadLibrary()
+    if not Library then return false end
+    xDTaraZ.Library = Library
+    pcall(MarioBanner.Step, "UI library")
     T = function(en, th) return Library:T(en, th) end
 
-    Library:OnUnload(xDTaraZ.Scheduler.Stop)
+    Library:OnUnload(function()
+        xDTaraZ.Scheduler.Stop()
+        getgenv().DrivingEmpireUnload = nil
+    end)
     getgenv().DrivingEmpireUnload = function()
         Library:Unload()
     end
@@ -1411,18 +1706,20 @@ local function BuildInterface()
         Intro = true,
         OnUnlocked = function()
             xDTaraZ.UI.Build()
-            xDTaraZ.Scheduler.Boot()
-            xDTaraZ.UI.Notify("Loaded")
-            Library:LoadAutoloadConfig()
+            xDTaraZ.Util.Try(xDTaraZ.Scheduler.Boot)
+            xDTaraZ.UI.Notify("Loaded", "Success")
+            xDTaraZ.Util.Try(Library.LoadAutoloadConfig, Library)
         end,
     })
+    return true
 end
 
 if getgenv().DrivingEmpireUnload then
     pcall(getgenv().DrivingEmpireUnload)
 end
 
-MarioBanner.Step("Systems")
-BuildInterface()
-MarioBanner.Step("Interface")
-MarioBanner.Ready()
+pcall(MarioBanner.Step, "Systems")
+if BuildInterface() then
+    pcall(MarioBanner.Step, "Interface")
+    pcall(MarioBanner.Ready)
+end

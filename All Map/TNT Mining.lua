@@ -3,17 +3,24 @@ if not game:IsLoaded() then
 end
 
 if game.GameId ~= 10418224975 then
-    game:GetService("Players").LocalPlayer:Kick("Mario Hub : this script is for +1 TNT Mining only")
+    game:GetService("Players").LocalPlayer:Kick("Mario Hub: this script is for TNT Mining only")
     return
 end
 
 local MarioBanner = {
-    Print = type(getrenv) == "function" and getrenv().print or print,
+    Print = print,
     Started = os.clock(),
     Last = os.clock(),
     Done = 0,
     Total = 4,
 }
+
+do
+    local ok, renv = pcall(getrenv)
+    if ok and type(renv) == "table" and type(renv.print) == "function" then
+        MarioBanner.Print = renv.print
+    end
+end
 
 function MarioBanner.Show()
     local ok, executor = pcall(identifyexecutor)
@@ -112,8 +119,8 @@ function MarioBanner.Ready()
     }, "\n"))
 end
 
-MarioBanner.Show()
-MarioBanner.Step("Core")
+pcall(MarioBanner.Show)
+pcall(MarioBanner.Step, "Core")
 
 if not LPH_OBFUSCATED then
     local function Passthrough(fn) return fn end
@@ -128,6 +135,7 @@ local RunService = game:GetService("RunService")
 local GuiService = game:GetService("GuiService")
 local TeleportService = game:GetService("TeleportService")
 local Workspace = game:GetService("Workspace")
+local StarterGui = game:GetService("StarterGui")
 
 local LocalPlayer = Players.LocalPlayer
 local vector3New, cframeNew = Vector3.new, CFrame.new
@@ -141,8 +149,15 @@ local xDTaraZ = setmetatable({}, {
 
 xDTaraZ.Config = {
     Discord = "https://discord.gg/FHVfmeSceA",
-    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui_v2.lua",
+    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
     SaveFolder = "TNT Mining",
+    LoadTimeout = 30,
+    RequireTimeout = 3,
+    GameCallTimeout = 8,
+    MaxFailures = 5,
+    FailWindow = 10,
+    AlertTries = 20,
+    AlertDelay = 0.5,
     TickDelay = 0.1,
     ClicksPerBatch = 25,
     ClickInterval = 1,
@@ -163,9 +178,12 @@ xDTaraZ.State = {
     Alive = true,
     Busy = false,
     NeedRefill = true,
+    MineOrigin = nil,
     Connections = {},
     Requests = {},
     Messages = {},
+    Failures = {},
+    Halted = {},
     Status = "Idle",
     Summary = "Loading...",
     Bombs = 0,
@@ -203,31 +221,94 @@ xDTaraZ.State = {
     },
 }
 
-local Logic = ReplicatedStorage:WaitForChild("Logic")
-local Configs = Logic:WaitForChild("Configs")
-
-xDTaraZ.GameLib = {
-    Session = require(Logic.Classes.PlayerSession),
-    Network = require(Logic.Network),
-    MineState = require(ReplicatedStorage.ClientLogic.Services.MineStateService),
-    AreaRenderer = require(Logic.Services.AreaRenderer),
-    Blocks = require(Configs.BlocksConfig),
-    Bombs = require(Configs.BombsConfig),
-    Areas = require(Configs.AreasConfig),
-    Upgrades = require(Configs.UpgradesConfig),
-    Mine = require(Configs.MineConfig),
-    Rebirth = require(Configs.RebirthConfig),
-    Pets = require(Configs.PetsConfig),
-}
-
-local GameLib = xDTaraZ.GameLib
 local Config, State = xDTaraZ.Config, xDTaraZ.State
 
-xDTaraZ.AreaOrder = GameLib.Areas.GetOrderedNames()
+xDTaraZ.GameLib = { Deferred = {} }
+
+---Runs `fn` on a fresh thread switched to identity 2; game code that requires lazily fails from executor identities.
+---@return boolean, any  pcall-style, false when the executor can't really switch or it timed out
+function xDTaraZ.GameLib.RunAsGame(timeout, fn, ...)
+    local args = table.pack(...)
+    local box
+    task.spawn(function()
+        pcall(setthreadidentity, 2)
+        local read, identity = pcall(getthreadidentity)
+        if not (read and identity == 2) then
+            box = { false, "identity switch unavailable", n = 2 }
+            return
+        end
+        box = table.pack(pcall(fn, table.unpack(args, 1, args.n)))
+    end)
+
+    local deadline = os.clock() + timeout
+    while not box and os.clock() < deadline do
+        task.wait()
+    end
+    if not box then return false, "game call timed out" end
+    return table.unpack(box, 1, box.n)
+end
+
+---@param path string  dotted path from ReplicatedStorage
+---@return table?      nil when it is missing or this executor can't require it
+function xDTaraZ.GameLib.Require(path)
+    local module = ReplicatedStorage
+    for name in path:gmatch("[^.]+") do
+        module = module and module:FindFirstChild(name)
+    end
+    if not module then
+        warn("[TNTMining] missing game module", path)
+        return nil
+    end
+
+    local ok, loaded = pcall(require, module)
+    if ok then return loaded end
+    local okAgain, again = xDTaraZ.GameLib.RunAsGame(Config.RequireTimeout, require, module)
+    if okAgain then return again end
+    warn("[TNTMining] require", path, loaded)
+    return nil
+end
+
+---Calls a game function inline; one that hits "non-RobloxScript" moves to an identity-2 thread for good.
+function xDTaraZ.GameLib.Call(fn, ...)
+    local deferred = xDTaraZ.GameLib.Deferred
+    if not deferred[fn] then
+        local result = table.pack(pcall(fn, ...))
+        if result[1] then return table.unpack(result, 2, result.n) end
+        if not tostring(result[2]):find("non-RobloxScript", 1, true) then error(result[2], 0) end
+        deferred[fn] = true
+    end
+
+    local result = table.pack(xDTaraZ.GameLib.RunAsGame(Config.GameCallTimeout, fn, ...))
+    if not result[1] then error(result[2], 0) end
+    return table.unpack(result, 2, result.n)
+end
+
+do
+    ReplicatedStorage:WaitForChild("Logic", Config.LoadTimeout)
+    ReplicatedStorage:WaitForChild("ClientLogic", Config.LoadTimeout)
+
+    local GameLib = xDTaraZ.GameLib
+    GameLib.Session = GameLib.Require("Logic.Classes.PlayerSession")
+    GameLib.Network = GameLib.Require("Logic.Network")
+    GameLib.MineState = GameLib.Require("ClientLogic.Services.MineStateService")
+    GameLib.AreaRenderer = GameLib.Require("Logic.Services.AreaRenderer")
+    GameLib.Blocks = GameLib.Require("Logic.Configs.BlocksConfig")
+    GameLib.Bombs = GameLib.Require("Logic.Configs.BombsConfig")
+    GameLib.Areas = GameLib.Require("Logic.Configs.AreasConfig")
+    GameLib.Upgrades = GameLib.Require("Logic.Configs.UpgradesConfig")
+    GameLib.Mine = GameLib.Require("Logic.Configs.MineConfig")
+    GameLib.Rebirth = GameLib.Require("Logic.Configs.RebirthConfig")
+    GameLib.Pets = GameLib.Require("Logic.Configs.PetsConfig")
+    GameLib.Ready = GameLib.Session ~= nil and GameLib.Network ~= nil and GameLib.MineState ~= nil
+end
+
+local GameLib = xDTaraZ.GameLib
+
+xDTaraZ.AreaOrder = GameLib.Areas and GameLib.Areas.GetOrderedNames() or {}
 
 xDTaraZ.BombOrder = {}
 do
-    for name, bomb in pairs(GameLib.Bombs) do
+    for name, bomb in pairs(GameLib.Bombs or {}) do
         if type(bomb) == "table" and not bomb.IsPremium and bomb.Price then
             table.insert(xDTaraZ.BombOrder, name)
         end
@@ -237,7 +318,7 @@ end
 
 xDTaraZ.UpgradeNames = {}
 do
-    for name, upgrade in pairs(GameLib.Upgrades) do
+    for name, upgrade in pairs(GameLib.Upgrades or {}) do
         if type(upgrade) == "table" and not upgrade.AreaSpecific then
             table.insert(xDTaraZ.UpgradeNames, name)
         end
@@ -276,6 +357,59 @@ function xDTaraZ:Connect(signal, handler)
     local conn = signal:Connect(handler)
     table.insert(State.Connections, conn)
     return conn
+end
+
+function xDTaraZ.Try(fn, ...)
+    local ok, err = pcall(fn, ...)
+    if not ok then warn("[TNTMining]", err) end
+    return ok, err
+end
+
+xDTaraZ.Util = {}
+
+---@return string?, string?  body, or nil + why every transport failed
+function xDTaraZ.Util.HttpGet(url)
+    local ok, body = pcall(function() return game:HttpGet(url) end)
+    if ok and type(body) == "string" then return body end
+
+    local send = request or http_request or (syn and syn.request) or (http and http.request)
+    if not send then return nil, tostring(body) end
+    local sent, response = pcall(send, { Url = url, Method = "GET" })
+    if not sent then return nil, tostring(response) end
+    if type(response) ~= "table" or response.StatusCode ~= 200 or type(response.Body) ~= "string" then
+        return nil, "HTTP " .. tostring(type(response) == "table" and response.StatusCode)
+    end
+    return response.Body
+end
+
+---Shows a Roblox notification even when the menu never loaded; SetCore fails for a while after joining.
+function xDTaraZ.Util.Alert(text, detail)
+    warn("[TNTMining] menu:", text, detail or "")
+    task.spawn(function()
+        for _ = 1, Config.AlertTries do
+            if pcall(StarterGui.SetCore, StarterGui, "SendNotification", { Title = "Mario Hub", Text = text, Duration = 10 }) then return end
+            task.wait(Config.AlertDelay)
+        end
+    end)
+end
+
+---@return table?  the UI library, nil after telling the player why
+function xDTaraZ.Util.LoadLibrary()
+    local body, err = xDTaraZ.Util.HttpGet(Config.UiSource)
+    if not body or not body:sub(-64):find("return Library%s*$") then
+        xDTaraZ.Util.Alert("Could not download the menu. Check your connection and run it again.", err or "truncated body")
+        return nil
+    end
+
+    local chunk, compileErr = loadstring(body)
+    if not chunk then
+        xDTaraZ.Util.Alert("The menu failed to load on this executor: " .. tostring(compileErr))
+        return nil
+    end
+    local ok, library = pcall(chunk)
+    if ok and type(library) == "table" then return library end
+    xDTaraZ.Util.Alert("The menu failed to load on this executor: " .. tostring(library))
+    return nil
 end
 
 function xDTaraZ:Root()
@@ -322,6 +456,7 @@ function xDTaraZ.Mine.Enter(areaName)
     local hrp = xDTaraZ:Root()
     if not (mineArea and hrp) then return false end
 
+    if not State.MineOrigin and not xDTaraZ:Session():IsInMineArea() then State.MineOrigin = hrp.CFrame end
     hrp.CFrame = cframeNew(mineArea.Position + vector3New(0, mineArea.Size.Y / 2 + Config.MineStandOffset, 0))
     hrp.AssemblyLinearVelocity = Vector3.zero
 
@@ -471,6 +606,23 @@ function xDTaraZ.Mine.ScanSecrets()
     end
 end
 
+---Brings the character back to where Auto Mine entered the mine from; keeps the origin while the character is respawning.
+function xDTaraZ.Mine.ReturnHome()
+    local origin = State.MineOrigin
+    if not origin then return end
+
+    local hrp = xDTaraZ:Root()
+    if not hrp then return end
+
+    local session = xDTaraZ:Session()
+    if session:IsInMineArea() then
+        session:LeaveMine()
+        hrp.CFrame = origin
+        hrp.AssemblyLinearVelocity = Vector3.zero
+    end
+    State.MineOrigin = nil
+end
+
 function xDTaraZ.Mine.Cycle()
     local session = xDTaraZ:Session()
     local areaName = xDTaraZ.Mine.PickArea(session)
@@ -555,8 +707,7 @@ end
 function xDTaraZ.Progress.StartClicking()
     task.spawn(function()
         while State.Alive and State.Opt.AutoClick do
-            local ok, err = pcall(xDTaraZ.Progress.Click)
-            if not ok then warn("[TNTMining] click:", err) end
+            xDTaraZ.Scheduler.Run("AutoClick", xDTaraZ.Progress.Click)
             task.wait(Config.ClickInterval)
         end
     end)
@@ -619,6 +770,11 @@ function xDTaraZ.Pets.Hatch()
         if price and session.OwnedAreas[name] and session.EggShards >= price then egg = name end
     end
     if egg then session:HatchPetEgg(egg) end
+end
+
+function xDTaraZ.Pets.EquipBest()
+    local session = xDTaraZ:Session()
+    GameLib.Call(session.EquipBestPets, session)
 end
 
 ---@return number  pets sold
@@ -708,6 +864,7 @@ xDTaraZ.Scheduler.RequestHandlers = {
     LuckNow = xDTaraZ.Progress.BuyLuck,
     HatchNow = xDTaraZ.Pets.Hatch,
     ClaimNow = xDTaraZ.Claim.All,
+    EquipPetsNow = xDTaraZ.Pets.EquipBest,
 
     SellNow = function()
         local session = xDTaraZ:Session()
@@ -718,9 +875,6 @@ xDTaraZ.Scheduler.RequestHandlers = {
     RebirthNow = function()
         xDTaraZ:Notify(xDTaraZ.Progress.Rebirth() and "Rebirthed" or "Level too low to rebirth")
     end,
-    EquipPetsNow = function()
-        xDTaraZ:Session():EquipBestPets()
-    end,
     SellPetsNow = function()
         xDTaraZ:Notify(("Sold %d pets"):format(xDTaraZ.Pets.SellExtras()))
     end,
@@ -729,17 +883,47 @@ xDTaraZ.Scheduler.RequestHandlers = {
     end,
 }
 
-function xDTaraZ.Scheduler.Run(fn)
+---Runs one round of a job; a toggle that keeps failing for Config.FailWindow seconds is switched off and queued for the UI to report.
+---@param key string  State.Opt flag of the feature, or a plain label for jobs without one
+function xDTaraZ.Scheduler.Run(key, fn)
     local ok, err = pcall(fn)
-    if not ok then warn("[TNTMining]", err) end
+    local failures = State.Failures
+    if ok then
+        failures[key] = nil
+        return
+    end
+
+    local streak = failures[key]
+    if not streak then
+        streak = { count = 0, since = os.clock() }
+        failures[key] = streak
+        warn("[TNTMining]", key, err)
+    end
+    streak.count += 1
+    if streak.count < Config.MaxFailures or os.clock() - streak.since < Config.FailWindow then return end
+    if State.Opt[key] ~= true then return end
+
+    failures[key] = nil
+    State.Opt[key] = false
+    local reason = tostring(err):match("[^\n]*")
+    warn("[TNTMining]", key, "stopped:", reason)
+    table.insert(State.Halted, { key, reason })
 end
 
 ---@param key string  State field holding last run time
-function xDTaraZ.Scheduler.Every(key, interval, fn)
+---@return boolean    true once per interval
+function xDTaraZ.Scheduler.Due(key, interval)
     local now = os.clock()
-    if now - State[key] < interval then return end
+    if now - State[key] < interval then return false end
     State[key] = now
-    xDTaraZ.Scheduler.Run(fn)
+    return true
+end
+
+function xDTaraZ.Scheduler.Request(name, handler)
+    local ok, err = pcall(handler)
+    if ok then return end
+    warn("[TNTMining]", name, err)
+    xDTaraZ:Notify(("%s failed: %s"):format(name, tostring(err):match("[^\n]*")))
 end
 
 function xDTaraZ.Scheduler.Summarize()
@@ -751,42 +935,53 @@ function xDTaraZ.Scheduler.Summarize()
         fmt(xDTaraZ.Mine.EarnRate()))
 end
 
+xDTaraZ.Scheduler.PurchaseJobs = {
+    { "AutoBomb", xDTaraZ.Progress.BuyBestBomb },
+    { "AutoUpgrade", xDTaraZ.Progress.BuyUpgrades },
+    { "AutoArea", xDTaraZ.Progress.BuyNextArea },
+    { "AutoLuck", xDTaraZ.Progress.BuyLuck },
+    { "AutoEquipPets", xDTaraZ.Pets.EquipBest },
+    { "AutoSellPets", xDTaraZ.Pets.SellExtras },
+    { "SecretAlert", function()
+        if GameLib.MineState.IsLoaded() then xDTaraZ.Mine.ScanSecrets() end
+    end },
+}
+
 function xDTaraZ.Scheduler.Purchases()
-    local opt = State.Opt
-    if opt.AutoBomb then xDTaraZ.Progress.BuyBestBomb() end
-    if opt.AutoUpgrade then xDTaraZ.Progress.BuyUpgrades() end
-    if opt.AutoArea then xDTaraZ.Progress.BuyNextArea() end
-    if opt.AutoLuck then xDTaraZ.Progress.BuyLuck() end
-    if opt.AutoEquipPets then xDTaraZ:Session():EquipBestPets() end
-    if opt.AutoSellPets then xDTaraZ.Pets.SellExtras() end
-    if opt.SecretAlert and GameLib.MineState.IsLoaded() then xDTaraZ.Mine.ScanSecrets() end
+    for _, job in ipairs(xDTaraZ.Scheduler.PurchaseJobs) do
+        if State.Opt[job[1]] then xDTaraZ.Scheduler.Run(job[1], job[2]) end
+    end
+end
+
+function xDTaraZ.Scheduler.CollectDrops()
+    xDTaraZ.Mine.Collect(xDTaraZ:Session())
 end
 
 function xDTaraZ.Scheduler.Step()
     local opt = State.Opt
-    xDTaraZ.Scheduler.Run(xDTaraZ.Scheduler.Summarize)
+    xDTaraZ.Scheduler.Run("Summary", xDTaraZ.Scheduler.Summarize)
 
     for name, handler in pairs(xDTaraZ.Scheduler.RequestHandlers) do
         if State.Requests[name] then
             State.Requests[name] = nil
-            xDTaraZ.Scheduler.Run(handler)
+            xDTaraZ.Scheduler.Request(name, handler)
         end
     end
 
-    if opt.AutoRebirth then xDTaraZ.Scheduler.Run(xDTaraZ.Progress.Rebirth) end
-    xDTaraZ.Scheduler.Every("LastPurchase", Config.PurchaseInterval, xDTaraZ.Scheduler.Purchases)
-    if opt.AutoHatch then xDTaraZ.Scheduler.Every("LastHatch", Config.HatchInterval, xDTaraZ.Pets.Hatch) end
-    if opt.AutoClaim then xDTaraZ.Scheduler.Every("LastClaim", Config.ClaimInterval, xDTaraZ.Claim.All) end
+    if opt.AutoRebirth then xDTaraZ.Scheduler.Run("AutoRebirth", xDTaraZ.Progress.Rebirth) end
+    if xDTaraZ.Scheduler.Due("LastPurchase", Config.PurchaseInterval) then xDTaraZ.Scheduler.Purchases() end
+    if opt.AutoHatch and xDTaraZ.Scheduler.Due("LastHatch", Config.HatchInterval) then xDTaraZ.Scheduler.Run("AutoHatch", xDTaraZ.Pets.Hatch) end
+    if opt.AutoClaim and xDTaraZ.Scheduler.Due("LastClaim", Config.ClaimInterval) then xDTaraZ.Scheduler.Run("AutoClaim", xDTaraZ.Claim.All) end
 
     if opt.AutoMine then
-        xDTaraZ.Scheduler.Run(xDTaraZ.Mine.Cycle)
+        xDTaraZ.Scheduler.Run("AutoMine", xDTaraZ.Mine.Cycle)
         return
     end
 
+    if State.MineOrigin then xDTaraZ.Scheduler.Run("MineReturn", xDTaraZ.Mine.ReturnHome) end
+
     State.Status = "Idle"
-    if opt.AutoCollect then
-        xDTaraZ.Scheduler.Run(function() xDTaraZ.Mine.Collect(xDTaraZ:Session()) end)
-    end
+    if opt.AutoCollect then xDTaraZ.Scheduler.Run("AutoCollect", xDTaraZ.Scheduler.CollectDrops) end
 end
 
 function xDTaraZ.Scheduler.Boot()
@@ -802,6 +997,8 @@ function xDTaraZ.Scheduler.Boot()
             end
             task.wait(Config.TickDelay)
         end
+
+        if State.MineOrigin then xDTaraZ.Scheduler.Run("MineReturn", xDTaraZ.Mine.ReturnHome) end
     end)
 end
 
@@ -815,20 +1012,43 @@ function xDTaraZ.Scheduler.Stop()
     if State.Opt.LowGraphics then xDTaraZ.Client.SetLowGraphics(false) end
 
     local hum = xDTaraZ:Humanoid()
-    if hum and State.Opt.SpeedOn then hum.WalkSpeed = GameLib.Upgrades.WalkSpeed.BaseValue end
+    if hum and State.Opt.SpeedOn and GameLib.Upgrades then hum.WalkSpeed = GameLib.Upgrades.WalkSpeed.BaseValue end
 end
 
 local function BuildInterface()
-    local Library = loadstring(game:HttpGet(Config.UiSource))()
-    MarioBanner.Step("UI library")
+    local Library = xDTaraZ.Util.LoadLibrary()
+    if not Library then return end
+    pcall(MarioBanner.Step, "UI library")
     local Options = Library.Options
     local T = function(en, th) return Library:T(en, th) end
     local opt = State.Opt
 
     local kaitunKeys = { "AutoMine", "AutoSell", "AutoClick", "AutoRebirth", "AutoBomb", "AutoUpgrade", "AutoArea", "AutoLuck", "AutoClaim", "AutoHatch", "AutoEquipPets", "AutoSellPets" }
+    local featureNames = {}
 
     local function Notify(text, kind)
         Library:Notify("TNT Mining", text, 4, kind or "Info")
+    end
+
+    local function ReportHalts()
+        for _, halt in ipairs(State.Halted) do
+            local key, reason = halt[1], halt[2]
+            local toggle = Options[key]
+            if toggle and toggle.Value then toggle:SetValue(false) end
+
+            local name = featureNames[key]
+            Notify(("%s stopped: %s"):format(name and name.EN or key, reason), "Warning")
+        end
+        table.clear(State.Halted)
+    end
+
+    local function BlockWithoutGameData()
+        if GameLib.Ready then return end
+        local reason = T("Not available on this executor", "ใช้กับ executor นี้ไม่ได้")
+        for _, key in ipairs({ "Kaitun", "AutoCollect", "SecretAlert", table.unpack(kaitunKeys) }) do
+            Library.Compat.Block(key, reason)
+        end
+        Library:Notify("TNT Mining", "This executor can't read the game's data, so farming is off. Movement still works.", 10, "Error")
     end
 
     local function Request(name)
@@ -837,286 +1057,205 @@ local function BuildInterface()
         end
     end
 
-    local function Store(key, onChange)
-        return function(value)
-            opt[key] = value
-            if onChange then onChange(value) end
-        end
-    end
-
-    ---@param info table  Text, Description, Icon, Now = { text, request }, Risky, Options
-    local function Feature(group, key, info)
-        local now = info.Now and { Text = info.Now[1], Callback = Request(info.Now[2]) }
-        return group:AddFeature(key, {
-            Text = info.Text,
-            Description = info.Description,
-            Icon = info.Icon,
-            Risky = info.Risky,
-            Badge = info.Risky and T("Risky", "เสี่ยง") or nil,
-            Keybind = { Default = "None", Mode = "Toggle" },
-            Now = now,
-            Options = info.Options,
-            Default = false,
-            Callback = Store(key, info.OnChange),
+    local function Toggle(group, key, text, description, onChange)
+        featureNames[key] = text
+        return group:AddToggle(key, {
+            Text = text,
+            Description = description,
+            Default = opt[key],
+            Callback = function(value)
+                opt[key] = value
+                if onChange then onChange(value) end
+            end,
         })
     end
 
+    local function Feature(group, key, text, description, onChange)
+        return Toggle(group, key, text, description, onChange):AddKeyPicker(key .. "Key", { Default = "None", Mode = "Toggle" })
+    end
+
     local function BuildMain(window)
-        window:AddTabSection(T("Main", "หลัก"))
-        local tab = window:AddTab(T("Main", "หลัก"), "mushroom", T("Status and all-in-one mode", "สถานะและโหมดทำทุกอย่าง"))
+        window:AddTabSection(T("Farm", "ฟาร์ม"))
+        local tab = window:AddTab(T("Main", "หลัก"), "house", T("Status and all-in-one mode", "สถานะและโหมดทำทุกอย่าง"))
 
-        local status = tab:AddLeftGroupbox(T("Status", "สถานะ"), "stats")
-        status:AddStatus("StatusRun", { Text = T("Farm", "ฟาร์ม"), Icon = "auto-mine", Default = { "Idle", "Idle" } })
-        local summary = status:AddLabel("Loading...", true)
+        local statusBox = tab:AddLeftGroupbox(T("Status", "สถานะ"))
+        local statusLabel = statusBox:AddLabel("Loading...")
+        local runLabel = statusBox:AddLabel("-")
 
-        local live = tab:AddLeftGroupbox(T("Live", "ตัวเลขสด"), "chart")
-        live:AddStat("StatEarned", { Text = T("Earned", "รายได้"), Icon = "coin", Format = "%s", Token = "Coin" })
-        live:AddStat("StatBombs", { Text = T("Bombs used", "ระเบิดที่ใช้"), Icon = "bomb", Format = "%s" })
-
-        local kaitun = tab:AddRightGroupbox("Kaitun", "kaitun")
-        kaitun:AddToggle("Kaitun", {
-            Text = T("Kaitun", "ไก่ตัน"),
-            Description = T("Mines, sells, trains, buys and rebirths by itself", "ขุด ขาย ฝึก ซื้อของ และรีเบิร์ธให้เองทั้งหมด"),
-            Icon = "kaitun",
-            Default = false,
+        local kaitunBox = tab:AddRightGroupbox("Kaitun")
+        kaitunBox:AddToggle("Kaitun", {
+            Text = T("Kaitun (All-in-one)", "ไก่ตัน (ทำทุกอย่าง)"),
+            Description = T("Mines, sells, trains, buys bombs, upgrades and areas, and rebirths by itself", "ขุด ขาย ฝึก ซื้อระเบิด อัปเกรด พื้นที่ และรีเบิร์ธให้เองทั้งหมด"),
             NoSave = true,
             Callback = function(value)
                 for _, key in ipairs(kaitunKeys) do
-                    Options[key]:SetValue(value)
+                    if Options[key] then Options[key]:SetValue(value) end
                 end
             end,
         })
 
-        Library.Kit.Discord.Build(tab, Config.Discord)
-        return summary
+        local discordBox = tab:AddRightGroupbox("Discord", "link")
+        discordBox:AddLabel(Config.Discord)
+        discordBox:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ Discord"), Style = "Primary", Func = function()
+            local copy = setclipboard or toclipboard
+            if copy then copy(Config.Discord) end
+            Notify(copy and "Discord link copied" or Config.Discord)
+        end })
+
+        return { Summary = statusLabel, Run = runLabel }
     end
 
     local function BuildMining(window)
         local tab = window:AddTab(T("Mining", "ขุด"), "bomb", T("Auto mining and selling", "ขุดและขายอัตโนมัติ"))
 
+        local mineBox = tab:AddLeftGroupbox(T("Auto Mine", "ขุดอัตโนมัติ"), "bomb")
+        Feature(mineBox, "AutoMine", T("Auto Mine", "ขุดอัตโนมัติ"), T("Blasts the most valuable spots in the mine and picks up every drop", "ระเบิดจุดที่มีค่าที่สุดในเหมืองแล้วเก็บของดรอปทั้งหมด"))
         local areaChoices = { "Best" }
         for _, areaName in ipairs(xDTaraZ.AreaOrder) do table.insert(areaChoices, areaName) end
-
-        local mine = tab:AddLeftGroupbox(T("Auto Mine", "ขุดอัตโนมัติ"), "auto-mine")
-        Feature(mine, "AutoMine", {
-            Text = T("Auto Mine", "ขุดอัตโนมัติ"),
-            Description = T("Blasts the most valuable spots and picks up every drop", "ระเบิดจุดที่มีค่าที่สุดแล้วเก็บของดรอปทั้งหมด"),
-            Icon = "tnt",
-            Options = function(options)
-                options:AddDropdown("MineArea", {
-                    Text = T("Mine Area", "พื้นที่ขุด"),
-                    Description = T("Best = strongest area you can break", "Best = พื้นที่ดีสุดที่ขุดไหว"),
-                    Icon = "area",
-                    Values = areaChoices,
-                    Default = "Best",
-                    Searchable = true,
-                    Callback = function(value) opt.MineArea = value or "Best" end,
-                })
-                options:AddToggle("TargetShards", { Text = T("Egg Shards First", "เน้นเศษไข่ก่อน"), Icon = "crystal", Default = false, Callback = Store("TargetShards") })
-            end,
+        mineBox:AddDropdown("MineArea", {
+            Text = T("Mine Area", "พื้นที่ขุด"),
+            Description = T("Best = strongest area your damage can handle", "Best = พื้นที่ดีสุดที่ดาเมจตอนนี้ขุดไหว"),
+            Values = areaChoices,
+            Default = 1,
+            Searchable = true,
+            Callback = function(value) opt.MineArea = value or "Best" end,
         })
-        mine:AddToggle("SecretAlert", {
-            Text = T("Secret Block Alert", "แจ้งเตือนบล็อก Secret"),
-            Icon = "notification",
-            Default = false,
-            Callback = Store("SecretAlert"),
-        })
+        Toggle(mineBox, "SecretAlert", T("Secret Block Alert", "แจ้งเตือนบล็อก Secret"), T("Notifies you when a secret block spawns in your mine", "แจ้งเมื่อมีบล็อก Secret เกิดในเหมือง"))
+        Toggle(mineBox, "TargetShards", T("Prioritize Egg Shards", "เน้นเศษไข่"), T("Goes for egg shards first", "ไล่เก็บเศษไข่ก่อน"))
 
-        Feature(mine, "AutoCollect", {
-            Text = T("Auto Collect", "เก็บของอัตโนมัติ"),
-            Description = T("Picks up every drop in your mine from anywhere", "เก็บของดรอปทั้งเหมืองจากทุกที่"),
-            Icon = "auto-collect",
+        featureNames.AutoCollect = T("Auto Collect", "เก็บของอัตโนมัติ")
+        mineBox:AddToggle("AutoCollect", {
+            Text = featureNames.AutoCollect,
+            Description = T("Instantly picks up every drop in the mine from anywhere, even when you bomb by hand", "เก็บของดรอปทั้งเหมืองทันทีจากทุกที่ แม้วางระเบิดเอง"),
             Risky = true,
-            Now = { T("Collect Now", "เก็บเดี๋ยวนี้"), "CollectNow" },
-        })
+            Default = false,
+            Callback = function(value) opt.AutoCollect = value end,
+        }):AddKeyPicker("AutoCollectKey", { Default = "None", Mode = "Toggle" })
+        mineBox:AddButton({ Text = T("Collect Drops Now", "เก็บของดรอปเดี๋ยวนี้"), Func = Request("CollectNow") })
 
-        local sell = tab:AddRightGroupbox(T("Sell", "ขาย"), "sell")
-        Feature(sell, "AutoSell", {
-            Text = T("Auto Sell", "ขายอัตโนมัติ"),
-            Description = T("Sells blocks after every blast, favorites are kept", "ขายบล็อกหลังระเบิดทุกครั้ง เก็บบล็อกที่กดชอบไว้"),
-            Icon = "auto-sell",
-            Now = { T("Sell All Now", "ขายทั้งหมดเดี๋ยวนี้"), "SellNow" },
-        })
+        local sellBox = tab:AddRightGroupbox(T("Sell", "ขาย"), "coin")
+        Feature(sellBox, "AutoSell", T("Auto Sell", "ขายอัตโนมัติ"), T("Sells blocks right after every blast, from anywhere. Favorited blocks are kept", "ขายบล็อกทันทีหลังระเบิดทุกครั้ง ขายได้จากทุกที่ บล็อกที่กดชอบจะเก็บไว้"))
+        sellBox:AddButton({ Text = T("Sell All Now", "ขายทั้งหมดเดี๋ยวนี้"), Style = "Primary", Func = Request("SellNow") })
     end
 
     local function BuildUpgrades(window)
         window:AddTabSection(T("Progress", "ความคืบหน้า"))
-        local tab = window:AddTab(T("Upgrades", "อัปเกรด"), "upgrades", T("Damage, bombs, areas and rebirth", "ดาเมจ ระเบิด พื้นที่ และรีเบิร์ธ"))
+        local tab = window:AddTab(T("Upgrades", "อัปเกรด"), "sliders-horizontal", T("Bombs, upgrades, areas and rebirth", "ระเบิด อัปเกรด พื้นที่ และรีเบิร์ธ"))
 
-        local train = tab:AddLeftGroupbox(T("Damage & Rebirth", "ดาเมจและรีเบิร์ธ"), "rebirths")
-        Feature(train, "AutoClick", {
-            Text = T("Auto Click", "คลิกอัตโนมัติ"),
-            Description = T("Trains damage as fast as the game allows", "เพิ่มดาเมจเร็วสุดเท่าที่เกมยอม"),
-            Icon = "auto-clicker",
-            OnChange = function(value)
-                if value then xDTaraZ.Progress.StartClicking() end
-            end,
-        })
-        Feature(train, "AutoRebirth", {
-            Text = T("Auto Rebirth", "รีเบิร์ธอัตโนมัติ"),
-            Description = T("Rebirths as soon as your level is high enough", "รีเบิร์ธทันทีเมื่อเลเวลถึง"),
-            Icon = "rebirths",
-            Now = { T("Rebirth Now", "รีเบิร์ธเดี๋ยวนี้"), "RebirthNow" },
-        })
+        local trainBox = tab:AddLeftGroupbox(T("Damage & Rebirth", "ดาเมจและรีเบิร์ธ"), "star")
+        Feature(trainBox, "AutoClick", T("Auto Click", "คลิกอัตโนมัติ"), T("Trains damage at the fastest speed the game allows", "เพิ่มดาเมจเร็วสุดเท่าที่เกมยอม"), function(value)
+            if value then xDTaraZ.Progress.StartClicking() end
+        end)
+        Feature(trainBox, "AutoRebirth", T("Auto Rebirth", "รีเบิร์ธอัตโนมัติ"), T("Rebirths as soon as your level is high enough", "รีเบิร์ธทันทีเมื่อเลเวลถึง"))
+        trainBox:AddButton({ Text = T("Rebirth Now", "รีเบิร์ธเดี๋ยวนี้"), Func = Request("RebirthNow") })
 
+        local shopBox = tab:AddRightGroupbox(T("Shop", "ร้านค้า"), "shop")
+        Feature(shopBox, "AutoBomb", T("Auto Buy Best Bomb", "ซื้อระเบิดดีสุดอัตโนมัติ"), T("Buys and equips the strongest bomb you can afford", "ซื้อและใส่ระเบิดที่แรงที่สุดที่ซื้อไหว"))
+        shopBox:AddButton({ Text = T("Buy Best Bomb Now", "ซื้อระเบิดดีสุดเดี๋ยวนี้"), Func = Request("BombNow") })
+        Feature(shopBox, "AutoArea", T("Auto Buy Next Area", "ซื้อพื้นที่ถัดไปอัตโนมัติ"), T("Unlocks the next area when you have the money", "ปลดล็อกพื้นที่ถัดไปเมื่อเงินพอ"))
+        shopBox:AddButton({ Text = T("Buy Next Area Now", "ซื้อพื้นที่ถัดไปเดี๋ยวนี้"), Func = Request("AreaNow") })
+        Feature(shopBox, "AutoLuck", T("Auto Buy Mine Luck", "ซื้อโชคเหมืองอัตโนมัติ"), T("Upgrades luck for the area you mine", "อัปโชคของพื้นที่ที่กำลังขุด"))
+        shopBox:AddButton({ Text = T("Buy Mine Luck Now", "ซื้อโชคเหมืองเดี๋ยวนี้"), Func = Request("LuckNow") })
+
+        local upgradeBox = tab:AddLeftGroupbox(T("Upgrades", "อัปเกรด"), "gear")
         opt.Upgrades = { MaxHeldBombs = true, MaxActiveBombs = true }
-        local upgrades = tab:AddLeftGroupbox(T("Upgrades", "อัปเกรด"), "upgrades")
-        Feature(upgrades, "AutoUpgrade", {
-            Text = T("Auto Buy Upgrades", "ซื้ออัปเกรดอัตโนมัติ"),
-            Icon = "auto-buy",
-            Now = { T("Buy Now", "ซื้อเดี๋ยวนี้"), "UpgradeNow" },
-            Options = function(options)
-                options:AddDropdown("Upgrades", {
-                    Text = T("Upgrades To Buy", "อัปเกรดที่จะซื้อ"),
-                    Icon = "list-menu",
-                    Values = xDTaraZ.UpgradeNames,
-                    Multi = true,
-                    Default = { "MaxHeldBombs", "MaxActiveBombs" },
-                    Callback = function(selected) opt.Upgrades = selected end,
-                })
-            end,
+        upgradeBox:AddDropdown("Upgrades", {
+            Text = T("Upgrades To Buy", "อัปเกรดที่จะซื้อ"),
+            Values = xDTaraZ.UpgradeNames,
+            Multi = true,
+            Default = { "MaxHeldBombs", "MaxActiveBombs" },
+            Callback = function(selected) opt.Upgrades = selected end,
         })
-
-        local shop = tab:AddRightGroupbox(T("Shop", "ร้านค้า"), "shop")
-        Feature(shop, "AutoBomb", {
-            Text = T("Auto Buy Best Bomb", "ซื้อระเบิดดีสุดอัตโนมัติ"),
-            Description = T("Buys and equips the strongest bomb you can afford", "ซื้อและใส่ระเบิดที่แรงที่สุดที่ซื้อไหว"),
-            Icon = "bombs",
-            Now = { T("Buy Bomb Now", "ซื้อระเบิดเดี๋ยวนี้"), "BombNow" },
-        })
-        Feature(shop, "AutoArea", {
-            Text = T("Auto Buy Next Area", "ซื้อพื้นที่ถัดไปอัตโนมัติ"),
-            Icon = "areas",
-            Now = { T("Buy Area Now", "ซื้อพื้นที่เดี๋ยวนี้"), "AreaNow" },
-        })
-        Feature(shop, "AutoLuck", {
-            Text = T("Auto Buy Mine Luck", "ซื้อโชคเหมืองอัตโนมัติ"),
-            Description = T("Upgrades luck for the area you mine", "อัปโชคของพื้นที่ที่กำลังขุด"),
-            Icon = "luck",
-            Now = { T("Buy Luck Now", "ซื้อโชคเดี๋ยวนี้"), "LuckNow" },
-        })
+        Feature(upgradeBox, "AutoUpgrade", T("Auto Buy Upgrades", "ซื้ออัปเกรดอัตโนมัติ"), T("Buys the selected upgrades whenever possible", "ซื้ออัปเกรดที่เลือกทุกครั้งที่ซื้อได้"))
+        upgradeBox:AddButton({ Text = T("Buy Upgrades Now", "ซื้ออัปเกรดเดี๋ยวนี้"), Func = Request("UpgradeNow") })
     end
 
     local function BuildPets(window)
-        local tab = window:AddTab(T("Pets & Rewards", "สัตว์เลี้ยงและรางวัล"), "pets", T("Eggs, pets and free rewards", "ไข่ สัตว์เลี้ยง และรางวัลฟรี"))
+        local tab = window:AddTab(T("Pets & Rewards", "สัตว์เลี้ยงและรางวัล"), "star", T("Eggs, pets and free rewards", "ไข่ สัตว์เลี้ยง และรางวัลฟรี"))
 
-        local pets = tab:AddLeftGroupbox(T("Pets", "สัตว์เลี้ยง"), "pets")
-        Feature(pets, "AutoHatch", {
-            Text = T("Auto Hatch", "ฟักไข่อัตโนมัติ"),
-            Description = T("Hatches the best egg your shards can pay for", "ฟักไข่ที่ดีที่สุดที่เศษไข่พอ"),
-            Icon = "auto-hatch",
-            Now = { T("Hatch Now", "ฟักเดี๋ยวนี้"), "HatchNow" },
-        })
-        Feature(pets, "AutoEquipPets", {
-            Text = T("Auto Equip Best", "ใส่ตัวดีสุดอัตโนมัติ"),
-            Icon = "best",
-            Now = { T("Equip Now", "ใส่เดี๋ยวนี้"), "EquipPetsNow" },
+        local petBox = tab:AddLeftGroupbox(T("Pets", "สัตว์เลี้ยง"), "mushroom")
+        Feature(petBox, "AutoHatch", T("Auto Hatch", "ฟักไข่อัตโนมัติ"), T("Hatches the best egg you can afford with egg shards", "ฟักไข่ที่ดีที่สุดที่เศษไข่พอ"))
+        petBox:AddButton({ Text = T("Hatch Now", "ฟักเดี๋ยวนี้"), Func = Request("HatchNow") })
+        Feature(petBox, "AutoEquipPets", T("Auto Equip Best Pets", "ใส่สัตว์เลี้ยงดีสุดอัตโนมัติ"), T("Always uses your strongest pets", "ใช้สัตว์เลี้ยงที่แรงที่สุดเสมอ"))
+        petBox:AddButton({ Text = T("Equip Best Pets Now", "ใส่สัตว์เลี้ยงดีสุดเดี๋ยวนี้"), Func = Request("EquipPetsNow") })
+
+        local petSellBox = tab:AddLeftGroupbox(T("Sell Pets", "ขายสัตว์เลี้ยง"), "coin")
+        Feature(petSellBox, "AutoSellPets", T("Auto Sell Pets", "ขายสัตว์เลี้ยงอัตโนมัติ"), T("Keeps your strongest pets and sells the rest so hatching never stops", "เก็บตัวที่แรงที่สุดไว้ ขายที่เหลือ ฟักไข่ได้ไม่มีวันเต็ม"))
+        petSellBox:AddSlider("KeepPets", {
+            Text = T("Keep Best Pets", "จำนวนตัวดีสุดที่เก็บไว้"),
+            Min = 0, Max = 50, Default = opt.KeepPets, Rounding = 0,
+            Callback = function(value) opt.KeepPets = tonumber(value) or opt.KeepPets end,
         })
 
+        local rarityTable = GameLib.Pets and GameLib.Pets.Rarities or {}
         local petRarities = {}
-        for rarity in pairs(GameLib.Pets.Rarities) do petRarities[#petRarities + 1] = rarity end
-        table.sort(petRarities, function(a, b) return GameLib.Pets.Rarities[a].Weight > GameLib.Pets.Rarities[b].Weight end)
-
-        local petSell = tab:AddLeftGroupbox(T("Sell Pets", "ขายสัตว์เลี้ยง"), "sell")
-        Feature(petSell, "AutoSellPets", {
-            Text = T("Auto Sell Pets", "ขายสัตว์เลี้ยงอัตโนมัติ"),
-            Description = T("Keeps your strongest pets and sells the rest", "เก็บตัวที่แรงที่สุดไว้ ขายที่เหลือ"),
-            Icon = "auto-sell",
-            Now = { T("Sell Extras Now", "ขายส่วนเกินเดี๋ยวนี้"), "SellPetsNow" },
-            Options = function(options)
-                options:AddStepper("KeepPets", {
-                    Text = T("Keep Best", "เก็บตัวดีสุด"),
-                    Icon = "keep",
-                    Min = 0, Max = 50, Step = 1, Default = opt.KeepPets,
-                    Callback = function(value) opt.KeepPets = tonumber(value) or opt.KeepPets end,
-                })
-                options:AddMultiChips("KeepPetRarities", {
-                    Text = T("Never Sell", "ห้ามขาย"),
-                    Icon = "rarity",
-                    Values = petRarities,
-                    Default = {},
-                    Callback = function(selected) opt.KeepPetRarities = selected end,
-                })
-            end,
+        for rarity in pairs(rarityTable) do table.insert(petRarities, rarity) end
+        table.sort(petRarities, function(a, b) return rarityTable[a].Weight > rarityTable[b].Weight end)
+        petSellBox:AddDropdown("KeepPetRarities", {
+            Text = T("Never Sell Rarity", "rarity ที่ห้ามขาย"),
+            Values = petRarities,
+            Multi = true,
+            Default = {},
+            Callback = function(selected) opt.KeepPetRarities = selected end,
         })
+        petSellBox:AddButton({ Text = T("Sell Extra Pets Now", "ขายสัตว์เลี้ยงส่วนเกินเดี๋ยวนี้"), Func = Request("SellPetsNow") })
 
-        local rewards = tab:AddRightGroupbox(T("Rewards", "รางวัล"), "rewards")
-        Feature(rewards, "AutoClaim", {
-            Text = T("Auto Claim", "รับรางวัลอัตโนมัติ"),
-            Description = T("Claims daily, group and index rewards", "รับรางวัลรายวัน กลุ่ม และสมุดสะสม"),
-            Icon = "auto-claim",
-            Now = { T("Claim Now", "รับเดี๋ยวนี้"), "ClaimNow" },
-        })
+        local rewardBox = tab:AddRightGroupbox(T("Rewards", "รางวัล"), "flag")
+        Feature(rewardBox, "AutoClaim", T("Auto Claim", "รับรางวัลอัตโนมัติ"), T("Claims daily, group and index rewards", "รับรางวัลรายวัน กลุ่ม และสมุดสะสม"))
+        rewardBox:AddButton({ Text = T("Claim Now", "รับเดี๋ยวนี้"), Func = Request("ClaimNow") })
     end
 
     local function BuildPlayer(window)
         window:AddTabSection(T("Other", "อื่นๆ"))
-        local tab = window:AddTab(T("Player", "ผู้เล่น"), "player", T("Movement", "การเคลื่อนที่"))
+        local tab = window:AddTab(T("Player", "ผู้เล่น"), "user", T("Movement", "การเคลื่อนที่"))
 
-        local move = tab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "movement")
-        Feature(move, "SpeedOn", {
-            Text = T("Speed", "ความเร็ว"),
-            Icon = "walkspeed",
-            OnChange = Request("Speed"),
-            Options = function(options)
-                options:AddSlider("WalkSpeed", {
-                    Text = T("Walk Speed", "ความเร็วเดิน"),
-                    Icon = "speed",
-                    Min = 16, Max = 200, Default = opt.WalkSpeed, Rounding = 0,
-                    Callback = function(value)
-                        opt.WalkSpeed = tonumber(value) or opt.WalkSpeed
-                        State.Requests.Speed = true
-                    end,
-                })
+        local moveBox = tab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "star")
+        Feature(moveBox, "SpeedOn", T("Speed", "ความเร็ว"), nil, Request("Speed"))
+        moveBox:AddSlider("WalkSpeed", {
+            Text = T("Walk Speed", "ความเร็วเดิน"),
+            Min = 16, Max = 200, Default = opt.WalkSpeed, Rounding = 0,
+            Callback = function(value)
+                opt.WalkSpeed = tonumber(value) or opt.WalkSpeed
+                State.Requests.Speed = true
             end,
         })
-        Feature(move, "InfJump", { Text = T("Infinite Jump", "กระโดดไม่จำกัด"), Icon = "inf-jump" })
+        Feature(moveBox, "InfJump", T("Infinite Jump", "กระโดดไม่จำกัด"))
     end
 
     local function BuildSettings(window)
         local tab = window:AddSettingsTab()
-        local session = tab:AddLeftGroupbox(T("Session", "เซสชัน"), "session")
-        session:AddToggle("AutoRejoin", {
-            Text = T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"),
-            Description = T("Rejoins by itself after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"),
-            Icon = "auto-rejoin",
-            Default = false,
-            Callback = Store("AutoRejoin"),
-        })
-        session:AddToggle("LowGraphics", {
-            Text = T("FPS Boost", "เพิ่ม FPS"),
-            Description = T("Turns off 3D rendering to save CPU and GPU", "ปิดการแสดงผล 3D ประหยัด CPU/GPU"),
-            Icon = "fps-boost",
-            Default = false,
-            Callback = Store("LowGraphics", xDTaraZ.Client.SetLowGraphics),
-        })
+        local sessionBox = tab:AddLeftGroupbox(T("Session", "เซสชัน"), "gear")
+        Toggle(sessionBox, "AutoRejoin", T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), T("Rejoins by itself after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"))
+        Toggle(sessionBox, "LowGraphics", T("FPS Boost", "เพิ่ม FPS"), T("Turns off 3D rendering to save CPU and GPU", "ปิดการแสดงผล 3D ประหยัด CPU/GPU"), xDTaraZ.Client.SetLowGraphics)
     end
 
     local function BuildTabs()
         local window = Library.Window
-        local summary = BuildMain(window)
-        BuildMining(window)
-        BuildUpgrades(window)
-        BuildPets(window)
-        BuildPlayer(window)
-        BuildSettings(window)
+        local _, labels = xDTaraZ.Try(BuildMain, window)
+        for _, build in ipairs({ BuildMining, BuildUpgrades, BuildPets, BuildPlayer, BuildSettings }) do
+            xDTaraZ.Try(build, window)
+        end
+        xDTaraZ.Try(BlockWithoutGameData)
 
         Library:Every(1, function()
+            ReportHalts()
             while #State.Messages > 0 do
                 Notify(table.remove(State.Messages, 1))
             end
-            local kind = State.Status == "Idle" and "Idle" or "Running"
-            Options.StatusRun:SetValue(State.Status, kind)
-            Options.StatEarned:SetValue(State.Earned)
-            Options.StatBombs:SetValue(State.Bombs)
-            summary:SetText(State.Summary)
+            if type(labels) ~= "table" then return end
+            labels.Summary:SetText(State.Summary)
+            labels.Run:SetText(("%s\nBombs %d · Earned %s"):format(State.Status, State.Bombs, xDTaraZ.Format(State.Earned)))
         end)
     end
 
     Library:OnUnload(xDTaraZ.Scheduler.Stop)
-    getgenv().TNTMiningUnload = function()
+    local function UnloadHub()
         Library:Unload()
     end
+    getgenv().TNTMiningUnload = UnloadHub
+    Library:OnUnload(function()
+        if getgenv().TNTMiningUnload == UnloadHub then getgenv().TNTMiningUnload = nil end
+    end)
 
     Library:CreateWindow({
         Title = "Mario Hub",
@@ -1127,9 +1266,9 @@ local function BuildInterface()
         Theme = "Overworld",
         OnUnlocked = function()
             BuildTabs()
-            xDTaraZ.Scheduler.Boot()
+            xDTaraZ.Try(xDTaraZ.Scheduler.Boot)
             Notify("Loaded", "Success")
-            Library:LoadAutoloadConfig()
+            xDTaraZ.Try(Library.LoadAutoloadConfig, Library)
         end,
     })
 end
@@ -1138,7 +1277,7 @@ if getgenv().TNTMiningUnload then
     pcall(getgenv().TNTMiningUnload)
 end
 
-MarioBanner.Step("Systems")
+pcall(MarioBanner.Step, "Systems")
 BuildInterface()
-MarioBanner.Step("Interface")
-MarioBanner.Ready()
+pcall(MarioBanner.Step, "Interface")
+pcall(MarioBanner.Ready)

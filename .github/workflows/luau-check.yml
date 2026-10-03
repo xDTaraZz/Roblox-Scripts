@@ -34,3 +34,6 @@ jobs:
             fi
           done < <(find . -name '*.lua' -not -path './.git/*' -print0 | sort -z)
           exit $failed
+
+      - name: Executor compat check
+        run: python .github/compat_check.py
