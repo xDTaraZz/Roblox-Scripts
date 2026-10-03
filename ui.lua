@@ -1,4 +1,4 @@
--- Mario Hub UI · standalone build 2026-10-02
+-- Mario Hub UI · standalone build 2026-10-03
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
@@ -342,7 +342,9 @@ function Util.GuiParent()
         end
     end
     local ok = pcall(function()
-        return CoreGui:GetChildren()
+        local probe = Instance.new("Folder")
+        probe.Parent = CoreGui
+        probe:Destroy()
     end)
     return ok and CoreGui or LocalPlayer:WaitForChild("PlayerGui", 10) or LocalPlayer:FindFirstChildOfClass("PlayerGui")
 end
@@ -393,6 +395,15 @@ function Util.CustomAsset(path)
     return finished and type(asset) == "string" and asset:find("^rbxasset") and asset or nil
 end
 
+---isfile through SafeFile would read a stub's nil as "exists".
+function Util.Exists(path)
+    if type(isfile) ~= "function" then
+        return false
+    end
+    local ok, value = pcall(isfile, path)
+    return ok and value == true
+end
+
 local function SafeFile(fn, ...)
     if type(fn) ~= "function" then
         return nil
@@ -423,10 +434,12 @@ function Util.EnsureFolder(path)
     local built = ""
     for part in path:gmatch("[^/]+") do
         built = built == "" and part or built .. "/" .. part
-        if not isfolder(built) then
-            makefolder(built)
+        local okCheck, exists = pcall(isfolder, built)
+        if not (okCheck and exists == true) and not pcall(makefolder, built) then
+            return false
         end
     end
+    return true
 end
 
 -- เก็บ UTF-8 ไว้ (ชื่อไทยได้) ตัดแค่อักขระที่ path ไฟล์ไม่รับ
@@ -807,7 +820,7 @@ end
 
 function Fonts.FetchFace(weight, name)
     local path = Config.FontDir .. "/kanit-" .. weight .. ".ttf"
-    local cached = SafeFile(isfile, path) == true and SafeFile(readfile, path)
+    local cached = Util.Exists(path) and SafeFile(readfile, path)
     if type(cached) ~= "string" or cached:sub(1, 4) ~= "\0\1\0\0" then
         local body = Util.HttpGet(string.format(Config.ThaiFont.Source, name))
         if type(body) ~= "string" or body:sub(1, 4) ~= "\0\1\0\0" then
@@ -838,7 +851,7 @@ function Fonts.LoadThai()
     if Fonts.Thai or Fonts.Broken or not Util.FileApi() or type(getcustomasset) ~= "function" then
         return Fonts.Thai ~= nil
     end
-    if SafeFile(isfile, Config.FontDir .. "/disabled") == true then
+    if Util.Exists(Config.FontDir .. "/disabled") then
         Fonts.Broken = true
         return false
     end
@@ -854,7 +867,7 @@ function Fonts.LoadThai()
         return false
     end
     local descriptor = Config.FontDir .. "/kanit.font"
-    if SafeFile(isfile, descriptor) == true then
+    if Util.Exists(descriptor) then
         SafeFile(delfile, descriptor)
     end
     SafeFile(writefile, descriptor, '{"name":"' .. Config.ThaiFont.Family .. '","faces":[' .. table.concat(faces, ",") .. "]}")
@@ -1087,7 +1100,7 @@ function Assets.Download(name, url)
         return nil
     end
     local path = Config.AssetDir .. "/" .. Util.Sanitize(name) .. ".png"
-    if SafeFile(isfile, path) ~= true then
+    if not Util.Exists(path) then
         local body = Util.HttpGet(url)
         if type(body) ~= "string" or #body < 8 then
             return nil
@@ -1113,7 +1126,7 @@ function Assets.Resolve(name)
         content = source
     elseif type(source) == "string" and source:match("^https?://") then
         content = Assets.Download(key, source)
-    elseif type(source) == "string" and SafeFile(isfile, source) == true then
+    elseif type(source) == "string" and Util.Exists(source) then
         content = Util.CustomAsset(source)
     end
     Assets.Cache[key] = content or false
@@ -1616,7 +1629,28 @@ function Widget:OnChanged(callback)
     return self
 end
 
+---A guard returning false vetoes a value before Callback/OnChanged see it (Library.Compat.NeedCap uses this).
+function Widget:AddGuard(guard)
+    self.Guards = self.Guards or {}
+    table.insert(self.Guards, guard)
+    return self
+end
+
+---@return boolean  false when a guard vetoed `value`
+function Widget:PassGuards(value)
+    for _, guard in ipairs(self.Guards or {}) do
+        local ok, allowed = pcall(guard, value)
+        if ok and allowed == false then
+            return false
+        end
+    end
+    return true
+end
+
 function Widget:Fire()
+    if not self:PassGuards(self.Value) then
+        return
+    end
     Util.Try(self.Callback, self.Value)
     for _, callback in ipairs(self.Changed) do
         Util.Try(callback, self.Value)
@@ -5016,6 +5050,432 @@ function Window:AddVisualsTab(options)
 end
 
 Library.Visuals = Visuals
+---Executor compatibility: behavioral capability probes, hook wrappers that refuse fake stubs, identity-safe require/call.
+---Every probe runs the API on a throwaway fixture; Xeno-style executors ship stubs that pass type() but do nothing or return the wrong thing.
+local Compat = { Probes = {}, Restores = {}, Deferred = setmetatable({}, { __mode = "k" }), CallTimeout = 8 }
+Library.Compat = Compat
+
+Compat.Api = {
+    HookFunction = hookfunction or replaceclosure,
+    HookMetamethod = hookmetamethod,
+    RestoreFunction = restorefunction,
+    IsFunctionHooked = isfunctionhooked,
+    GetNamecallMethod = getnamecallmethod,
+    CheckCaller = checkcaller,
+    NewCClosure = newcclosure,
+    GetConnections = getconnections or get_signal_cons,
+    GetGc = getgc,
+    GetUpvalue = getupvalue or (debug and debug.getupvalue),
+    FireSignal = firesignal,
+    FirePrompt = fireproximityprompt,
+    FireTouch = firetouchinterest,
+    SetIdentity = setthreadidentity or setidentity or (syn and syn.set_thread_identity),
+    GetIdentity = getthreadidentity or getidentity or (syn and syn.get_thread_identity),
+    QueueOnTeleport = queue_on_teleport or queueonteleport or (syn and syn.queue_on_teleport),
+    Request = request or http_request or (syn and syn.request),
+}
+
+---Probes run inline (this __index cannot yield), so a probe that yields counts as unsupported.
+Compat.Caps = setmetatable({}, {
+    __index = function(caps, name)
+        local probe = Compat.Probes[name]
+        if not probe then
+            return nil
+        end
+        local thread = coroutine.create(probe)
+        local ok, works = coroutine.resume(thread)
+        local has = ok and coroutine.status(thread) == "dead" and works == true
+        if coroutine.status(thread) == "suspended" then
+            pcall(coroutine.close, thread)
+        end
+        rawset(caps, name, has)
+        return has
+    end,
+})
+
+function Compat.Probes.HookFunction()
+    local hook = Compat.Api.HookFunction
+    if not hook then
+        return false
+    end
+    local function Target()
+        return "plain"
+    end
+    local original = hook(Target, function()
+        return "hooked"
+    end)
+    local works = Target() == "hooked" and type(original) == "function" and original() == "plain"
+    if type(original) == "function" then
+        pcall(hook, Target, original)
+    end
+    return works
+end
+
+function Compat.Probes.Namecall()
+    local api = Compat.Api
+    if not (api.HookMetamethod and api.GetNamecallMethod) then
+        return false
+    end
+    local proxy = newproxy(true)
+    getmetatable(proxy).__index = function()
+        return "plain"
+    end
+    local original = api.HookMetamethod(proxy, "__index", function()
+        return "hooked"
+    end)
+    return type(original) == "function" and proxy.probe == "hooked" and original(proxy, "probe") == "plain"
+end
+
+function Compat.Probes.Hook()
+    return Compat.Caps.HookFunction and Compat.Caps.Namecall
+end
+
+function Compat.Probes.CheckCaller()
+    return Compat.Api.CheckCaller ~= nil and Compat.Api.CheckCaller() == true
+end
+
+function Compat.Probes.Connections()
+    if not Compat.Api.GetConnections then
+        return false
+    end
+    local event = Instance.new("BindableEvent")
+    local hits = 0
+    local function Handler()
+        hits += 1
+    end
+    local conn = event.Event:Connect(Handler)
+    local mine
+    for _, entry in ipairs(Compat.Api.GetConnections(event.Event)) do
+        if entry.Function == Handler then
+            mine = entry
+        end
+    end
+    if mine then
+        pcall(mine.Fire, mine)
+    end
+    conn:Disconnect()
+    event:Destroy()
+    return hits == 1
+end
+
+function Compat.Probes.Gc()
+    if not Compat.Api.GetGc then
+        return false
+    end
+    local function Marker()
+        return "gc"
+    end
+    for _, value in ipairs(Compat.Api.GetGc(false)) do
+        if value == Marker then
+            return true
+        end
+    end
+    return false
+end
+
+function Compat.Probes.Upvalues()
+    if not Compat.Api.GetUpvalue then
+        return false
+    end
+    local marker = {}
+    local function Holder()
+        return marker
+    end
+    return Compat.Api.GetUpvalue(Holder, 1) == marker
+end
+
+---ESP sets these on Text objects every frame; a shim that only knows Line would throw per entry.
+function Compat.Probes.Drawing()
+    if type(Drawing) ~= "table" and type(Drawing) ~= "userdata" then
+        return false
+    end
+    local label = Drawing.new("Text")
+    local box = Drawing.new("Square")
+    local ok = pcall(function()
+        label.Text, label.Size, label.Center, label.Outline = "probe", 13, true, true
+        label.Position, label.ZIndex, label.Visible = Vector2.new(-100, -100), 2, false
+        label.Font = Drawing.Fonts and Drawing.Fonts.Plex or 2
+        box.Filled, box.Thickness, box.Visible = false, 1, false
+    end)
+    for _, object in ipairs({ label, box }) do
+        pcall(object.Remove or object.Destroy, object)
+    end
+    return ok
+end
+
+function Compat.Probes.Signals()
+    if not Compat.Api.FireSignal then
+        return false
+    end
+    local event = Instance.new("BindableEvent")
+    local got
+    local conn = event.Event:Connect(function(value)
+        got = value
+    end)
+    pcall(Compat.Api.FireSignal, event.Event, 7)
+    conn:Disconnect()
+    event:Destroy()
+    return got == 7
+end
+
+function Compat.Probes.Identity()
+    local api = Compat.Api
+    if not (api.SetIdentity and api.GetIdentity) then
+        return false
+    end
+    local before = api.GetIdentity()
+    local target = before == 2 and 8 or 2
+    api.SetIdentity(target)
+    local after = api.GetIdentity()
+    api.SetIdentity(before)
+    return after == target
+end
+
+function Compat.Probes.FileSystem()
+    if not Util.FileApi() then
+        return false
+    end
+    local stamp = tostring(os.clock())
+    local wrote = pcall(writefile, "mariohub_probe.txt", stamp)
+    local ok, read = pcall(readfile, "mariohub_probe.txt")
+    return wrote and ok and read == stamp
+end
+
+function Compat.Probes.Hui()
+    if type(gethui) ~= "function" then
+        return false
+    end
+    local ok, hidden = pcall(gethui)
+    return ok and typeof(hidden) == "Instance"
+end
+
+function Compat.Probes.Http()
+    return Compat.Api.Request ~= nil
+end
+
+function Compat.Probes.Queue()
+    return Compat.Api.QueueOnTeleport ~= nil
+end
+
+function Compat.Probes.Clipboard()
+    return type(setclipboard or toclipboard) == "function"
+end
+
+function Compat.Probes.Prompt()
+    return Compat.Api.FirePrompt ~= nil
+end
+
+function Compat.Probes.Touch()
+    return Compat.Api.FireTouch ~= nil
+end
+
+---Potassium-only packet library; presence only, Compat.RaknetLive() proves packets really pass (RakNet must be switched on in Potassium settings).
+function Compat.Probes.Raknet()
+    return type(raknet) == "table" and type(raknet.add_send_hook) == "function" and type(raknet.remove_send_hook) == "function" and type(raknet.send) == "function"
+end
+
+---@param caps string|string[]
+---@return boolean, string?  false + the first missing cap
+function Compat.Has(caps)
+    for _, name in ipairs(type(caps) == "table" and caps or { caps }) do
+        if not Compat.Caps[name] then
+            return false, name
+        end
+    end
+    return true
+end
+
+---Blocks a hook-only feature before its callback ever sees `true`: notice, then flips it back off.
+---@param option table|string  widget or its idx
+---@param caps string|string[]  every cap the feature needs
+function Compat.NeedCap(option, caps)
+    option = type(option) == "string" and Library.Options[option] or option
+    if type(option) ~= "table" or type(option.AddGuard) ~= "function" then
+        return
+    end
+    option:AddGuard(function(value)
+        if value ~= true or Compat.Has(caps) then
+            return true
+        end
+        local feature = option.Info and option.Info.Text and Lang.Resolve(option.Info.Text) or option.Idx
+        Library:Notify("Mario Hub", Library:T(tostring(feature) .. " is not supported on this executor", tostring(feature) .. " ใช้กับ executor นี้ไม่ได้"), 4, "Warn")
+        task.defer(option.SetValue, option, false)
+        return false
+    end)
+end
+
+---V1 has no disabled state: vetoes turning `option` on and tells the player why (missing game module, unsupported executor).
+---@param reason any  text spec, e.g. Library:T("Not available on this executor", "ใช้กับ executor นี้ไม่ได้")
+function Compat.Block(option, reason)
+    option = type(option) == "string" and Library.Options[option] or option
+    if type(option) ~= "table" or type(option.AddGuard) ~= "function" then
+        return
+    end
+    option.Blocked = reason
+    option:AddGuard(function(value)
+        if value ~= true then
+            return true
+        end
+        local feature = option.Info and option.Info.Text and Lang.Resolve(option.Info.Text) or option.Idx
+        Library:Notify("Mario Hub", tostring(feature) .. ": " .. tostring(Lang.Resolve(reason) or reason), 4, "Warn")
+        task.defer(option.SetValue, option, false)
+        return false
+    end)
+end
+
+---Requires a game module; identity-3 executors get "Cannot require a non-RobloxScript module", so it retries from an identity-2 thread when the executor can really switch.
+---@return boolean ok, any module or the error
+function Compat.Require(module)
+    local ok, loaded = pcall(require, module)
+    if ok or not Compat.Caps.Identity then
+        return ok, loaded
+    end
+    local finished, okAgain, again = Util.Await(Compat.CallTimeout, function()
+        Compat.Api.SetIdentity(2)
+        return pcall(require, module)
+    end)
+    if finished and okAgain then
+        return true, again
+    end
+    return false, loaded
+end
+
+---Calls a game function inline; one that throws "non-RobloxScript" (it requires lazily inside) is rerun from a deferred identity-2 thread and remembered per function.
+---The deferred thread keeps the caller untainted.
+function Compat.Call(fn, ...)
+    if not Compat.Deferred[fn] then
+        local result = table.pack(pcall(fn, ...))
+        if result[1] then
+            return table.unpack(result, 2, result.n)
+        end
+        if not Compat.Caps.Identity or not tostring(result[2]):find("non-RobloxScript", 1, true) then
+            error(result[2], 0)
+        end
+        Compat.Deferred[fn] = true
+    end
+    local args = table.pack(...)
+    local box
+    task.defer(function()
+        Compat.Api.SetIdentity(2)
+        box = table.pack(pcall(fn, table.unpack(args, 1, args.n)))
+    end)
+    local deadline = os.clock() + Compat.CallTimeout
+    while not box and os.clock() < deadline do
+        task.wait()
+    end
+    if not box then
+        error("game call timed out", 0)
+    end
+    if not box[1] then
+        error(box[2], 0)
+    end
+    return table.unpack(box, 2, box.n)
+end
+
+local function Wrap(handler)
+    local okWrap, wrapped = pcall(Compat.Api.NewCClosure or error, handler)
+    return okWrap and type(wrapped) == "function" and wrapped or handler
+end
+
+---Undoes a hook: the executor's restorefunction first, else `rehook`.
+function Compat.Unhook(target, rehook)
+    local api = Compat.Api
+    if target and api.RestoreFunction and pcall(api.RestoreFunction, target) then
+        if not api.IsFunctionHooked then
+            return
+        end
+        local ok, still = pcall(api.IsFunctionHooked, target)
+        if ok and not still then
+            return
+        end
+    end
+    rehook()
+end
+
+local function Track(putBack)
+    table.insert(Compat.Restores, putBack)
+    return function()
+        local index = table.find(Compat.Restores, putBack)
+        if not index then
+            return
+        end
+        table.remove(Compat.Restores, index)
+        Util.Try(putBack)
+    end
+end
+
+---Hooks one metamethod only when Caps.Namecall proved hookmetamethod returns the real original.
+---@return function?  original, nil when refused
+---@return function?  restore
+function Compat.HookMeta(object, method, handler)
+    if not Compat.Caps.Namecall then
+        return nil
+    end
+    local api = Compat.Api
+    local ok, original = pcall(api.HookMetamethod, object, method, Wrap(handler))
+    if not ok or type(original) ~= "function" then
+        return nil
+    end
+    return original, Track(function()
+        api.HookMetamethod(object, method, original)
+    end)
+end
+
+---Hooks one function only when Caps.HookFunction proved hookfunction works.
+---@return function?  original, nil when refused
+---@return function?  restore
+function Compat.HookFunction(target, handler)
+    if not Compat.Caps.HookFunction then
+        return nil
+    end
+    local api = Compat.Api
+    local ok, original = pcall(api.HookFunction, target, Wrap(handler))
+    if not ok or type(original) ~= "function" then
+        return nil
+    end
+    return original, Track(function()
+        Compat.Unhook(target, function()
+            pcall(api.HookFunction, target, original)
+        end)
+    end)
+end
+
+function Compat.RestoreAll()
+    for index = #Compat.Restores, 1, -1 do
+        Util.Try(Compat.Restores[index])
+    end
+    table.clear(Compat.Restores)
+end
+
+---Yields up to `timeout` seconds watching for one outgoing packet; without RakNet enabled in Potassium the hooks never fire.
+---@return boolean
+function Compat.RaknetLive(timeout)
+    if not Compat.Caps.Raknet then
+        return false
+    end
+    local seen = false
+    local function Watch()
+        seen = true
+    end
+    if not pcall(raknet.add_send_hook, Watch) then
+        return false
+    end
+    local deadline = os.clock() + (timeout or 2)
+    while not seen and os.clock() < deadline do
+        task.wait(0.1)
+    end
+    pcall(raknet.remove_send_hook, Watch)
+    return seen
+end
+
+---Runs every probe deferred so the first toggle press does not pay for one.
+function Compat.Warm()
+    for name in pairs(Compat.Probes) do
+        task.defer(function()
+            local _ = Compat.Caps[name]
+        end)
+    end
+end
 
 --@return {EN,TH} ข้อความจาก Lang.Strings ที่ format แล้วทั้งสองภาษา
 function Lang.Format(key, ...)
@@ -5048,16 +5508,16 @@ function Configs.Save(name)
             snapshot[idx] = { Type = option.Type, Value = option:Serialize() }
         end
     end
-    writefile(Configs.Path(name), HttpService:JSONEncode(snapshot))
-    return true
+    return (pcall(writefile, Configs.Path(name), HttpService:JSONEncode(snapshot)))
 end
 
 function Configs.Load(name)
     local path = Configs.Path(name)
-    if not Util.FileApi() or not isfile(path) then
+    if not Util.FileApi() or not Util.Exists(path) then
         return false, Lang.Get("ConfigMissing")
     end
-    local ok, snapshot = pcall(HttpService.JSONDecode, HttpService, readfile(path))
+    local read, raw = pcall(readfile, path)
+    local ok, snapshot = pcall(HttpService.JSONDecode, HttpService, read and raw or "")
     if not ok or type(snapshot) ~= "table" then
         return false, Lang.Get("ConfigBroken")
     end
@@ -5072,11 +5532,10 @@ end
 
 function Configs.Delete(name)
     local path = Configs.Path(name)
-    if type(delfile) ~= "function" or not Util.FileApi() or not isfile(path) then
+    if type(delfile) ~= "function" or not Util.FileApi() or not Util.Exists(path) then
         return false, Lang.Get("ConfigMissing")
     end
-    delfile(path)
-    return true
+    return (pcall(delfile, path))
 end
 
 function Configs.List()
@@ -5099,17 +5558,16 @@ function Configs.SetAutoload(name)
     if not Util.FileApi() then
         return false, Lang.Get("NoFileApi")
     end
-    writefile(Configs.Folder .. "/autoload.txt", name)
-    return true
+    return (pcall(writefile, Configs.Folder .. "/autoload.txt", name))
 end
 
 function Configs.GetAutoload()
     local path = Configs.Folder .. "/autoload.txt"
-    if not Util.FileApi() or not isfile(path) then
+    if not Util.FileApi() or not Util.Exists(path) then
         return nil
     end
-    local name = readfile(path)
-    return name ~= "" and name or nil
+    local ok, name = pcall(readfile, path)
+    return ok and type(name) == "string" and name ~= "" and name or nil
 end
 
 function Configs.BuildSection(group)
@@ -5190,10 +5648,11 @@ function Window:AddSettingsTab()
 end
 
 function KeyGate.ReadSaved()
-    if not Util.FileApi() or not isfile(Config.KeyCache) then
+    if not Util.FileApi() or not Util.Exists(Config.KeyCache) then
         return nil
     end
-    local key = readfile(Config.KeyCache):gsub("%s", "")
+    local ok, raw = pcall(readfile, Config.KeyCache)
+    local key = ok and type(raw) == "string" and raw:gsub("%s", "") or ""
     return key ~= "" and key or nil
 end
 
@@ -5280,7 +5739,7 @@ function KeyGate.BuildBody(body, settings, onPass, face)
             end
             if settings.SaveKey ~= false and Util.FileApi() then
                 Util.EnsureFolder(Config.Root)
-                writefile(Config.KeyCache, key)
+                pcall(writefile, Config.KeyCache, key)
             end
             onPass()
         end)
@@ -5301,6 +5760,8 @@ function Library:CreateWindow(options)
     Assets.Configure(options.Assets)
     Window.DetectTouch(options.Layout)
     Gui.Setup()
+    Library:OnUnload(Compat.RestoreAll)
+    task.delay(3, Compat.Warm)
     if State.Language == "TH" then
         Fonts.LoadThaiAsync()
     end
@@ -5466,4 +5927,3 @@ end
 Library.Themes = Themes.Order
 
 return Library
-
