@@ -147,6 +147,10 @@ local xDTaraZ = setmetatable({}, {
 xDTaraZ.Config = {
     SaveFolder = "Loot To Forge",
     Discord = "https://discord.gg/FHVfmeSceA",
+    UpdateLog = {
+        { "2026-10-04", "Spawn Scrolls, Tickets & Stones\nDupe Whole Inventory\nOP badge on Spawn Items" },
+        { "2026-10-03", "Fixed World Boss, Auto Click & Codes\nImproved Auto Train\nAuto rune detection" },
+    },
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
     LoaderUrl = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/loader.lua",
     LoadTimeout = 30,
@@ -2287,6 +2291,12 @@ local function BuildInterface()
             if copy then copy(Config.Discord) end
             Notify(copy and "Discord link copied" or Config.Discord)
         end })
+
+        local logBox = tab:AddRightGroupbox(T("Update Log", "อัปเดตล่าสุด"), "bell")
+        for i = 1, math.min(2, #Config.UpdateLog) do
+            local entry = Config.UpdateLog[i]
+            logBox:AddParagraph({ Title = entry[1], Content = entry[2] })
+        end
 
         local gearBox = tab:AddRightGroupbox(T("Max Gear", "อุปกรณ์สูงสุด"))
         Feature(gearBox, "MaxGear", T("Max Gear", "อุปกรณ์สูงสุด"),

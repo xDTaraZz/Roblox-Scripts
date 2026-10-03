@@ -157,6 +157,9 @@ local xDTaraZ = setmetatable({}, {
 xDTaraZ.Config = {
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
     Discord = "https://discord.gg/FHVfmeSceA",
+    UpdateLog = {
+        { "2026-10-03", "Classic Mario Hub UI is back\nBetter executor support\nBug fixes & better UI" },
+    },
     SaveFolder = "Violence District",
     Intro = true,
     LoadTimeout = 10,
@@ -2025,6 +2028,12 @@ function xDTaraZ.UI.BuildMain(window)
             Library:Notify(T("Discord", "ดิสคอร์ด"), xDTaraZ.Config.Discord, 6, "Info")
         end
     end) })
+
+    local logBox = tab:AddRightGroupbox(T("Update Log", "อัปเดตล่าสุด"), "bell")
+    for i = 1, math.min(2, #xDTaraZ.Config.UpdateLog) do
+        local entry = xDTaraZ.Config.UpdateLog[i]
+        logBox:AddParagraph({ Title = entry[1], Content = entry[2] })
+    end
 
     local panic = tab:AddRightGroupbox(T("Quick", "ด่วน"), "bomb")
     panic:AddButton({ Text = T("Panic — all off", "ฉุกเฉิน ปิดทั้งหมด"), Style = "Danger", Func = xDTaraZ.UI.Detach(function()

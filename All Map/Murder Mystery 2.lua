@@ -146,6 +146,9 @@ local xDTaraZ = setmetatable({}, {
 
 xDTaraZ.Config = {
     Discord = "https://discord.gg/FHVfmeSceA",
+    UpdateLog = {
+        { "2026-10-03", "Classic Mario Hub UI is back\nBetter executor support\nImproved Farming, Combat & Movement" },
+    },
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
     SaveFolder = "Murder Mystery 2",
     LoadTimeout = 10,
@@ -1870,6 +1873,12 @@ local function BuildInterface()
             if copy then copy(Config.Discord) end
             Notify(copy and "Discord link copied" or Config.Discord)
         end })
+
+        local logBox = tab:AddRightGroupbox(T("Update Log", "อัปเดตล่าสุด"), "bell")
+        for i = 1, math.min(2, #Config.UpdateLog) do
+            local entry = Config.UpdateLog[i]
+            logBox:AddParagraph({ Title = entry[1], Content = entry[2] })
+        end
 
         local roundBox = tab:AddRightGroupbox(T("Round", "รอบนี้"))
         live.Role = roundBox:AddLabel("You: -")
