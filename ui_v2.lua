@@ -7655,6 +7655,7 @@ function KeyPicker.New(row, idx, info, linked)
         Container = row.Container,
         Text = info.Text or (linked and linked.Row.Info.Text) or row.Info.Text,
         ChangedCallback = info.ChangedCallback,
+        KeyOnly = info.KeyOnly == true,
         SyncToggleState = info.SyncToggleState,
     }, KeyPicker)
     picker:Build()
@@ -7690,7 +7691,11 @@ function KeyPicker:Build()
             Motion.Spring(face, "Position", UDim2.fromOffset(0, pressed and depth - 1 or 0), "Fast")
         end,
         OnClick = function()
-            self:OpenMenu()
+            if self.KeyOnly then
+                self:Listen()
+            else
+                self:OpenMenu()
+            end
         end,
     }))
     holder.MouseButton2Click:Connect(function()
@@ -12277,7 +12282,6 @@ function Window:BuildDock()
         end,
     })
     self:BuildTip()
-    self:WatchTip()
 end
 
 function Window:BuildTip()
@@ -12295,19 +12299,6 @@ function Window:BuildTip()
 end
 
 ---Dock label sliding out to the right of anchor. Pointer only.
----Hover-out is not reported when the window moves, hides or the pointer jumps, so the tip checks the pointer itself.
-function Window:WatchTip()
-    Util.Connect(UserInputService.InputChanged, function(input)
-        if not self.TipShown or input.UserInputType ~= Enum.UserInputType.MouseMovement then
-            return
-        end
-        local anchor = self.TipAnchor
-        if not anchor or not anchor.Parent or not Util.Inside(anchor, UserInputService:GetMouseLocation()) then
-            self:HideTip()
-        end
-    end)
-end
-
 function Window:ShowTip(anchor, spec)
     if Platform.Touch or self.Mode == "Phone" or not self.Visible then
         return
@@ -12319,7 +12310,7 @@ function Window:ShowTip(anchor, spec)
     local y = (anchor.AbsolutePosition.Y + anchor.AbsoluteSize.Y / 2 - self.Body.AbsolutePosition.Y) / State.UserScale
     local home = UDim2.fromOffset(self.DockRight + tip.Gap, math.floor(y))
     frame.Size = UDim2.fromOffset(width, tip.Height + tip.Frame)
-    self.TipShown, self.TipAnchor = true, anchor
+    self.TipShown = true
     if not frame.Visible then
         frame.Visible = true
         Motion.Set(frame, "Position", home - UDim2.fromOffset(tip.Slide, 0))
@@ -13875,7 +13866,7 @@ function Window:BuildInterfaceGroup(group)
         end,
     })
     group:AddKeybind("MarioMenuKey", {
-        Text = Lang.Strings.MenuKey, Default = State.MenuKey, Mode = "Always", NoSave = true,
+        Text = Lang.Strings.MenuKey, Default = State.MenuKey, Mode = "Always", KeyOnly = true, NoSave = true,
         ChangedCallback = function(name)
             State.MenuKey = name
             Settings.Set("MenuKey", name)
