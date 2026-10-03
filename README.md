@@ -29,7 +29,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 | Game | Highlights |
 |:--|:--|
 | **[+1 TNT Mining](#-1-tnt-mining)** | Smart auto mine, instant collect, sell anywhere, Kaitun |
-| **[Loot To Forge](#%EF%B8%8F-loot-to-forge)** | Max gear, infinite ore, auto index, invincible, tower farm, Kaitun |
+| **[Loot To Forge](#%EF%B8%8F-loot-to-forge)** | Max gear, spawn items, dupe inventory, auto index, invincible, tower farm, Kaitun |
 | **[Open Sea For Animals](#-open-sea-for-animals)** | Loot every wave from your base, auto hatch, sell filters, Kaitun |
 | **[Murder Mystery 2](#-murder-mystery-2)** | Silent aim, auto shoot, kill all, coin farm, role ESP, auto win |
 | **[Driving Empire](#-driving-empire)** | Auto ATM farm, auto drive, playtime rewards, teleport, ESP |
@@ -71,7 +71,8 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 - **Max Gear**: best weapon, armor and hat, best runes in your order, enhanced to your target
 - **Auto Forge** from any ore you pick, and it never runs out
 - **Auto Complete Index**: finds every missing weapon, armor and hat, shows the chance per forge
-- **Spawn Items**: any ore or enchant rune, any amount
+- **Spawn Items**: any ore, enchant rune, Protection Scroll, Tower Ticket or enhance stone, any amount
+- **Dupe Whole Inventory**: one click adds to every stack you own
 - **Kill Aura**, **Kill Ore Boss**, **Invincible**, keep ore on death
 - **Auto Farm Tower** on one ticket: rare stones and season coins
 - **Auto Season**: daily ticket, spins, pass rewards and shop

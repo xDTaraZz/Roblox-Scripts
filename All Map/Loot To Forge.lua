@@ -770,8 +770,30 @@ function xDTaraZ.Spawn.Choices()
         byLabel[label] = { id = stoneId, kind = "EnchStone" }
         table.insert(labels, label)
     end
+    local materialModule = xDTaraZ.GameLib.Find("Config.Material.Show")
+    local materialShow = materialModule and xDTaraZ.GameLib.Require(materialModule)
+    if type(materialShow) == "table" then
+        local materials = {}
+        for materialId, show in pairs(materialShow) do
+            table.insert(materials, { materialId, show.DisplayName or materialId })
+        end
+        table.sort(materials, function(a, b) return a[2] < b[2] end)
+        for i, entry in ipairs(materials) do
+            byLabel[entry[2]] = { id = entry[1], kind = "Material" }
+            table.insert(labels, i, entry[2])
+        end
+    end
     State.SpawnLabels = byLabel
     return labels
+end
+
+---@param counts table<string, number>  uuid -> amount to add
+function xDTaraZ.Spawn.Stack(counts)
+    local list = {}
+    for uuid, amount in pairs(counts) do
+        list[uuid] = -math.abs(amount)
+    end
+    xDTaraZ.Util.Remote("Forge", "ForgeRF"):InvokeServer({ ConfigType = "Weapon", UUIDList = list })
 end
 
 ---@return boolean  false if the item was never owned and can't be found
@@ -784,8 +806,28 @@ function xDTaraZ.Spawn.Give(itemId, kind, amount)
     end
     local uuid = xDTaraZ.Data.Uuid(xDTaraZ.Data.Get(), itemId)
     if not uuid then return false end
-    xDTaraZ.Ore.Add(uuid, amount)
+    if kind == "Material" then
+        xDTaraZ.Spawn.Stack({ [uuid] = amount })
+    else
+        xDTaraZ.Ore.Add(uuid, amount)
+    end
     return true
+end
+
+---@return number  stacks touched
+function xDTaraZ.Spawn.DupeAll(amount)
+    local materials, touched = {}, 0
+    for uuid, entry in pairs(xDTaraZ.Data.Get().Backpack.have) do
+        if type(entry) ~= "table" or not entry.Number then continue end
+        touched += 1
+        if entry.Type == "Material" then
+            materials[uuid] = amount
+        else
+            xDTaraZ.Ore.Add(uuid, amount)
+        end
+    end
+    if next(materials) then xDTaraZ.Spawn.Stack(materials) end
+    return touched
 end
 
 function xDTaraZ.Stage.List()
@@ -2477,8 +2519,8 @@ local function BuildInterface()
     end
 
     local function BuildSpawn(tab)
-        local spawnBox = tab:AddLeftGroupbox(T("Spawn Items", "เสกของ"))
-        Pick(spawnBox, "SpawnItem", T("Item", "ของ"), T("Any ore or enchant rune, even ores you don't have yet", "แร่หรือรูนชนิดไหนก็ได้ แร่ที่ยังไม่เคยได้ก็ได้"), xDTaraZ.Spawn.Choices, true, true)
+        local spawnBox = tab:AddLeftGroupbox(T("Spawn Items", "เสกของ"), nil, "OP")
+        Pick(spawnBox, "SpawnItem", T("Item", "ของ"), T("Ores, runes, scrolls, tickets and stones. Runes and materials need at least one owned", "แร่ รูน สกรอล ตั๋ว และหิน รูนกับวัตถุดิบต้องมีอย่างน้อย 1 ชิ้น"), xDTaraZ.Spawn.Choices, true, true)
         NumberInput(spawnBox, "SpawnAmount", T("Amount", "จำนวน"), nil, 1)
         spawnBox:AddButton({ Text = T("Spawn", "เสก"), Style = "Primary", Func = function()
             local picked = State.SpawnLabels[opt.SpawnItem]
@@ -2486,9 +2528,16 @@ local function BuildInterface()
             local label, amount = opt.SpawnItem, opt.SpawnAmount
             task.defer(function()
                 local ok = xDTaraZ.Spawn.Give(picked.id, picked.kind, amount)
-                Notify(ok and ("Added %s %s"):format(xDTaraZ.Util.Abbreviate(amount), label) or "You need at least one of this rune first", ok and "Success" or "Warning")
+                Notify(ok and ("Added %s %s"):format(xDTaraZ.Util.Abbreviate(amount), label) or "You need at least one of this item first", ok and "Success" or "Warning")
             end)
         end }):AddButton(RefreshButton("SpawnItem", xDTaraZ.Spawn.Choices))
+        spawnBox:AddButton({ Text = T("Dupe Whole Inventory", "ปั๊มของทั้งกระเป๋า"), Risky = true, Func = function()
+            local amount = opt.SpawnAmount
+            task.defer(function()
+                local touched = xDTaraZ.Spawn.DupeAll(amount)
+                Notify(("Added %s to %d stacks"):format(xDTaraZ.Util.Abbreviate(amount), touched), touched > 0 and "Success" or "Warning")
+            end)
+        end })
 
         local stoneBox = tab:AddRightGroupbox(T("Enhance Stones", "หินตีบวก"))
         stoneBox:AddButton({ Text = T("Farm Enhance Stones", "ฟาร์มหินตีบวก"), Style = "Primary", Func = LongAction("Stones", function()

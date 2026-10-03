@@ -1,4 +1,4 @@
--- Mario Hub UI · standalone build 2026-10-03
+-- Mario Hub UI · standalone build 2026-10-04
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
@@ -3924,12 +3924,12 @@ function Tab:AddGroupbox(info, side)
     return box
 end
 
-function Tab:AddLeftGroupbox(name, icon)
-    return self:AddGroupbox({ Name = name, Side = "Left", Icon = icon })
+function Tab:AddLeftGroupbox(name, icon, badge)
+    return self:AddGroupbox({ Name = name, Side = "Left", Icon = icon, Badge = badge })
 end
 
-function Tab:AddRightGroupbox(name, icon)
-    return self:AddGroupbox({ Name = name, Side = "Right", Icon = icon })
+function Tab:AddRightGroupbox(name, icon, badge)
+    return self:AddGroupbox({ Name = name, Side = "Right", Icon = icon, Badge = badge })
 end
 
 function Groupbox:BuildHeader(card, info)
@@ -3944,7 +3944,14 @@ function Groupbox:BuildHeader(card, info)
         icon.Position = UDim2.new(0, 10, 0.5, -1)
         offset = 36
     end
-    Draw.Text({ Position = UDim2.fromOffset(offset, 0), Size = UDim2.new(1, -(offset + 34), 1, -2), TextTruncate = Enum.TextTruncate.AtEnd, Parent = bar }, "Body", Util.TextSize("Group"), "Text", info.Name or "")
+    local badgeWidth = 0
+    if info.Badge then
+        badgeWidth = #tostring(info.Badge) * 8 + 16
+        local pill = Draw.Box("Frame", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -34, 0.5, -1), Size = UDim2.fromOffset(badgeWidth, 18), Parent = bar }, "Danger", "DangerDark", 4, 2)
+        Draw.Text({ Size = UDim2.fromScale(1, 1), TextXAlignment = Enum.TextXAlignment.Center, Parent = pill }, "Body", 12, "OnAccent", tostring(info.Badge))
+        badgeWidth += 6
+    end
+    Draw.Text({ Position = UDim2.fromOffset(offset, 0), Size = UDim2.new(1, -(offset + 34 + badgeWidth), 1, -2), TextTruncate = Enum.TextTruncate.AtEnd, Parent = bar }, "Body", Util.TextSize("Group"), "Text", info.Name or "")
     self.Chevron = Draw.Text({ Text = "▼", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, -1), Size = UDim2.fromOffset(16, 16), TextXAlignment = Enum.TextXAlignment.Center, Rotation = info.Collapsed and -90 or 0, Parent = bar }, "Glyph", 11, "Muted")
     bar.Activated:Connect(function()
         self:SetCollapsed(self.Open.Value > 0.5)
