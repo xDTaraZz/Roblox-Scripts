@@ -168,6 +168,7 @@ if type(body) == "string" then loadstring(body)() end]],
     SettleDelay = 0.15,
     StreamWait = 2,
     StreamDistance = 200,
+    CameraShieldJump = 100,
     PickupRetries = 3,
     QuarryJitter = 0.35,
     RetryDelay = 1,
@@ -561,12 +562,26 @@ function xDTaraZ.Move.Stream(pos)
     while not finished and osClock() < deadline do task.wait() end
 end
 
+---Holds the camera script off for two frames so a long jump does not make the game's held-item shield query an out-of-range radius.
+function xDTaraZ.Move.FreezeCamera()
+    local camera = Workspace.CurrentCamera
+    if not camera or camera.CameraType ~= Enum.CameraType.Custom then return end
+    camera.CameraType = Enum.CameraType.Scriptable
+    task.spawn(function()
+        RunService.RenderStepped:Wait()
+        RunService.RenderStepped:Wait()
+        if camera.CameraType == Enum.CameraType.Scriptable then camera.CameraType = Enum.CameraType.Custom end
+    end)
+end
+
 ---@param stream boolean?  ask the engine to load the destination first (far targets only)
 function xDTaraZ.Move.To(pos, stream)
     local _, _, hrp = xDTaraZ:Character()
     if not hrp then return false end
     if stream and (hrp.Position - pos).Magnitude > Config.StreamDistance then xDTaraZ.Move.Stream(pos) end
     hrp.AssemblyLinearVelocity = Vector3.zero
+    local freezeCamera = (hrp.Position - pos).Magnitude > Config.CameraShieldJump
+    if freezeCamera then xDTaraZ.Move.FreezeCamera() end
     hrp.CFrame = CFrame.new(pos) * hrp.CFrame.Rotation
     return true
 end

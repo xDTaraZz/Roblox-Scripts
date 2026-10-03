@@ -194,14 +194,19 @@ xDTaraZ.Config = {
     ClaimInterval = 30,
     SeasonInterval = 60,
     BossCards = 8,
-    BossSkill = "G_Skill_7",
-    BossHitsPerTick = 20,
+    BossAttackIds = { Katana = "K_ATK_1", Great = "G_ATK_1" },
+    BossHitsPerTick = 30,
+    BossHitGap = 0.02,
+    BossJoinSettle = 1,
+    BossClaimDelay = 3.5,
+    BossStandHeight = 3,
     UpgradeInterval = 5,
     EquipInterval = 3,
     SellInterval = 1,
     RebirthInterval = 2,
     BossInterval = 1,
     TrainRejoinDelay = 0.3,
+    TrainWatchdog = 3,
     TrainAcceptWait = 1.5,
     TrainExitTries = 3,
     TrainSettle = 0.5,
@@ -234,6 +239,9 @@ xDTaraZ.State = {
     TrainGen = 0,
     TrainFiredAt = 0,
     TrainRebirth = nil,
+    BossReturn = nil,
+    TrainLevel = nil,
+    TrainNilSince = nil,
     Warned = {},
     WarnedCount = 0,
     LastRun = {},
@@ -1391,14 +1399,19 @@ end
 function xDTaraZ.Level.TrainStep()
     local profile = xDTaraZ.Data.Get()
     xDTaraZ.Level.UsePotions(profile)
-    if profile.Eco.rebirth ~= State.TrainRebirth then
+    if profile.Eco.rebirth ~= State.TrainRebirth or profile.Eco.level ~= State.TrainLevel then
         State.TrainRebirth = profile.Eco.rebirth
+        State.TrainLevel = profile.Eco.level
         State.TrainArea = nil
     end
 
-    if not LocalPlayer:GetAttribute("AutoTrainAreaID") then
-        xDTaraZ.Level.Enter()
+    if LocalPlayer:GetAttribute("AutoTrainAreaID") then
+        State.TrainNilSince = nil
+        return
     end
+    State.TrainNilSince = State.TrainNilSince or os.clock()
+    if os.clock() - State.TrainNilSince < Config.TrainWatchdog then return end
+    xDTaraZ.Level.Enter()
 end
 
 function xDTaraZ.Level.Rebirth()
@@ -1486,25 +1499,42 @@ function xDTaraZ.Tower.FarmStep()
     return true
 end
 
-function xDTaraZ.Boss.Alive()
-    return workspace:GetAttribute("CurrentWorldBoss") ~= nil
+---@return string?  basic attack id of the equipped weapon, nil for an unknown weapon type
+function xDTaraZ.Boss.AttackId()
+    local weapon = LocalPlayer:GetAttribute("WeaponType")
+    return Config.BossAttackIds[weapon]
+end
+
+function xDTaraZ.Boss.Join()
+    xDTaraZ.Util.Remote("WorldBoss", "IntoWorldBossFight"):FireServer()
+    LocalPlayer:SetAttribute("IntoFight", "WorldBoss")
+    local arena = workspace:FindFirstChild("WorldModel") and workspace.WorldModel:FindFirstChild("WorldBoss")
+    local center = arena and arena:FindFirstChild("Center")
+    local char = LocalPlayer.Character
+    if not (center and char) then return end
+    State.BossReturn = char:GetPivot()
+    char:PivotTo(CFrame.new(center:GetPivot().Position + Vector3.new(0, Config.BossStandHeight, 0)))
 end
 
 function xDTaraZ.Boss.Step()
-    if not xDTaraZ.Boss.Alive() then return end
+    local bossName = workspace:GetAttribute("CurrentWorldBoss")
+    if not bossName then return end
+    local attackId = xDTaraZ.Boss.AttackId()
+    if not attackId then return end
     if LocalPlayer:GetAttribute("IntoFight") ~= "WorldBoss" then
-        xDTaraZ.Util.Remote("WorldBoss", "IntoWorldBossFight"):FireServer()
-        LocalPlayer:SetAttribute("IntoFight", "WorldBoss")
+        xDTaraZ.Boss.Join()
+        task.wait(Config.BossJoinSettle)
     end
-    xDTaraZ.Combat.KillAll()
-    local targets = {}
-    for _, enemy in ipairs(workspace.EnemyFolder_Server:GetChildren()) do
-        table.insert(targets, enemy.Name)
-    end
-    if #targets == 0 then return end
+
+    local boss = workspace.EnemyFolder_Server:FindFirstChild(bossName)
+    if not boss then return end
+    local announce = xDTaraZ.Util.Remote("Attack", "UseAnyATKRE")
     local attack = xDTaraZ.Util.Remote("Attack", "AttackEnemyServiceRE")
     for _ = 1, Config.BossHitsPerTick do
-        attack:FireServer(targets, { Phase = 1, SkillID = Config.BossSkill, Attacker = LocalPlayer }, workspace:GetServerTimeNow())
+        if not (State.Opt.AutoWorldBoss and boss.Parent) then return end
+        announce:FireServer(attackId, workspace:GetServerTimeNow())
+        attack:FireServer({ bossName }, { Phase = 1, SkillID = attackId, Attacker = LocalPlayer }, workspace:GetServerTimeNow())
+        task.wait(Config.BossHitGap)
     end
 end
 
@@ -1515,14 +1545,24 @@ function xDTaraZ.Boss.ClaimCards()
     end
 end
 
+function xDTaraZ.Boss.Leave()
+    xDTaraZ.Util.Remote("WorldBoss", "ExitWorldBossFight"):FireServer()
+    LocalPlayer:SetAttribute("IntoFight", nil)
+    local char = LocalPlayer.Character
+    if State.BossReturn and char then char:PivotTo(State.BossReturn) end
+    State.BossReturn = nil
+end
+
 function xDTaraZ.Boss.Bind()
     table.insert(State.Conns, xDTaraZ.Util.Remote("WorldBoss", "BossDeadRE").OnClientEvent:Connect(function()
         if not State.Opt.AutoWorldBoss then return end
-        task.delay(1, function()
+        task.delay(Config.BossClaimDelay, function()
             if State.Opt.BossCards then xDTaraZ.Util.Try(xDTaraZ.Boss.ClaimCards) end
-            xDTaraZ.Util.Remote("WorldBoss", "ExitWorldBossFight"):FireServer()
-            LocalPlayer:SetAttribute("IntoFight", nil)
+            xDTaraZ.Util.Try(xDTaraZ.Boss.Leave)
         end)
+    end))
+    table.insert(State.Conns, xDTaraZ.Util.Remote("WorldBoss", "BossEscapeRE").OnClientEvent:Connect(function()
+        if State.Opt.AutoWorldBoss then xDTaraZ.Util.Try(xDTaraZ.Boss.Leave) end
     end))
 end
 
@@ -1893,6 +1933,7 @@ function xDTaraZ.Scheduler.Stop()
         xDTaraZ.Session.SetLowGraphics(false)
     end
     xDTaraZ.Util.Try(xDTaraZ.Tower.Exit)
+    if LocalPlayer:GetAttribute("IntoFight") == "WorldBoss" then xDTaraZ.Util.Try(xDTaraZ.Boss.Leave) end
     xDTaraZ.Guard.Stop()
 end
 
@@ -2137,17 +2178,17 @@ local function BuildInterface()
             end,
         })
 
-        gearBox:AddDivider()
-        Feature(gearBox, "AutoEquip", T("Auto Equip Best", "ใส่ของดีสุดอัตโนมัติ"), T("Always wears your strongest weapon, armor and hat, counting enhance level", "ใส่อาวุธ เกราะ และหมวกที่แรงที่สุดเสมอ นับระดับตีบวกด้วย"))
-        gearBox:AddButton({ Text = T("Equip Best Now", "ใส่ของดีสุดเดี๋ยวนี้"), Func = function()
+        local equipBox = tab:AddLeftGroupbox(T("Equip", "ใส่ของ"))
+        Feature(equipBox, "AutoEquip", T("Auto Equip Best", "ใส่ของดีสุดอัตโนมัติ"), T("Always wears your strongest weapon, armor and hat, counting enhance level", "ใส่อาวุธ เกราะ และหมวกที่แรงที่สุดเสมอ นับระดับตีบวกด้วย"))
+        equipBox:AddButton({ Text = T("Equip Best Now", "ใส่ของดีสุดเดี๋ยวนี้"), Func = function()
             task.defer(function()
                 local changed = xDTaraZ.Gear.EquipBest()
                 Notify(changed > 0 and ("Equipped %d better item(s)"):format(changed) or "Already wearing your best gear")
             end)
         end })
 
-        gearBox:AddDivider()
-        gearBox:AddDropdown("EnhanceSlot", {
+        equipBox:AddDivider()
+        equipBox:AddDropdown("EnhanceSlot", {
             Text = T("Enhance Slot", "ช่องที่ตีบวก"),
             Values = Config.GearTypes,
             Default = opt.EnhanceSlot,
@@ -2155,11 +2196,11 @@ local function BuildInterface()
                 opt.EnhanceSlot = value or opt.EnhanceSlot
             end,
         })
-        gearBox:AddButton({ Text = T("Enhance To Target", "ตีบวกถึงเป้า"), Style = "Primary", Func = LongAction("Enhance", function()
+        equipBox:AddButton({ Text = T("Enhance To Target", "ตีบวกถึงเป้า"), Style = "Primary", Func = LongAction("Enhance", function()
             return xDTaraZ.Gear.EnhanceSlot(opt.EnhanceSlot, opt.EnhanceTarget)
         end, function(level) return level and ("%s is +%d"):format(opt.EnhanceSlot, level) or "Nothing equipped there" end) })
 
-        local rewardBox = tab:AddRightGroupbox(T("Rewards", "รางวัล"))
+        local rewardBox = tab:AddLeftGroupbox(T("Rewards", "รางวัล"))
         Feature(rewardBox, "AutoClaim", T("Auto Claim", "รับรางวัลอัตโนมัติ"), T("Claims every free reward, including index", "รับรางวัลฟรีทุกอย่าง รวมสมุดสะสม"))
         rewardBox:AddButton({ Text = T("Claim Now", "รับเดี๋ยวนี้"), Style = "Success", Func = Action(xDTaraZ.Claim.All) })
         rewardBox:AddButton({ Text = T("Redeem All Codes", "ใช้โค้ดทั้งหมด"), Style = "Primary", Func = Action(function()
@@ -2219,7 +2260,9 @@ local function BuildInterface()
         Feature(combatBox, "SuperLootAura", T("Kill Ore Boss", "ฆ่าบอสแร่"), T("Kills rare ore bosses the moment they spawn", "ฆ่าบอสแร่หายากทันทีที่เกิด"), function(value)
             if value then xDTaraZ.SuperLoot.KillExisting() end
         end)
-        Feature(combatBox, "AutoWorldBoss", T("Auto World Boss", "บอสโลกอัตโนมัติ"), T("Joins every world boss and kills it (beta)", "เข้าบอสโลกทุกรอบแล้วฆ่า (เบต้า)"))
+        Feature(combatBox, "AutoWorldBoss", T("Auto World Boss", "บอสโลกอัตโนมัติ"), T("Joins every world boss and kills it", "เข้าบอสโลกทุกรอบแล้วฆ่า"), function(value)
+            if not value and LocalPlayer:GetAttribute("IntoFight") == "WorldBoss" then task.spawn(xDTaraZ.Util.Try, xDTaraZ.Boss.Leave) end
+        end)
         Check(combatBox, "BossCards", T("Take every reward card", "เปิดการ์ดรางวัลทุกใบ"))
         combatBox:AddButton({ Text = T("Exit Fight Now", "ออกจากการต่อสู้เดี๋ยวนี้"), Style = "Warning", Func = Action(xDTaraZ.Stage.ExitFight) })
     end

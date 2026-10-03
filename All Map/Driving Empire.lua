@@ -1489,7 +1489,7 @@ function xDTaraZ.UI.BuildFarm(window)
     end) }):AddButton({ Text = T("Quit Job", "ออกจากงาน"), Func = xDTaraZ.UI.Spawn(xDTaraZ.Jobs.Leave) })
 
     local driveBox = farmTab:AddRightGroupbox(T("Drive Farm", "ฟาร์มขับรถ"))
-    xDTaraZ.UI.Toggle(driveBox, "DriveFarm", T("Auto Drive", "ขับรถอัตโนมัติ"), T("Drives laps on its own for passive cash", "ขับวนเองเพื่อรับเงินจากการขับ"), function(on)
+    xDTaraZ.UI.Toggle(driveBox, "DriveFarm", T("Auto Drive", "ขับรถอัตโนมัติ"), T("Drives nonstop for passive cash", "ขับไม่หยุดเพื่อรับเงินจากการขับ"), function(on)
         if not on then
             xDTaraZ.Drive.Stop()
             return
