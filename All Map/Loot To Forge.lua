@@ -148,7 +148,7 @@ xDTaraZ.Config = {
     SaveFolder = "Loot To Forge",
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
-        { "2026-10-04", "Spawn Scrolls, Tickets & Stones\nDupe Whole Inventory\nAdd Season Coins (OP)\nFaster Tower farm\nRemoved keybinds from auto features" },
+        { "2026-10-04", "Spawn Scrolls, Tickets & Stones\nDupe Whole Inventory\nAdd Season Coins (OP)\nFaster Tower farm\nRemoved keybinds from auto features\nMax Gear picks Exclusive gear\nSpawn Gear (OP)\nPotions (OP)\nFixed Auto World Boss" },
         { "2026-10-03", "Fixed World Boss, Auto Click & Codes\nImproved Auto Train\nAuto rune detection" },
     },
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
@@ -170,6 +170,7 @@ xDTaraZ.Config = {
     StoneCallsPerWorker = 15,
     TowerWorkers = 128,
     CoinFarmTimeout = 600,
+    PotionStack = 100000,
     TowerCallsPerWorker = 25,
     GearForgeTries = 15,
     GearEnhanceTries = 20,
@@ -206,6 +207,8 @@ xDTaraZ.Config = {
     BossJoinSettle = 1,
     BossClaimDelay = 3.5,
     BossStandHeight = 3,
+    BossStandBack = 8,
+    BossReach = 25,
     UpgradeInterval = 5,
     EquipInterval = 3,
     SellInterval = 1,
@@ -229,8 +232,8 @@ xDTaraZ.Config = {
         SuperLootAura = { "Remote.SuperLoot.KillSuperLootRE", "Remote.SuperLoot.RefreshSuperLootRE", "Remote.Stage.GetOreRF" },
         AutoWorldBoss = { "Remote.WorldBoss.IntoWorldBossFight", "Remote.WorldBoss.ExitWorldBossFight", "Remote.WorldBoss.BossDeadRE", "Remote.Attack.UseAnyATKRE", "Remote.Attack.AttackEnemyServiceRE" },
         AutoIndex = { "Remote.Forge.ForgeRF", "Remote.Index.TryClaimIndexExpRF", "Utils.ForgeUtils", "Config.Weapon.Config", "Config.Armor.Config" },
-        MaxGear = { "Remote.Forge.ForgeRF", "Remote.Backpack.EnhantEquipmentRF", "Remote.Backpack.EnchantRE", "Config.Enhant.Config", "Config.EnchStone.Show" },
-        AutoEquip = { "Remote.Backpack.TryEquipItemRE", "Config.Weapon.Helper", "Config.Armor.Helper" },
+        MaxGear = { "Utils.BalanceUtils", "Remote.Forge.ForgeRF", "Remote.Backpack.EnhantEquipmentRF", "Remote.Backpack.EnchantRE", "Config.Enhant.Config", "Config.EnchStone.Show" },
+        AutoEquip = { "Utils.BalanceUtils", "Remote.Backpack.TryEquipItemRE", "Config.Weapon.Helper", "Config.Armor.Helper" },
         AutoForge = { "Remote.Forge.ForgeRF", "Remote.Backpack.TrySellItemRE", "Config.Ore.Config" },
         AutoSell = { "Remote.Backpack.TrySellItemRE", "Config.Weapon.Config", "Config.Armor.Config" },
         AutoTrain = { "Remote.Train.IntoAutoTrainRE", "Remote.Train.ExitAutoTrainRE", "Config.TrainArea.Config" },
@@ -277,6 +280,7 @@ xDTaraZ.State = {
     TowerLoot = 0,
     OreLabels = {},
     SpawnLabels = {},
+    GearLabels = {},
     MissingLabels = {},
     OreStage = {},
     Plans = {},
@@ -331,6 +335,8 @@ xDTaraZ.State = {
         SpawnItem = nil,
         SpawnAmount = 100000,
         CoinTarget = 1000000,
+        SpawnGear = nil,
+        GearCopies = 1,
         SpeedOn = false,
         WalkSpeed = 60,
         InfJump = false,
@@ -465,7 +471,7 @@ function xDTaraZ.GameLib.Missing()
     return missing
 end
 
-for _, name in ipairs({ "Util", "Data", "Stage", "Ore", "Spawn", "Forge", "Sell", "Gear", "Index", "Level", "Upgrade", "Tower", "Boss", "Season", "Claim", "SuperLoot", "Combat", "Guard", "Race", "Movement", "Session", "Scheduler" }) do
+for _, name in ipairs({ "Util", "Data", "Stage", "Ore", "Spawn", "Potion", "Forge", "Sell", "Gear", "Index", "Level", "Upgrade", "Tower", "Boss", "Season", "Claim", "SuperLoot", "Combat", "Guard", "Race", "Movement", "Session", "Scheduler" }) do
     xDTaraZ[name] = {}
 end
 
@@ -820,6 +826,32 @@ function xDTaraZ.Spawn.Give(itemId, kind, amount)
     return true
 end
 
+---@return string[]  potion ids you own at least once (the rest can't be added)
+function xDTaraZ.Potion.Owned()
+    local owned = {}
+    local stock = xDTaraZ.Data.Get().Potion or {}
+    for potionId in pairs(xDTaraZ.GameLib.Need(GameConfig.Potion.Config)) do
+        if stock[potionId] ~= nil then table.insert(owned, potionId) end
+    end
+    table.sort(owned)
+    return owned
+end
+
+function xDTaraZ.Potion.Add(potionId, amount)
+    xDTaraZ.Util.Remote("Potion", "TryUsePotionRE"):FireServer(potionId, -math.abs(amount))
+end
+
+---@return number  potions boosted for about a year each
+function xDTaraZ.Potion.MaxBuffs()
+    local use = xDTaraZ.Util.Remote("Potion", "TryUsePotionRE")
+    local owned = xDTaraZ.Potion.Owned()
+    for _, potionId in ipairs(owned) do
+        xDTaraZ.Potion.Add(potionId, Config.PotionStack)
+        use:FireServer(potionId, Config.PotionStack)
+    end
+    return #owned
+end
+
 ---@return number  stacks touched
 function xDTaraZ.Spawn.DupeAll(amount)
     local materials, touched = {}, 0
@@ -986,7 +1018,7 @@ function xDTaraZ.Forge.Step()
     for uuid, entry in pairs(fresh) do
         local worn = profile.Backpack.equiped[entry.Type]
         local wornEntry = worn and profile.Backpack.have[worn]
-        if not wornEntry or xDTaraZ.Gear.Score(entry) > xDTaraZ.Gear.Score(wornEntry) then
+        if not wornEntry or xDTaraZ.Gear.Score(entry, true) > xDTaraZ.Gear.Score(wornEntry, true) then
             keep[uuid] = true
         end
     end
@@ -1039,20 +1071,24 @@ function xDTaraZ.Sell.Fresh(fresh, keep)
     end
 end
 
----@return number  gear power, enchants only break ties
-function xDTaraZ.Gear.Score(entry)
-    local helper = xDTaraZ.GameLib.Api(entry.Type == "Weapon" and GameConfig.Weapon.Helper or GameConfig.Armor.Helper)
-    local ok, base = pcall(helper.GetMainAffix, entry.ID)
-    if not ok or type(base) ~= "number" then return 0 end
-    local boostOk, boost = pcall(xDTaraZ.GameLib.Api(GameConfig.Enhant.Helper).GetBoost, entry.Level or 0)
-    return base * (1 + (boostOk and tonumber(boost) or 0)) * (1 + #(entry.EnchanceList or {}) * 1e-9)
+---@param atTarget boolean?  score as if enhanced to the target, so exclusive gear isn't skipped for a higher-level common piece
+---@return number           power from the game's own formula
+function xDTaraZ.Gear.Score(entry, atTarget)
+    local balance = xDTaraZ.GameLib.Api(ReplicatedStorage.Utils.BalanceUtils)
+    local backpack = (State.Profile or xDTaraZ.Data.Get()).Backpack
+    local potential = table.clone(entry)
+    if atTarget then potential.Level = math.max(entry.Level or 0, State.Opt.EnhanceTarget) end
+    local value = entry.Type == "Weapon" and balance.GetWeaponTrainValue or balance.GetArmorValue
+    local ok, power = pcall(value, LocalPlayer, potential, backpack)
+    if not ok or type(power) ~= "number" then return 0 end
+    return power * (1 + (entry.Level or 0) * 1e-6 + #(entry.EnchanceList or {}) * 1e-9)
 end
 
-function xDTaraZ.Gear.BestOwned(profile, slot)
+function xDTaraZ.Gear.BestOwned(profile, slot, atTarget)
     local bestUuid, bestScore = nil, -1
     for uuid, entry in pairs(profile.Backpack.have) do
         if entry.Type == slot then
-            local score = xDTaraZ.Gear.Score(entry)
+            local score = xDTaraZ.Gear.Score(entry, atTarget)
             if score > bestScore then
                 bestUuid, bestScore = uuid, score
             end
@@ -1066,11 +1102,12 @@ function xDTaraZ.Gear.EquipBest()
     local profile = xDTaraZ.Data.Get()
     local equip = xDTaraZ.Util.Remote("Backpack", "TryEquipItemRE")
     local changed = 0
+    local atTarget = State.Opt.MaxGear and State.Opt.GearEnhance
     for _, slot in ipairs(Config.GearTypes) do
-        local best, bestScore = xDTaraZ.Gear.BestOwned(profile, slot)
+        local best, bestScore = xDTaraZ.Gear.BestOwned(profile, slot, atTarget)
         local current = profile.Backpack.equiped[slot]
         local currentEntry = current and profile.Backpack.have[current]
-        if best and best ~= current and bestScore > (currentEntry and xDTaraZ.Gear.Score(currentEntry) or -1) then
+        if best and best ~= current and bestScore > (currentEntry and xDTaraZ.Gear.Score(currentEntry, atTarget) or -1) then
             equip:FireServer(best, slot)
             changed += 1
         end
@@ -1087,7 +1124,7 @@ function xDTaraZ.Gear.ForgeBest()
                 xDTaraZ.Forge.Run(spec.forgeType, { [top.uuid] = spec.ores })
             end
         end
-        local best = xDTaraZ.Gear.BestOwned(xDTaraZ.Data.Get(), spec.slot)
+        local best = xDTaraZ.Gear.BestOwned(xDTaraZ.Data.Get(), spec.slot, true)
         if best then
             xDTaraZ.Util.Remote("Backpack", "TryEquipItemRE"):FireServer(best, spec.slot)
         end
@@ -1346,13 +1383,14 @@ function xDTaraZ.Index.Choices()
     return labels
 end
 
----@return boolean  true once the index has it
-function xDTaraZ.Index.Hunt(gear)
+---@param copies number?  keep forging until this many new copies, ignoring the index
+---@return boolean        true once the index has it, or all copies were made
+function xDTaraZ.Index.Hunt(gear, copies)
     local chance, oreId, count = xDTaraZ.Index.Plan(gear)
     if chance <= 0 then return false end
-    local budget = math.min(Config.HuntMaxForges, math.ceil(Config.HuntTargetHits / chance))
+    local budget = math.min(Config.HuntMaxForges * (copies or 1), math.ceil(Config.HuntTargetHits * (copies or 1) / chance))
     local key = gear.slot .. "-" .. gear.id
-    local forged = 0
+    local forged, got = 0, 0
     while forged < budget and State.Alive do
         local uuid = xDTaraZ.Ore.Ensure(oreId, count * Config.HuntBatch)
         if not uuid then return false end
@@ -1368,12 +1406,40 @@ function xDTaraZ.Index.Hunt(gear)
         local fresh = xDTaraZ.Data.NewGear(before)
         local keep = {}
         for freshUuid, entry in pairs(fresh) do
-            if entry.ID == gear.id then keep[freshUuid] = true end
+            if entry.ID == gear.id and (not copies or got < copies) then
+                keep[freshUuid] = true
+                got += 1
+            end
         end
         xDTaraZ.Sell.Fresh(fresh, keep)
-        if State.Profile.Index.unlocked[key] or next(keep) then return true end
+        if copies then
+            State.IndexNote = ("%s %d/%d"):format(gear.id, got, copies)
+            if got >= copies then return true end
+        elseif State.Profile.Index.unlocked[key] or next(keep) then
+            return true
+        end
     end
     return false
+end
+
+---@param slot string  "Weapon", "Armor" or "Hat"
+---@return string[]    every forgeable piece of that slot, strongest first
+function xDTaraZ.Spawn.GearChoices(slot)
+    local labels, byLabel, list = {}, {}, {}
+    for _, gear in ipairs(xDTaraZ.Index.GearCatalog()) do
+        if not gear.forgeable or gear.slot ~= slot then continue end
+        local helper = xDTaraZ.GameLib.Api(gear.forgeType == "Weapon" and GameConfig.Weapon.Helper or GameConfig.Armor.Helper)
+        local ok, power = pcall(helper.GetMainAffix, gear.id)
+        table.insert(list, { gear, ok and tonumber(power) or 0 })
+    end
+    table.sort(list, function(a, b) return a[2] > b[2] end)
+    for _, pair in ipairs(list) do
+        local label = xDTaraZ.Index.Label(pair[1])
+        byLabel[label] = pair[1]
+        table.insert(labels, label)
+    end
+    State.GearLabels = byLabel
+    return labels
 end
 
 ---@return number, number  found, tried
@@ -1654,13 +1720,18 @@ end
 
 function xDTaraZ.Boss.Join()
     xDTaraZ.Util.Remote("WorldBoss", "IntoWorldBossFight"):FireServer()
-    LocalPlayer:SetAttribute("IntoFight", "WorldBoss")
-    local arena = workspace:FindFirstChild("WorldModel") and workspace.WorldModel:FindFirstChild("WorldBoss")
-    local center = arena and arena:FindFirstChild("Center")
     local char = LocalPlayer.Character
-    if not (center and char) then return end
-    State.BossReturn = char:GetPivot()
-    char:PivotTo(CFrame.new(center:GetPivot().Position + Vector3.new(0, Config.BossStandHeight, 0)))
+    if char and not State.BossReturn then State.BossReturn = char:GetPivot() end
+end
+
+---@param boss Model
+function xDTaraZ.Boss.StandNear(boss)
+    local char = LocalPlayer.Character
+    if not char then return end
+    local pos = boss:GetPivot().Position
+    if (char:GetPivot().Position - pos).Magnitude > Config.BossReach then
+        char:PivotTo(CFrame.new(pos + Vector3.new(0, Config.BossStandHeight, Config.BossStandBack), pos))
+    end
 end
 
 function xDTaraZ.Boss.Step()
@@ -1674,7 +1745,8 @@ function xDTaraZ.Boss.Step()
     end
 
     local boss = workspace.EnemyFolder_Server:FindFirstChild(bossName)
-    if not boss then return end
+    if not boss or boss:GetAttribute("Dead") then return end
+    xDTaraZ.Boss.StandNear(boss)
     local announce = xDTaraZ.Util.Remote("Attack", "UseAnyATKRE")
     local attack = xDTaraZ.Util.Remote("Attack", "AttackEnemyServiceRE")
     for _ = 1, Config.BossHitsPerTick do
@@ -1688,7 +1760,7 @@ end
 function xDTaraZ.Boss.ClaimCards()
     local claim = xDTaraZ.Util.Remote("WorldBoss", "TryClaimBossRewardRE")
     for card = 1, Config.BossCards do
-        claim:FireServer(tostring(card))
+        task.spawn(claim.FireServer, claim, tostring(card))
     end
 end
 
@@ -1734,6 +1806,24 @@ function xDTaraZ.Season.Goods()
         table.insert(labels, label)
     end
     return labels, byLabel
+end
+
+---@return number  exclusive gear bought, farming the coins first when short
+function xDTaraZ.Season.BuyExclusive()
+    local goods = xDTaraZ.GameLib.Need(GameConfig.Season.GoodsConfig)
+    local exchange = xDTaraZ.Util.Remote("Season", "ExchangeGoodsRE")
+    local bought = 0
+    for goodId, good in pairs(goods) do
+        if good.Type ~= "Weapon" and good.Type ~= "Armor" and good.Type ~= "Hat" then continue end
+        local season = xDTaraZ.Season.Current()
+        if not season or ((season.Goods or {})[goodId] or 0) >= (good.Store or 1) then continue end
+        local short = good.NeedSeasonCoin - (season.SeasonCoin or 0)
+        if short > 0 then xDTaraZ.Tower.FarmCoins(short) end
+        exchange:FireServer(goodId)
+        bought += 1
+        task.wait(0.5)
+    end
+    return bought
 end
 
 function xDTaraZ.Season.BuyGoods()
@@ -2566,6 +2656,62 @@ local function BuildInterface()
                 Notify(("Added %s to %d stacks"):format(xDTaraZ.Util.Abbreviate(amount), touched), touched > 0 and "Success" or "Warning")
             end)
         end })
+
+        local gearBox = tab:AddLeftGroupbox(T("Spawn Gear", "เสกอาวุธและชุด"), nil, "OP")
+        local function LoadGearList(slot)
+            task.defer(function()
+                local ok, labels = pcall(xDTaraZ.Spawn.GearChoices, slot)
+                if ok then
+                    Later(SetList, "SpawnGear", labels, true)
+                else
+                    warn("[LootToForge] gear list:", labels)
+                end
+            end)
+        end
+        opt.GearSlot = Config.GearTypes[1]
+        gearBox:AddDropdown("GearSlot", {
+            Text = T("Type", "ประเภท"),
+            Values = Config.GearTypes,
+            Default = 1,
+            NoSave = true,
+            Callback = function(value)
+                opt.GearSlot = value
+                LoadGearList(value)
+            end,
+        })
+        opt.SpawnGear = nil
+        gearBox:AddDropdown("SpawnGear", {
+            Text = T("Gear", "อุปกรณ์"),
+            Description = T("Strongest first. Exclusive gear is shop only", "แรงสุดอยู่บน ของ Exclusive มีแค่ในร้าน"),
+            Values = { "..." },
+            Default = 1,
+            Searchable = true,
+            NoSave = true,
+            Callback = function(value)
+                opt.SpawnGear = value
+            end,
+        })
+        LoadGearList(opt.GearSlot)
+        NumberInput(gearBox, "GearCopies", T("Copies", "จำนวนชิ้น"), nil, 1)
+        gearBox:AddButton({ Text = T("Spawn Gear", "เสกอุปกรณ์"), Style = "Primary", Func = LongAction("Index", function()
+            local gear = State.GearLabels[opt.SpawnGear]
+            return gear and xDTaraZ.Index.Hunt(gear, math.max(1, math.floor(opt.GearCopies)))
+        end, function(got)
+            return got and "Spawned!" or "Not all copies this time, press again"
+        end) })
+        gearBox:AddButton({ Text = T("Buy Exclusive Gear", "ซื้อของ Exclusive"), Func = LongAction("Tower", xDTaraZ.Season.BuyExclusive, function(bought)
+            return (bought or 0) > 0 and ("Bought %d exclusive pieces"):format(bought) or "Already bought this refresh"
+        end) })
+
+        local potionBox = tab:AddRightGroupbox(T("Potions", "ยา"), nil, "OP")
+        potionBox:AddButton({ Text = T("Max Potion Buffs", "บัฟยาเต็มทั้งปี"), Style = "Primary", Func = LongAction("Potion", xDTaraZ.Potion.MaxBuffs, function(count)
+            return (count or 0) > 0 and ("%d potion buffs active for about a year"):format(count) or "Own at least one potion first"
+        end) })
+        potionBox:AddButton({ Text = T("Add 100K Potions", "เพิ่มยา 100K ขวด"), Func = Action(function()
+            for _, potionId in ipairs(xDTaraZ.Potion.Owned()) do
+                xDTaraZ.Potion.Add(potionId, Config.PotionStack)
+            end
+        end) })
 
         local coinBox = tab:AddRightGroupbox(T("Season Coins", "เหรียญซีซั่น"), nil, "OP")
         NumberInput(coinBox, "CoinTarget", T("Amount", "จำนวน"), nil, 1)

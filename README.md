@@ -74,10 +74,12 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 - **Spawn Items**: any ore, enchant rune, Protection Scroll, Tower Ticket or enhance stone, any amount
 - **Dupe Whole Inventory**: one click adds to every stack you own
 - **Add Season Coins**: type an amount, get it in minutes
+- **Spawn Gear**: pick any weapon, armor or hat and get it
+- **Potions**: unlimited Power and Damage potions, buffs for about a year
 - **Kill Aura**, **Kill Ore Boss**, **Invincible**, keep ore on death
 - **Auto Farm Tower** on one ticket: rare stones and season coins
 - **Auto Season**: daily ticket, spins, pass rewards and shop
-- **Auto World Boss** *(beta)*
+- **Auto World Boss**: joins, kills and takes the reward card
 - Auto sell, auto equip, auto train, click, rebirth, upgrades, best race slot, race roll
 - **Kaitun**: does all of the above at once
 
