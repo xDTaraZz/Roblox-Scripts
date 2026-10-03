@@ -667,17 +667,26 @@ function xDTaraZ.Esp.Targets()
         local char = xDTaraZ.Entity.Character(entity)
         local health, maxHealth = xDTaraZ.Entity.Health(entity)
         if not char or health <= 0 then continue end
+        local player = Players:GetPlayerFromCharacter(char)
         list[#list + 1] = {
             Model = char,
-            Name = char.Name,
+            Player = player,
+            Name = player and player.DisplayName or char.Name,
+            Kind = player and "Player" or "Bot",
             Health = health,
             MaxHealth = maxHealth > 0 and maxHealth or 100,
-            Friendly = xDTaraZ.Entity.Friendly(entity),
+            Enemy = not xDTaraZ.Entity.Friendly(entity),
             Root = xDTaraZ.Entity.Root(entity),
+            Head = char:FindFirstChild("Head"),
         }
     end
     xDTaraZ.Esp.Count = #list
     return list
+end
+
+---@return Model?  character the aimbot/silent aim is locked on
+function xDTaraZ.Esp.Focus()
+    return xDTaraZ.Entity.Character(xDTaraZ.Combat.Target)
 end
 
 function xDTaraZ.Esp.GetStatus()
@@ -1776,7 +1785,7 @@ end
 
 function xDTaraZ.UI.BuildVisuals(window)
     window:AddTabSection(T("Visuals", "การมองเห็น"))
-    window:AddVisualsTab({ Icon = "esp", Provider = xDTaraZ.Esp.Targets, Preview = true })
+    window:AddVisualsTab({ Icon = "esp", Provider = xDTaraZ.Esp.Targets, Focus = xDTaraZ.Esp.Focus, Preview = true })
     xDTaraZ.UI.BuildSkins(window)
 end
 

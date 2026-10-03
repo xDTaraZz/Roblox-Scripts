@@ -8,6 +8,7 @@ local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
 local HttpService = game:GetService("HttpService")
+local CollectionService = game:GetService("CollectionService")
 local Lighting = game:GetService("Lighting")
 local TeleportService = game:GetService("TeleportService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
@@ -724,7 +725,66 @@ function xDTaraZ.Guns.Restore()
     end
 end
 
-xDTaraZ.Esp = { Count = 0 }
+xDTaraZ.Esp = { Count = 0, Decoded = {} }
+
+---@return table?  JSON attribute decoded once per distinct raw string
+function xDTaraZ.Esp.Attr(owner, key)
+    local raw = owner:GetAttribute(key)
+    if type(raw) ~= "string" then return nil end
+    local cache = xDTaraZ.Esp.Decoded
+    if cache[raw] == nil then cache[raw] = xDTaraZ.Util.Decode(raw) or false end
+    return cache[raw] or nil
+end
+
+---@return number?, string[]  armor left and status tags (C4, Kit, Helmet, Scoped)
+function xDTaraZ.Esp.Status(owner)
+    local flags = {}
+    if not owner then return nil, flags end
+    local armor = xDTaraZ.Esp.Attr(owner, "Armor")
+    local bomb = xDTaraZ.Esp.Attr(owner, "Slot5")
+    if bomb and bomb.Weapon == "C4" then flags[#flags + 1] = "C4" end
+    if owner:GetAttribute("HasDefuseKit") == true then flags[#flags + 1] = "Kit" end
+    if armor and type(armor.Type) == "string" and armor.Type:find("Helmet") then flags[#flags + 1] = "Helmet" end
+    if owner:GetAttribute("IsSniperScoped") == true then flags[#flags + 1] = "Scoped" end
+    return armor and tonumber(armor.Health), flags
+end
+
+---@return Model?  whatever aimbot, silent aim or ragebot is locked on
+function xDTaraZ.Esp.Focus()
+    local state = xDTaraZ.State
+    return state.AimTarget or state.SilentTarget or state.RageTarget
+end
+
+function xDTaraZ.Esp.DroppedGuns()
+    local list = {}
+    for _, model in ipairs(CollectionService:GetTagged("WeaponDropped")) do
+        if model:GetAttribute("CanPickup") ~= false then list[#list + 1] = model end
+    end
+    return list
+end
+
+---@return BasePart[]  one plant zone part per site (the largest), so each site gets a single label
+function xDTaraZ.Esp.Sites()
+    local best = {}
+    for _, part in ipairs(CollectionService:GetTagged("PlantArea")) do
+        local site = part:IsA("BasePart") and part:GetAttribute("Site")
+        if not site then continue end
+        local current = best[site]
+        if not current or part.Size.Magnitude > current.Size.Magnitude then best[site] = part end
+    end
+    local list = {}
+    for _, part in pairs(best) do list[#list + 1] = part end
+    return list
+end
+
+---@return table[]  extra Visuals categories: planted bomb, dropped guns, bombsites
+function xDTaraZ.Esp.Categories()
+    return {
+        { Name = "Bomb", Text = T("Planted C4", "C4 ที่ปักแล้ว"), Color = Color3.fromRGB(255, 70, 70), Characters = false, MaxDistance = math.huge, Source = { Tag = "Bomb" }, Label = function() return "C4" end },
+        { Name = "DroppedGuns", Text = T("Dropped Guns", "ปืนที่ตกพื้น"), Color = Color3.fromRGB(238, 196, 82), Characters = false, Source = xDTaraZ.Esp.DroppedGuns, Label = function(model) return model:GetAttribute("Weapon") end },
+        { Name = "Sites", Text = T("Bombsites", "จุดปักระเบิด"), Color = Color3.fromRGB(120, 200, 255), Characters = false, MaxDistance = math.huge, Source = xDTaraZ.Esp.Sites, Label = function(part) return "Site " .. tostring(part:GetAttribute("Site")) end },
+    }
+end
 
 ---@return table[]  targets in the shape Library.Visuals expects
 function xDTaraZ.Esp.Targets()
@@ -733,15 +793,22 @@ function xDTaraZ.Esp.Targets()
         if tostring(model:GetAttribute("Dead")) == "true" then continue end
         local owner = xDTaraZ.Target.Owner(model)
         local equipped = owner and xDTaraZ.Util.Decode(owner:GetAttribute("CurrentEquipped"))
-        local label = owner and owner.DisplayName or model.Name
-        if equipped and equipped.Name then label = label .. " [" .. equipped.Name .. "]" end
+        local mine = LocalPlayer:GetAttribute("Team")
+        local armor, flags = xDTaraZ.Esp.Status(owner)
         list[#list + 1] = {
             Model = model,
-            Name = label,
+            Player = owner,
+            Name = owner and owner.DisplayName or model.Name,
+            Kind = owner and "Player" or "Bot",
+            Weapon = equipped and equipped.Name,
+            Armor = armor,
+            MaxArmor = 100,
+            Flags = flags,
             Health = tonumber(model:GetAttribute("Health")) or 100,
             MaxHealth = tonumber(model:GetAttribute("MaxHealth")) or 100,
-            Friendly = not xDTaraZ.Target.IsEnemy(model),
+            Enemy = mine == nil or not owner or owner:GetAttribute("Team") ~= mine,
             Root = model:FindFirstChild("HumanoidRootPart"),
+            Head = model:FindFirstChild("Head"),
         }
     end
     xDTaraZ.Esp.Count = #list
@@ -1381,7 +1448,7 @@ end
 
 function xDTaraZ.UI.BuildVisuals(window)
     window:AddTabSection(T("Visuals", "การมองเห็น"))
-    window:AddVisualsTab({ Icon = "esp", Provider = xDTaraZ.Esp.Targets, Preview = true })
+    window:AddVisualsTab({ Icon = "esp", Provider = xDTaraZ.Esp.Targets, Focus = xDTaraZ.Esp.Focus, Categories = xDTaraZ.Esp.Categories(), Preview = true })
     xDTaraZ.UI.BuildWorld(window)
     xDTaraZ.UI.BuildSkins(window)
 end

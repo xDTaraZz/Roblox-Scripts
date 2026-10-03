@@ -15059,7 +15059,7 @@ end
 
 Library.Visuals = { Enabled = false, Preview = false }
 
----V1 targets `{ Model, Name, Color? }` or Players/Models; nil = every player.
+---Provider targets pass through whole (`{ Model, Name, Enemy/Friendly, Health, MaxHealth, Armor, Weapon, Flags, Kind, Root, Head, Color }`) so Kit.Esp keeps team and health; nil = every player.
 function Library.Visuals.Source()
     local provider = Library.Visuals.Provider
     if not provider then
@@ -15069,19 +15069,12 @@ function Library.Visuals.Source()
     if not ok or type(targets) ~= "table" then
         return {}
     end
-    local models = table.create(#targets)
-    for _, target in ipairs(targets) do
-        local model = type(target) == "table" and target.Model or target
-        if typeof(model) == "Instance" then
-            models[#models + 1] = model
-        end
-    end
-    return models
+    return targets
 end
 
 function Library.Visuals.Category()
     if not Kit.Esp.Categories.Visuals then
-        Kit.Esp.AddCategory("Visuals", { Text = Library:T("Targets", "เป้าหมาย"), Color = Color3.fromRGB(240, 92, 80), Source = Library.Visuals.Source, Enabled = true })
+        Kit.Esp.AddCategory("Visuals", { Text = Library:T("Targets", "เป้าหมาย"), Color = Color3.fromRGB(240, 92, 80), Source = Library.Visuals.Source, Enabled = true, Characters = true })
     end
     return Kit.Esp.Categories.Visuals
 end
@@ -15222,8 +15215,12 @@ end
 
 ---@return Color3  what Kit.Esp would paint: team color, first enabled category, else the first one
 function Library.Visuals.Color()
-    if Kit.Esp.Settings.TeamColor and LocalPlayer.Team then
+    local tuning = Kit.Esp.Settings
+    if (tuning.TeamColor or tuning.ColorMode == "Team") and LocalPlayer.Team then
         return LocalPlayer.TeamColor.Color
+    end
+    if tuning.ColorMode == "Relation" then
+        return tuning.Colors.EnemyVisible
     end
     local first
     for _, name in ipairs(Kit.Esp.Order) do
@@ -15417,17 +15414,18 @@ function Library.Visuals.Teardown()
 end
 
 ---V1 shim: one tab with the Kit ESP groups fed by `Provider`, plus the live ESP preview.
----@param options table?  { Name, Icon, Provider, Preview }
+---@param options table?  { Name, Icon, Provider, Preview, Focus = fn() -> Model?, Kinds = { "Zombies" }, Categories }
 function Window:AddVisualsTab(options)
     options = options or {}
     Library.Visuals.Provider = options.Provider
     Library.Visuals.Preview = options.Preview == true
+    Kit.Esp.FocusSource = options.Focus
     local tab = self:AddTab(options.Name or Library:T("Visuals", "การมองเห็น"), options.Icon or "eye")
     Library.Visuals.Tab = tab
     if options.Provider then
         Library.Visuals.Category()
     end
-    local _, look = Kit.Esp.Build(tab, { Players = options.Provider == nil })
+    local _, look = Kit.Esp.Build(tab, { Players = options.Provider == nil, Kinds = options.Kinds, Categories = options.Categories })
     look:AddToggle("MarioEspPreview", {
         Text = Library:T("Show Preview", "แสดงตัวอย่าง"),
         Default = Library.Visuals.Preview,
@@ -16468,7 +16466,10 @@ Kit.Config = {
     RemoteShrink = 0.95,
     Esp = {
         Rate = 0.25, TouchRate = 0.75, MaxDistance = 1500, TouchMaxDistance = 600,
-        TextSize = 13, TouchTextSize = 11, HighlightCap = 30, MinHeight = 2, LabelOffset = 3, TextStroke = 0.4, HighlightFill = 0.8,
+        TextSize = 13, TouchTextSize = 11, HighlightCap = 30, MinHeight = 2, MaxHeight = 12, LabelOffset = 3, TextStroke = 0.4, HighlightFill = 0.8,
+        SightRate = 0.05, SightBudget = 6, SightPierce = 3, SeeThrough = 0.75, MeasureRate = 2, TextWidth = 320,
+        CornerRatio = 0.25, BarWidth = 3, BarGap = 3, BarBack = 0.6,
+        HeadRadius = 0.35, MinCamera = 4, MaxDot = 12, RadarMargin = Vector2.new(24, 80), RadarBack = 0.45,
     },
     Aim = {
         Fov = 120, TouchFov = 160, SilentFov = 160, MaxDistance = 1000, MinRay = 30, ShotRadius = 20,
@@ -18170,20 +18171,68 @@ Kit.Esp = {
     Entries = {},
     Pool = {},
     Seen = {},
+    Sight = {},
+    SightIndex = 0,
+    Ranked = {},
     Running = false,
     Highlights = 0,
     Listeners = {},
+    Frame = 0,
     Settings = {
         Show = { Name = true, Distance = true },
         MaxDistance = Kit.Config.Esp.MaxDistance,
         TeamCheck = false,
         TeamColor = false,
+        VisibleOnly = false,
+        HideDead = true,
+        Kinds = nil,
         TextSize = Kit.Config.Esp.TextSize,
         Rate = Kit.Config.Esp.Rate,
+        ColorMode = "Relation",
+        LowHealth = false,
+        LowHealthAt = 30,
+        BoxStyle = "2D",
+        BoxOutline = true,
+        BoxFill = false,
+        BoxFillAlpha = 0.15,
+        Thickness = 1,
+        BarSide = "Left",
+        ChamsMode = "Always",
+        ChamsFill = 0.5,
+        ChamsOutline = 0,
+        TracerOrigin = "Bottom",
+        ArrowRadius = 180,
+        ArrowSize = 14,
+        Watch = false,
+        WatchAngle = 8,
+        RadarSize = 160,
+        RadarRange = 250,
+        RadarRotate = true,
+        RadarCorner = "Top Left",
+        Colors = {
+            EnemyVisible = Color3.fromRGB(240, 92, 80), EnemyHidden = Color3.fromRGB(170, 90, 230),
+            TeamVisible = Color3.fromRGB(92, 200, 120), TeamHidden = Color3.fromRGB(70, 140, 200),
+            BotVisible = Color3.fromRGB(238, 196, 82), BotHidden = Color3.fromRGB(200, 130, 60),
+            Focus = Color3.fromRGB(255, 255, 255), LowHealth = Color3.fromRGB(255, 150, 40), Watching = Color3.fromRGB(255, 60, 160),
+            HealthHigh = Color3.fromRGB(90, 220, 110), HealthLow = Color3.fromRGB(235, 70, 60), Armor = Color3.fromRGB(80, 160, 255),
+        },
     },
 }
 
----@param spec table  { Text, Color, Source = fn() -> Instances|Players | Folder | { Tag = "x" }, Label = fn(model) -> string? }
+Kit.Esp.Bones = {
+    R15 = {
+        { "Head", "UpperTorso" }, { "UpperTorso", "LowerTorso" },
+        { "UpperTorso", "LeftUpperArm" }, { "LeftUpperArm", "LeftLowerArm" }, { "LeftLowerArm", "LeftHand" },
+        { "UpperTorso", "RightUpperArm" }, { "RightUpperArm", "RightLowerArm" }, { "RightLowerArm", "RightHand" },
+        { "LowerTorso", "LeftUpperLeg" }, { "LeftUpperLeg", "LeftLowerLeg" }, { "LeftLowerLeg", "LeftFoot" },
+        { "LowerTorso", "RightUpperLeg" }, { "RightUpperLeg", "RightLowerLeg" }, { "RightLowerLeg", "RightFoot" },
+    },
+    R6 = {
+        { "Head", "Torso" }, { "Torso", "Left Arm" }, { "Torso", "Right Arm" }, { "Torso", "Left Leg" }, { "Torso", "Right Leg" },
+    },
+}
+
+---@param spec table  { Text, Color, Source = fn() -> Instances|Players|targets | Folder | { Tag = "x" }, Label = fn(model) -> string?, Characters = bool, MaxDistance = number? }
 function Kit.Esp.AddCategory(name, spec)
     spec = spec or {}
     if not Kit.Esp.Categories[name] then
@@ -18195,6 +18244,8 @@ function Kit.Esp.AddCategory(name, spec)
         Color = spec.Color or Color3.fromRGB(255, 255, 255),
         Source = spec.Source,
         Label = spec.Label,
+        Characters = spec.Characters,
+        MaxDistance = spec.MaxDistance,
         Enabled = spec.Enabled == true,
     }
     return Kit.Esp.Categories[name]
@@ -18239,6 +18290,11 @@ function Kit.Esp.Set(key, value)
     Kit.Esp.Changed()
 end
 
+---@param model Instance?  highlighted with the Focus color (aim target); nil clears
+function Kit.Esp.SetFocus(model)
+    Kit.Esp.FocusModel = model
+end
+
 function Kit.Esp.Gather(category)
     local source = category.Source
     if type(source) == "function" then
@@ -18269,18 +18325,81 @@ function Kit.Esp.Resolve(target)
     return nil
 end
 
-function Kit.Esp.Anchor(model)
+---@return table? info, Instance? model, Player? player  info = provider table (Name, Enemy, Health ...) or nil for a bare Instance
+function Kit.Esp.Read(raw)
+    if type(raw) ~= "table" then
+        return nil, Kit.Esp.Resolve(raw)
+    end
+    local model = raw.Model
+    if typeof(model) ~= "Instance" or model == LocalPlayer.Character then return nil end
+    return raw, model, raw.Player or Players:GetPlayerFromCharacter(model)
+end
+
+function Kit.Esp.Anchor(model, info)
+    if info and typeof(info.Root) == "Instance" and info.Root.Parent then
+        return info.Root
+    end
     if model:IsA("BasePart") then
         return model
     end
     return model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true)
 end
 
+---@return string  Enemy | Team | Bot | Object
+function Kit.Esp.Relation(entry)
+    local info, player = entry.Info, entry.Player
+    if not entry.Character then return "Object" end
+    local friendly
+    if info and info.Enemy ~= nil then
+        friendly = not info.Enemy
+    elseif info and info.Friendly ~= nil then
+        friendly = info.Friendly == true
+    elseif player and player.Team and LocalPlayer.Team then
+        friendly = player.Team == LocalPlayer.Team
+    end
+    if friendly then return "Team" end
+    return entry.Kind == "Bot" and "Bot" or "Enemy"
+end
+
+---V1 name kept for scripts that call it: true when the player is not on our team (or Team Check is off).
 function Kit.Esp.Hostile(player)
     if not player or not Kit.Esp.Settings.TeamCheck then
         return true
     end
     return player.Team == nil or player.Team ~= LocalPlayer.Team
+end
+
+---@return number?, number?  health and max health from the provider, else the Humanoid
+function Kit.Esp.Health(entry)
+    local info, hum = entry.Info, entry.Humanoid
+    local health = info and tonumber(info.Health)
+    local maxHealth = info and tonumber(info.MaxHealth)
+    if not health and hum and hum.Parent then
+        health, maxHealth = hum.Health, hum.MaxHealth
+    end
+    if not health then return nil end
+    return health, (maxHealth and maxHealth > 0) and maxHealth or 100
+end
+
+function Kit.Esp.RawName(entry)
+    local info, player, category = entry.Info, entry.Player, entry.Category
+    if info and type(info.Name) == "string" then return info.Name end
+    if category.Label then
+        local ok, text = Util.Try(category.Label, entry.Model)
+        if ok and type(text) == "string" then return text end
+    end
+    if player then
+        return player.DisplayName
+    end
+    return entry.Model.Name
+end
+
+---Drawing fonts only carry Latin glyphs, so CJK/Thai names would print as "??": fall back to the ASCII username, else the kind.
+function Kit.Esp.Name(entry)
+    local name = Kit.Esp.RawName(entry)
+    if Kit.Esp.Mode ~= "Drawing" or not name:find("[\128-\255]") then return name end
+    if entry.Player then return entry.Player.Name end
+    return entry.Kind ~= "Object" and tostring(entry.Kind) or name
 end
 
 function Kit.Esp.Start()
@@ -18290,14 +18409,14 @@ function Kit.Esp.Start()
     Kit.Esp.Running = true
     Kit.Esp.Mode = Kit.Caps.Drawing and "Drawing" or "Gui"
     Kit.Scheduler.Add("KitEspScan", Kit.Esp.Scan, { Interval = Kit.Esp.Settings.Rate })
-    if Kit.Esp.Mode == "Drawing" then
-        Kit.Scheduler.Add("KitEspDraw", Kit.Esp.Draw, { Lane = "Render", Priority = -10 })
-    end
+    Kit.Scheduler.Add("KitEspSight", Kit.Esp.SightStep, { Interval = Kit.Config.Esp.SightRate })
+    Kit.Scheduler.Add("KitEspDraw", Kit.Esp.Draw, { Lane = "Render", Priority = -10 })
 end
 
 function Kit.Esp.Stop()
     Kit.Esp.Running = false
     Kit.Scheduler.Remove("KitEspScan")
+    Kit.Scheduler.Remove("KitEspSight")
     Kit.Scheduler.Remove("KitEspDraw")
     for model, entry in pairs(Kit.Esp.Entries) do
         Kit.Esp.Release(entry)
@@ -18307,6 +18426,8 @@ function Kit.Esp.Stop()
         Kit.Esp.Destroy(entry)
     end
     table.clear(Kit.Esp.Pool)
+    table.clear(Kit.Esp.Sight)
+    Kit.Esp.Radar.Destroy()
 end
 
 function Kit.Esp.Status()
@@ -18317,168 +18438,135 @@ function Kit.Esp.Status()
     return Kit.Esp.Running and (count .. " shown") or "Off"
 end
 
-function Kit.Esp.NewVisuals()
-    if Kit.Esp.Mode == "Drawing" then
-        local box = Drawing.new("Square")
-        box.Thickness, box.Filled = 1, false
-        local tracer = Drawing.new("Line")
-        tracer.Thickness = 1
-        local label = Drawing.new("Text")
-        label.Center, label.Outline = true, true
-        return { Mode = "Drawing", Box = box, Tracer = tracer, Label = label }
-    end
-    local billboard = Instance.new("BillboardGui")
-    billboard.AlwaysOnTop = true
-    billboard.Size = UDim2.fromOffset(200, 36)
-    billboard.StudsOffset = Vector3.new(0, Kit.Config.Esp.LabelOffset, 0)
-    billboard.Enabled = false
-    local text = Instance.new("TextLabel")
-    text.BackgroundTransparency = 1
-    text.Size = UDim2.fromScale(1, 1)
-    text.Font = Enum.Font.GothamBold
-    text.TextStrokeTransparency = Kit.Config.Esp.TextStroke
-    text.Parent = billboard
-    billboard.Parent = Kit.Overlay.Folder()
-    local highlight = Instance.new("Highlight")
-    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-    highlight.FillTransparency = Kit.Config.Esp.HighlightFill
-    highlight.Enabled = false
-    highlight.Parent = Kit.Overlay.Folder()
-    return { Mode = "Gui", Billboard = billboard, Text = text, Highlight = highlight }
-end
-
 function Kit.Esp.Acquire(model)
-    local pool = Kit.Esp.Pool
-    local entry = table.remove(pool)
+    local entry = table.remove(Kit.Esp.Pool)
     while entry and entry.Mode ~= Kit.Esp.Mode do
         Kit.Esp.Destroy(entry)
-        entry = table.remove(pool)
+        entry = table.remove(Kit.Esp.Pool)
     end
-    entry = entry or Kit.Esp.NewVisuals()
-    entry.Model = model
-    entry.Humanoid = model:FindFirstChildOfClass("Humanoid")
-    local size = model:IsA("Model") and model:GetExtentsSize() or model.Size
-    entry.Size = Vector2.new(math.max(size.X, 1), math.max(size.Y, Kit.Config.Esp.MinHeight))
-    if entry.Mode == "Gui" then
-        entry.Billboard.Adornee = model
-        entry.Billboard.Enabled = true
-    end
+    entry = entry or { Mode = Kit.Esp.Mode, Shapes = {} }
+    entry.Model, entry.Visible, entry.Watching, entry.Measured = model, true, false, 0
     return entry
 end
 
-function Kit.Esp.Hide(entry)
-    if entry.Mode == "Drawing" then
-        Kit.Esp.Show(entry, false, false, false)
-        return
-    end
-    entry.Billboard.Enabled = false
-    if entry.Highlight.Enabled then
-        entry.Highlight.Enabled = false
-        Kit.Esp.Highlights -= 1
-    end
-end
-
----Writes Drawing visibility only when it changes; each write crosses the executor bridge.
-function Kit.Esp.Show(entry, box, label, tracer)
-    local shown = entry.Shown
-    if not shown then
-        shown = {}
-        entry.Shown = shown
-    end
-    if shown.Box ~= box then
-        shown.Box, entry.Box.Visible = box, box
-    end
-    if shown.Label ~= label then
-        shown.Label, entry.Label.Visible = label, label
-    end
-    if shown.Tracer ~= tracer then
-        shown.Tracer, entry.Tracer.Visible = tracer, tracer
-    end
-end
-
 function Kit.Esp.Release(entry)
-    Kit.Esp.Hide(entry)
-    if entry.Mode == "Gui" then
-        entry.Billboard.Adornee, entry.Highlight.Adornee = nil, nil
+    Kit.Esp.HideAll(entry)
+    Kit.Esp.SetChams(entry, false)
+    if entry.Chams then
+        entry.Chams.Adornee = nil
+        table.clear(entry.ChamsCache)
     end
-    entry.Model, entry.Part, entry.Humanoid, entry.Player = nil, nil, nil, nil
+    entry.Model, entry.Part, entry.Head, entry.Humanoid, entry.Player, entry.Info, entry.BoneParts = nil, nil, nil, nil, nil, nil, nil
     table.insert(Kit.Esp.Pool, entry)
 end
 
 function Kit.Esp.Destroy(entry)
-    if entry.Mode == "Drawing" then
-        for _, key in ipairs({ "Box", "Tracer", "Label" }) do
-            local object = entry[key]
-            local remove = object.Remove or object.Destroy
-            pcall(remove, object)
-        end
+    for _, shape in pairs(entry.Shapes) do
+        Kit.Esp.Shape.Remove(shape)
+    end
+    table.clear(entry.Shapes)
+    if entry.Chams then
+        entry.Chams:Destroy()
+        entry.Chams = nil
+    end
+end
+
+---Box frame relative to the anchor, re-measured every few scans (accessories, crouch, rig swaps).
+function Kit.Esp.Measure(entry)
+    local model, part = entry.Model, entry.Part
+    local now = os.clock()
+    if now - entry.Measured < Kit.Config.Esp.MeasureRate then return end
+    entry.Measured = now
+    Kit.Esp.FindBones(entry)
+    if model:IsA("BasePart") then
+        entry.Offset, entry.Size = CFrame.identity, model.Size
         return
     end
-    entry.Billboard:Destroy()
-    entry.Highlight:Destroy()
+    if entry.Character and Kit.Esp.MeasureBody(entry) then return end
+    local ok, frame, size = pcall(model.GetBoundingBox, model)
+    if not ok then return end
+    entry.Offset = part.CFrame:ToObjectSpace(frame)
+    entry.Size = Vector3.new(size.X, math.clamp(size.Y, Kit.Config.Esp.MinHeight, Kit.Config.Esp.MaxHeight), size.Z)
 end
 
-function Kit.Esp.Caption(entry, distance)
-    local show = Kit.Esp.Settings.Show
-    local parts = {}
-    if show.Name then
-        local category, model = entry.Category, entry.Model
-        local custom
-        if category.Label then
-            local ok, text = Util.Try(category.Label, model)
-            custom = ok and type(text) == "string" and text or nil
-        end
-        parts[#parts + 1] = custom or (entry.Player and entry.Player.DisplayName) or model.Name
+---Body-only box in root space: visible limbs that are direct children, so held guns, accessories and capes do not stretch it.
+---@return boolean  false when the rig has no visible body parts
+function Kit.Esp.MeasureBody(entry)
+    local root = entry.Part.CFrame
+    local low, high
+    for _, child in ipairs(entry.Model:GetChildren()) do
+        if not child:IsA("BasePart") or child.Transparency >= 1 then continue end
+        local center, half = root:PointToObjectSpace(child.Position), child.Size / 2
+        low = low and low:Min(center - half) or center - half
+        high = high and high:Max(center + half) or center + half
     end
-    if show.Distance then
-        parts[#parts + 1] = "[" .. math.floor(distance) .. "m]"
-    end
-    local hum = entry.Humanoid
-    if show.Health and hum and hum.Parent then
-        parts[#parts + 1] = math.floor(hum.Health) .. "/" .. math.floor(hum.MaxHealth)
-    end
-    return table.concat(parts, " ")
+    if not low then return false end
+    local size = high - low
+    entry.Offset = CFrame.new((low + high) / 2)
+    entry.Size = Vector3.new(size.X, math.clamp(size.Y, Kit.Config.Esp.MinHeight, Kit.Config.Esp.MaxHeight), size.Z)
+    return true
 end
 
-function Kit.Esp.Paint(entry, distance)
+function Kit.Esp.Bind(entry, model, info)
+    entry.Head = info and typeof(info.Head) == "Instance" and info.Head or model:FindFirstChild("Head")
+    entry.Humanoid = model:FindFirstChildOfClass("Humanoid")
+    entry.Character = entry.Category.Characters ~= false and (entry.Humanoid ~= nil or (info ~= nil and info.Health ~= nil))
+    entry.Kind = info and info.Kind or (entry.Player and "Player") or (entry.Character and "Bot") or "Object"
+    entry.Relation = Kit.Esp.Relation(entry)
+end
+
+function Kit.Esp.FindBones(entry)
+    local model = entry.Model
+    local rig = model:FindFirstChild("UpperTorso") and Kit.Esp.Bones.R15 or model:FindFirstChild("Torso") and Kit.Esp.Bones.R6
+    local parts = entry.BoneParts or {}
+    table.clear(parts)
+    for _, pair in ipairs(rig or {}) do
+        local from, to = model:FindFirstChild(pair[1]), model:FindFirstChild(pair[2])
+        if from and to then parts[#parts + 1] = { from, to } end
+    end
+    entry.BoneParts = parts
+end
+
+---@return boolean  passes Team Check, Kinds, dead and health-range filters
+function Kit.Esp.Wanted(entry)
     local tuning = Kit.Esp.Settings
-    local player = entry.Player
-    local color = tuning.TeamColor and player and player.Team and player.TeamColor.Color or entry.Category.Color
-    local caption = Kit.Esp.Caption(entry, distance)
-    if entry.Mode == "Drawing" then
-        entry.Label.Text, entry.Label.Color, entry.Label.Size = caption, color, tuning.TextSize
-        entry.Box.Color, entry.Tracer.Color = color, color
-        return
-    end
-    entry.Text.Text, entry.Text.TextColor3, entry.Text.TextSize = caption, color, tuning.TextSize
-    entry.Text.Visible = caption ~= ""
-    local highlight = entry.Highlight
-    local wantBox = tuning.Show.Box == true
-    if wantBox and not highlight.Enabled and Kit.Esp.Highlights < Kit.Config.Esp.HighlightCap then
-        highlight.Adornee, highlight.Enabled = entry.Model, true
-        Kit.Esp.Highlights += 1
-    elseif not wantBox and highlight.Enabled then
-        highlight.Enabled = false
-        Kit.Esp.Highlights -= 1
-    end
-    highlight.OutlineColor, highlight.FillColor = color, color
+    if tuning.TeamCheck and entry.Relation == "Team" then return false end
+    if tuning.Kinds and entry.Character and not tuning.Kinds[entry.Kind] then return false end
+    local health, maxHealth = Kit.Esp.Health(entry)
+    if not health or not entry.Character then return true end
+    return not (tuning.HideDead and health <= 0)
 end
 
-function Kit.Esp.Track(category, target, origin, seen)
-    local model, player = Kit.Esp.Resolve(target)
-    if not model or seen[model] or not Kit.Esp.Hostile(player) then return end
-    local part = Kit.Esp.Anchor(model)
+function Kit.Esp.Track(category, raw, origin, seen)
+    local info, model, player = Kit.Esp.Read(raw)
+    if not model or seen[model] or not model.Parent or model == Kit.Esp.Spectated then return end
+    local part = Kit.Esp.Anchor(model, info)
     if not part then return end
     local distance = (part.Position - origin).Magnitude
-    if distance > Kit.Esp.Settings.MaxDistance then return end
-    seen[model] = true
-    local entry = Kit.Esp.Entries[model]
-    if not entry then
-        entry = Kit.Esp.Acquire(model)
-        Kit.Esp.Entries[model] = entry
+    if distance > (category.MaxDistance or Kit.Esp.Settings.MaxDistance) or distance < Kit.Config.Esp.MinCamera then return end
+    local entry = Kit.Esp.Entries[model] or Kit.Esp.Acquire(model)
+    entry.Part, entry.Player, entry.Category, entry.Info, entry.Distance = part, player, category, info, distance
+    Kit.Esp.Bind(entry, model, info)
+    if not Kit.Esp.Wanted(entry) then
+        if Kit.Esp.Entries[model] then return end
+        Kit.Esp.Release(entry)
+        return
     end
-    entry.Part, entry.Player, entry.Category = part, player, category
-    Kit.Esp.Paint(entry, distance)
+    seen[model] = true
+    Kit.Esp.Entries[model] = entry
+    Kit.Esp.Measure(entry)
+    entry.TopText, entry.BottomText = Kit.Esp.TopText(entry), Kit.Esp.BottomText(entry)
+end
+
+function Kit.Esp.Rank()
+    local ranked = Kit.Esp.Ranked
+    table.clear(ranked)
+    for _, entry in pairs(Kit.Esp.Entries) do
+        ranked[#ranked + 1] = entry
+    end
+    table.sort(ranked, function(left, right) return left.Distance < right.Distance end)
+    table.clear(Kit.Esp.Sight)
+    table.move(ranked, 1, #ranked, 1, Kit.Esp.Sight)
 end
 
 function Kit.Esp.Scan()
@@ -18487,11 +18575,13 @@ function Kit.Esp.Scan()
     local origin = camera.CFrame.Position
     local seen = Kit.Esp.Seen
     table.clear(seen)
+    local subject = camera.CameraSubject
+    Kit.Esp.Spectated = subject and subject:IsA("Humanoid") and subject.Parent or nil
     for _, name in ipairs(Kit.Esp.Order) do
         local category = Kit.Esp.Categories[name]
         if not category.Enabled then continue end
-        for _, target in ipairs(Kit.Esp.Gather(category)) do
-            Kit.Esp.Track(category, target, origin, seen)
+        for _, raw in ipairs(Kit.Esp.Gather(category)) do
+            Kit.Esp.Track(category, raw, origin, seen)
         end
     end
     for model, entry in pairs(Kit.Esp.Entries) do
@@ -18500,40 +18590,57 @@ function Kit.Esp.Scan()
             Kit.Esp.Entries[model] = nil
         end
     end
+    Kit.Esp.Rank()
+    local focus = Kit.Esp.FocusSource
+    if focus then
+        local ok, model = pcall(focus)
+        Kit.Esp.FocusModel = ok and model or nil
+    end
 end
 
-function Kit.Esp.Draw()
-    local camera = Workspace.CurrentCamera
-    if not camera then return end
-    local viewport = camera.ViewportSize
-    local show = Kit.Esp.Settings.Show
-    local focal = viewport.Y / (2 * math.tan(math.rad(camera.FieldOfView / 2)))
-    local tracerFrom = Vector2.new(viewport.X / 2, viewport.Y)
-    for _, entry in pairs(Kit.Esp.Entries) do
-        local part = entry.Part
-        if not part or not part.Parent then
-            Kit.Esp.Hide(entry)
-            continue
+Kit.Esp.Params = RaycastParams.new()
+Kit.Esp.Params.FilterType = Enum.RaycastFilterType.Exclude
+Kit.Esp.Filter = {}
+
+---@return boolean  nothing solid between the camera and `part`; see-through parts are skipped
+function Kit.Esp.LineOfSight(origin, part, model)
+    local params, filter = Kit.Esp.Params, Kit.Esp.Filter
+    table.clear(filter)
+    filter[1], filter[2], filter[3] = LocalPlayer.Character, Workspace.CurrentCamera, model
+    for _ = 1, Kit.Config.Esp.SightPierce do
+        params.FilterDescendantsInstances = filter
+        local hit = Workspace:Raycast(origin, part.Position - origin, params)
+        if not hit then return true end
+        local instance = hit.Instance
+        if instance.Transparency < Kit.Config.Esp.SeeThrough and instance.CanCollide then return false end
+        filter[#filter + 1] = instance
+    end
+    return false
+end
+
+function Kit.Esp.Watching(entry, origin)
+    local head = entry.Head
+    if not Kit.Esp.Settings.Watch or not head or not entry.Visible then return false end
+    local toMe = origin - head.Position
+    if toMe.Magnitude < 1e-3 then return false end
+    return head.CFrame.LookVector:Dot(toMe.Unit) >= math.cos(math.rad(Kit.Esp.Settings.WatchAngle))
+end
+
+---Round-robin line-of-sight checks so visible/behind-wall colors stay fresh without a ray per entry per frame.
+function Kit.Esp.SightStep()
+    local camera, queue = Workspace.CurrentCamera, Kit.Esp.Sight
+    if not camera or #queue == 0 then return end
+    local origin = camera.CFrame.Position
+    for _ = 1, math.min(Kit.Config.Esp.SightBudget, #queue) do
+        Kit.Esp.SightIndex = Kit.Esp.SightIndex % #queue + 1
+        local entry = queue[Kit.Esp.SightIndex]
+        if not entry.Model or not entry.Part or not entry.Part.Parent then continue end
+        local seen = Kit.Esp.LineOfSight(origin, entry.Part, entry.Model)
+        if not seen and entry.Head and entry.Head.Parent then
+            seen = Kit.Esp.LineOfSight(origin, entry.Head, entry.Model)
         end
-        local point, onScreen = camera:WorldToViewportPoint(part.Position)
-        if not onScreen then
-            Kit.Esp.Hide(entry)
-            continue
-        end
-        local box, label, tracer = show.Box == true, entry.Label.Text ~= "", show.Tracer == true
-        local scale = focal / point.Z
-        local width, height = entry.Size.X * scale, entry.Size.Y * scale
-        local top = point.Y - height / 2
-        if box then
-            entry.Box.Position, entry.Box.Size = Vector2.new(point.X - width / 2, top), Vector2.new(width, height)
-        end
-        if label then
-            entry.Label.Position = Vector2.new(point.X, top - entry.Label.Size - 2)
-        end
-        if tracer then
-            entry.Tracer.From, entry.Tracer.To = tracerFrom, Vector2.new(point.X, top + height)
-        end
-        Kit.Esp.Show(entry, box, label, tracer)
+        entry.Visible = seen
+        entry.Watching = Kit.Esp.Watching(entry, origin)
     end
 end
 
@@ -18547,25 +18654,598 @@ end
 
 table.insert(Kit.Modules, Kit.Esp)
 
-function Kit.Esp.Id(name)
-    return "KitEsp" .. tostring(name):gsub("[^%w]", "")
+---@author xDTaraZ  Mario Hub UI V2
+Kit.Esp.Shape = {}
+
+---Writes only on change: every Drawing write crosses the executor bridge, every Instance write dirties layout.
+local function Put(cache, target, key, value, slot)
+    slot = slot or key
+    if cache[slot] == value then return end
+    cache[slot] = value
+    target[key] = value
 end
 
----@param options table?  { Categories = { { Name, Text, Color, Source, Label } }, Players = true }
-function Kit.Esp.Build(target, options)
-    options = options or {}
-    local T = Kit.T
-    Kit.Esp.Defaults()
-    if options.Players ~= false and not Kit.Esp.Categories.Players then
-        Kit.Esp.AddCategory("Players", { Text = T("Players", "ผู้เล่น"), Color = Color3.fromRGB(240, 92, 80), Source = Kit.Esp.PlayerSource })
+---@param kind string  Line | Square | Circle | Text | Triangle
+function Kit.Esp.Shape.New(kind, zIndex)
+    if Kit.Esp.Mode == "Drawing" then
+        local native = Drawing.new(kind)
+        native.Visible, native.ZIndex = false, zIndex or 1
+        if kind == "Text" then native.Center, native.Outline, native.Font = true, true, 0 end
+        return { Kind = kind, Native = native, Cache = {} }
     end
-    for _, spec in ipairs(options.Categories or {}) do
-        Kit.Esp.AddCategory(spec.Name, spec)
+    local isText = kind == "Text" or kind == "Triangle"
+    local gui = Instance.new(isText and "TextLabel" or "Frame")
+    gui.BorderSizePixel, gui.Visible, gui.ZIndex = 0, false, zIndex or 1
+    gui.AnchorPoint = kind == "Square" and Vector2.zero or (kind == "Text" and Vector2.new(0.5, 0) or Vector2.new(0.5, 0.5))
+    local stroke
+    if isText then
+        gui.BackgroundTransparency, gui.Size = 1, UDim2.fromOffset(Kit.Config.Esp.TextWidth, 20)
+        gui.TextYAlignment, gui.Font = Enum.TextYAlignment.Top, Enum.Font.GothamBold
+        gui.TextStrokeTransparency = Kit.Config.Esp.TextStroke
+        gui.Text = kind == "Triangle" and "▲" or ""
+    elseif kind ~= "Line" then
+        stroke = Instance.new("UIStroke")
+        stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        stroke.Parent = gui
+        if kind == "Circle" then Instance.new("UICorner", gui).CornerRadius = UDim.new(1, 0) end
     end
+    gui.Parent = Kit.Overlay.Screen()
+    return { Kind = kind, Gui = gui, Stroke = stroke, Cache = {} }
+end
+
+function Kit.Esp.Shape.Show(shape, visible)
+    Put(shape.Cache, shape.Native or shape.Gui, "Visible", visible)
+end
+
+function Kit.Esp.Shape.Remove(shape)
+    if shape.Native then
+        pcall(shape.Native.Remove, shape.Native)
+        return
+    end
+    shape.Gui:Destroy()
+end
+
+function Kit.Esp.Shape.Line(shape, from, to, color, thickness, alpha)
+    local cache, native = shape.Cache, shape.Native
+    if native then
+        Put(cache, native, "From", from)
+        Put(cache, native, "To", to)
+        Put(cache, native, "Color", color)
+        Put(cache, native, "Thickness", thickness)
+        Put(cache, native, "Transparency", alpha)
+    else
+        local gui, delta = shape.Gui, to - from
+        Put(cache, gui, "Position", UDim2.fromOffset((from.X + to.X) / 2, (from.Y + to.Y) / 2))
+        Put(cache, gui, "Size", UDim2.fromOffset(delta.Magnitude, thickness))
+        Put(cache, gui, "Rotation", math.deg(math.atan2(delta.Y, delta.X)))
+        Put(cache, gui, "BackgroundColor3", color)
+        Put(cache, gui, "BackgroundTransparency", 1 - alpha)
+    end
+    Kit.Esp.Shape.Show(shape, true)
+end
+
+---Square (top-left `pos`) or Circle (`pos` = centre, `size.X` = radius); outline unless `filled`.
+function Kit.Esp.Shape.Fill(shape, pos, size, color, thickness, filled, alpha)
+    local cache, native, circle = shape.Cache, shape.Native, shape.Kind == "Circle"
+    if native then
+        Put(cache, native, "Position", pos)
+        if circle then Put(cache, native, "Radius", size.X) else Put(cache, native, "Size", size) end
+        Put(cache, native, "Color", color)
+        Put(cache, native, "Thickness", thickness)
+        Put(cache, native, "Filled", filled)
+        Put(cache, native, "Transparency", alpha)
+    else
+        local gui, stroke = shape.Gui, shape.Stroke
+        local pixels = circle and Vector2.new(size.X * 2, size.X * 2) or size
+        Put(cache, gui, "Position", UDim2.fromOffset(pos.X, pos.Y))
+        Put(cache, gui, "Size", UDim2.fromOffset(pixels.X, pixels.Y))
+        Put(cache, gui, "BackgroundColor3", color)
+        Put(cache, gui, "BackgroundTransparency", filled and 1 - alpha or 1)
+        Put(cache, stroke, "Enabled", not filled, "StrokeOn")
+        Put(cache, stroke, "Color", color, "StrokeColor")
+        Put(cache, stroke, "Thickness", thickness, "StrokeThickness")
+        Put(cache, stroke, "Transparency", 1 - alpha, "StrokeAlpha")
+    end
+    Kit.Esp.Shape.Show(shape, true)
+end
+
+---`pos` = top centre of the text.
+function Kit.Esp.Shape.Text(shape, pos, text, color, alpha)
+    local tuning, cache = Kit.Esp.Settings, shape.Cache
+    local native = shape.Native
+    if native then
+        Put(cache, native, "Text", text)
+        Put(cache, native, "Position", pos)
+        Put(cache, native, "Color", color)
+        Put(cache, native, "Size", tuning.TextSize)
+        Put(cache, native, "Transparency", alpha)
+    else
+        local gui = shape.Gui
+        Put(cache, gui, "Text", text)
+        Put(cache, gui, "Position", UDim2.fromOffset(pos.X, pos.Y))
+        Put(cache, gui, "TextColor3", color)
+        Put(cache, gui, "TextSize", tuning.TextSize)
+        Put(cache, gui, "TextTransparency", 1 - alpha)
+    end
+    Kit.Esp.Shape.Show(shape, true)
+end
+
+---Arrow at `pos` pointing along unit `dir`.
+function Kit.Esp.Shape.Arrow(shape, pos, dir, size, color, alpha)
+    local cache, native = shape.Cache, shape.Native
+    if native then
+        local side = Vector2.new(-dir.Y, dir.X) * size * 0.6
+        local back = pos - dir * size * 0.4
+        Put(cache, native, "PointA", pos + dir * size)
+        Put(cache, native, "PointB", back + side)
+        Put(cache, native, "PointC", back - side)
+        Put(cache, native, "Color", color)
+        Put(cache, native, "Filled", true)
+        Put(cache, native, "Transparency", alpha)
+    else
+        local gui = shape.Gui
+        Put(cache, gui, "Position", UDim2.fromOffset(pos.X, pos.Y))
+        Put(cache, gui, "Size", UDim2.fromOffset(size * 2, size * 2))
+        Put(cache, gui, "TextSize", size * 2)
+        Put(cache, gui, "Rotation", math.deg(math.atan2(dir.X, -dir.Y)))
+        Put(cache, gui, "TextColor3", color)
+        Put(cache, gui, "TextTransparency", 1 - alpha)
+    end
+    Kit.Esp.Shape.Show(shape, true)
+end
+
+---@return table  the entry's shape for `key`, created on first use and stamped as drawn this frame
+function Kit.Esp.Use(entry, key, kind, zIndex)
+    local shape = entry.Shapes[key]
+    if not shape then
+        shape = Kit.Esp.Shape.New(kind, zIndex)
+        entry.Shapes[key] = shape
+    end
+    shape.Frame = Kit.Esp.Frame
+    return shape
+end
+
+function Kit.Esp.Sweep(entry)
+    local frame = Kit.Esp.Frame
+    for _, shape in pairs(entry.Shapes) do
+        if shape.Frame ~= frame then Kit.Esp.Shape.Show(shape, false) end
+    end
+end
+
+function Kit.Esp.HideAll(entry)
+    for _, shape in pairs(entry.Shapes) do
+        Kit.Esp.Shape.Show(shape, false)
+    end
+end
+
+function Kit.Esp.HealthColor(ratio)
+    local colors = Kit.Esp.Settings.Colors
+    return colors.HealthLow:Lerp(colors.HealthHigh, math.clamp(ratio, 0, 1))
+end
+
+---Focus > watching > low health > color mode.
+function Kit.Esp.ColorOf(entry)
+    local tuning = Kit.Esp.Settings
+    local colors, mode = tuning.Colors, tuning.TeamColor and "Team" or tuning.ColorMode
+    if entry.Model == Kit.Esp.FocusModel then return colors.Focus end
+    if entry.Watching then return colors.Watching end
+    local health, maxHealth = Kit.Esp.Health(entry)
+    if tuning.LowHealth and health and entry.Character and health / maxHealth * 100 <= tuning.LowHealthAt then return colors.LowHealth end
+    if entry.Relation == "Object" then
+        return entry.Info and typeof(entry.Info.Color) == "Color3" and entry.Info.Color or entry.Category.Color
+    end
+    if mode == "Team" then
+        local info, player = entry.Info, entry.Player
+        if info and typeof(info.TeamColor) == "Color3" then return info.TeamColor end
+        if player and player.Team then return player.TeamColor.Color end
+    elseif mode == "Health" and health then
+        return Kit.Esp.HealthColor(health / maxHealth)
+    end
+    return colors[entry.Relation .. (entry.Visible and "Visible" or "Hidden")] or entry.Category.Color
+end
+
+function Kit.Esp.SetChams(entry, on, color, alpha)
+    local chams = entry.Chams
+    if not on then
+        if chams and chams.Enabled then
+            chams.Enabled = false
+            Kit.Esp.Highlights -= 1
+        end
+        return
+    end
+    if not chams then
+        chams = Instance.new("Highlight")
+        chams.Enabled = false
+        chams.Parent = Kit.Overlay.Folder()
+        entry.Chams, entry.ChamsCache = chams, {}
+    end
+    if not chams.Enabled then
+        if Kit.Esp.Highlights >= Kit.Config.Esp.HighlightCap then return end
+        Kit.Esp.Highlights += 1
+        chams.Enabled = true
+    end
+    local tuning, cache = Kit.Esp.Settings, entry.ChamsCache
+    local depth = tuning.ChamsMode == "Visible" and Enum.HighlightDepthMode.Occluded or Enum.HighlightDepthMode.AlwaysOnTop
+    Put(cache, chams, "Adornee", entry.Model)
+    Put(cache, chams, "DepthMode", depth)
+    Put(cache, chams, "FillColor", color)
+    Put(cache, chams, "OutlineColor", color)
+    Put(cache, chams, "FillTransparency", 1 - tuning.ChamsFill * alpha)
+    Put(cache, chams, "OutlineTransparency", tuning.ChamsOutline)
+end
+
+function Kit.Esp.Chams(entry, color, alpha)
+    local tuning = Kit.Esp.Settings
+    local wanted = tuning.Show.Chams == true and not (tuning.ChamsMode == "Behind Wall" and entry.Visible)
+    Kit.Esp.SetChams(entry, wanted, color, alpha)
+end
+
+---@return table?  { Min, Max, Points } screen box from the 8 corners; nil when any corner is behind the camera
+function Kit.Esp.Bounds(entry, frame, camera)
+    local half = entry.Size / 2
+    local points = entry.Points or table.create(8)
+    entry.Points = points
+    local minX, minY, maxX, maxY = math.huge, math.huge, -math.huge, -math.huge
+    for index = 0, 7 do
+        local corner = Vector3.new(index % 2 == 0 and -half.X or half.X, index % 4 < 2 and -half.Y or half.Y, index < 4 and -half.Z or half.Z)
+        local point = camera:WorldToViewportPoint(frame * corner)
+        if point.Z <= 0 then return nil end
+        points[index + 1] = Vector2.new(point.X, point.Y)
+        minX, minY = math.min(minX, point.X), math.min(minY, point.Y)
+        maxX, maxY = math.max(maxX, point.X), math.max(maxY, point.Y)
+    end
+    local bounds = entry.Bounds or {}
+    entry.Bounds = bounds
+    bounds.Min, bounds.Max, bounds.Points = Vector2.new(minX, minY), Vector2.new(maxX, maxY), points
+    return bounds
+end
+
+---@author xDTaraZ  Mario Hub UI V2
+Kit.Esp.Edges = { { 1, 2 }, { 3, 4 }, { 5, 6 }, { 7, 8 }, { 1, 3 }, { 2, 4 }, { 5, 7 }, { 6, 8 }, { 1, 5 }, { 2, 6 }, { 3, 7 }, { 4, 8 } }
+Kit.Esp.Outline = Color3.new(0, 0, 0)
+
+function Kit.Esp.DrawBox(entry, bounds, color, alpha)
+    local tuning, shape = Kit.Esp.Settings, Kit.Esp.Shape
+    local pos, size = bounds.Min, bounds.Max - bounds.Min
+    if tuning.BoxFill then
+        shape.Fill(Kit.Esp.Use(entry, "BoxFill", "Square", 0), pos, size, color, 1, true, tuning.BoxFillAlpha * alpha)
+    end
+    local style, thickness = tuning.BoxStyle, tuning.Thickness
+    if style == "3D" then
+        for index, edge in ipairs(Kit.Esp.Edges) do
+            shape.Line(Kit.Esp.Use(entry, "Edge" .. index, "Line", 2), bounds.Points[edge[1]], bounds.Points[edge[2]], color, thickness, alpha)
+        end
+        return
+    end
+    if style == "Corner" then
+        Kit.Esp.DrawCorners(entry, pos, size, color, alpha)
+        return
+    end
+    if tuning.BoxOutline then
+        shape.Fill(Kit.Esp.Use(entry, "BoxOutline", "Square", 1), pos, size, Kit.Esp.Outline, thickness + 2, false, alpha)
+    end
+    shape.Fill(Kit.Esp.Use(entry, "Box", "Square", 2), pos, size, color, thickness, false, alpha)
+end
+
+function Kit.Esp.DrawCorners(entry, pos, size, color, alpha)
+    local thickness = Kit.Esp.Settings.Thickness
+    local span = math.min(size.X, size.Y) * Kit.Config.Esp.CornerRatio
+    local right, bottom = pos.X + size.X, pos.Y + size.Y
+    local corners = {
+        { Vector2.new(pos.X, pos.Y), 1, 1 }, { Vector2.new(right, pos.Y), -1, 1 },
+        { Vector2.new(pos.X, bottom), 1, -1 }, { Vector2.new(right, bottom), -1, -1 },
+    }
+    for index, corner in ipairs(corners) do
+        local at = corner[1]
+        Kit.Esp.Shape.Line(Kit.Esp.Use(entry, "CornerX" .. index, "Line", 2), at, at + Vector2.new(span * corner[2], 0), color, thickness, alpha)
+        Kit.Esp.Shape.Line(Kit.Esp.Use(entry, "CornerY" .. index, "Line", 2), at, at + Vector2.new(0, span * corner[3]), color, thickness, alpha)
+    end
+end
+
+---@param slot number  0 = next to the box, 1 = one bar further out
+function Kit.Esp.DrawBar(entry, key, bounds, ratio, color, slot, alpha)
+    local config, side = Kit.Config.Esp, Kit.Esp.Settings.BarSide
+    local width = config.BarWidth
+    local gap = config.BarGap + slot * (width + config.BarGap)
+    local min, max = bounds.Min, bounds.Max
+    local vertical = side == "Left" or side == "Right"
+    local back, fill
+    if vertical then
+        local x = side == "Left" and min.X - gap - width or max.X + gap
+        local height = max.Y - min.Y
+        back = { Vector2.new(x - 1, min.Y - 1), Vector2.new(width + 2, height + 2) }
+        fill = { Vector2.new(x, max.Y - height * ratio), Vector2.new(width, height * ratio) }
+    else
+        local y = side == "Top" and min.Y - gap - width or max.Y + gap
+        local span = max.X - min.X
+        back = { Vector2.new(min.X - 1, y - 1), Vector2.new(span + 2, width + 2) }
+        fill = { Vector2.new(min.X, y), Vector2.new(span * ratio, width) }
+    end
+    Kit.Esp.Shape.Fill(Kit.Esp.Use(entry, key .. "Back", "Square", 1), back[1], back[2], Kit.Esp.Outline, 1, true, config.BarBack * alpha)
+    Kit.Esp.Shape.Fill(Kit.Esp.Use(entry, key, "Square", 2), fill[1], fill[2], color, 1, true, alpha)
+end
+
+---@return number, number  extra pixels used above and below the box by bars
+function Kit.Esp.DrawBars(entry, bounds, alpha)
+    local show, info = Kit.Esp.Settings.Show, entry.Info
+    local health, maxHealth = Kit.Esp.Health(entry)
+    local slot, used = 0, 0
+    if show.Health and health and entry.Character then
+        local ratio = math.clamp(health / maxHealth, 0, 1)
+        Kit.Esp.DrawBar(entry, "Health", bounds, ratio, Kit.Esp.HealthColor(ratio), slot, alpha)
+        slot += 1
+    end
+    local armor = info and tonumber(info.Armor)
+    if show.Armor and armor and armor > 0 then
+        local ratio = math.clamp(armor / (tonumber(info.MaxArmor) or 100), 0, 1)
+        Kit.Esp.DrawBar(entry, "Armor", bounds, ratio, Kit.Esp.Settings.Colors.Armor, slot, alpha)
+        slot += 1
+    end
+    used = slot * (Kit.Config.Esp.BarWidth + Kit.Config.Esp.BarGap)
+    local side = Kit.Esp.Settings.BarSide
+    return side == "Top" and used or 0, side == "Bottom" and used or 0
+end
+
+function Kit.Esp.TopText(entry)
+    return Kit.Esp.Settings.Show.Name and Kit.Esp.Name(entry) or ""
+end
+
+function Kit.Esp.BottomText(entry)
+    local show, info = Kit.Esp.Settings.Show, entry.Info
+    local parts = {}
+    if show.Distance and entry.Distance then parts[#parts + 1] = math.floor(entry.Distance) .. "m" end
+    local health = Kit.Esp.Health(entry)
+    if show.HealthText and health then parts[#parts + 1] = math.floor(health) .. " HP" end
+    if show.Weapon and info and type(info.Weapon) == "string" and info.Weapon ~= "" then parts[#parts + 1] = info.Weapon end
+    if show.Flags and info and type(info.Flags) == "table" then
+        for _, flag in ipairs(info.Flags) do parts[#parts + 1] = tostring(flag) end
+    end
+    if entry.Watching then parts[#parts + 1] = "!" end
+    return table.concat(parts, " · ")
+end
+
+---V1 single-line caption (ESP preview): top and bottom text joined.
+function Kit.Esp.Caption(entry, distance)
+    entry.Distance = distance
+    local top, bottom = Kit.Esp.TopText(entry), Kit.Esp.BottomText(entry)
+    if top == "" or bottom == "" then return top .. bottom end
+    return top .. " " .. bottom
+end
+
+function Kit.Esp.DrawText(entry, bounds, above, below, color, alpha)
+    local size = Kit.Esp.Settings.TextSize
+    local middle = (bounds.Min.X + bounds.Max.X) / 2
+    local top, bottom = entry.TopText or "", entry.BottomText or ""
+    if top ~= "" then
+        local at = Vector2.new(middle, bounds.Min.Y - above - size - 2)
+        Kit.Esp.Shape.Text(Kit.Esp.Use(entry, "Top", "Text", 3), at, top, color, alpha)
+    end
+    if bottom ~= "" then
+        local at = Vector2.new(middle, bounds.Max.Y + below + 2)
+        Kit.Esp.Shape.Text(Kit.Esp.Use(entry, "Bottom", "Text", 3), at, bottom, color, alpha)
+    end
+end
+
+function Kit.Esp.TracerFrom(viewport)
+    local origin = Kit.Esp.Settings.TracerOrigin
+    if origin == "Center" then return viewport / 2 end
+    if origin == "Top" then return Vector2.new(viewport.X / 2, 0) end
+    if origin == "Mouse" then return UserInputService:GetMouseLocation() end
+    return Vector2.new(viewport.X / 2, viewport.Y)
+end
+
+function Kit.Esp.DrawLines(entry, bounds, camera, color, alpha)
+    local tuning, show, shape = Kit.Esp.Settings, Kit.Esp.Settings.Show, Kit.Esp.Shape
+    if show.Tracer and entry.Character then
+        local middle = (bounds.Min.X + bounds.Max.X) / 2
+        local to = Vector2.new(middle, tuning.TracerOrigin == "Top" and bounds.Min.Y or bounds.Max.Y)
+        shape.Line(Kit.Esp.Use(entry, "Tracer", "Line", 1), Kit.Esp.TracerFrom(camera.ViewportSize), to, color, tuning.Thickness, alpha)
+    end
+    if show.Skeleton then
+        for index, pair in ipairs(entry.BoneParts or {}) do
+            local from, to = camera:WorldToViewportPoint(pair[1].Position), camera:WorldToViewportPoint(pair[2].Position)
+            if from.Z <= 0 or to.Z <= 0 then continue end
+            shape.Line(Kit.Esp.Use(entry, "Bone" .. index, "Line", 2), Vector2.new(from.X, from.Y), Vector2.new(to.X, to.Y), color, tuning.Thickness, alpha)
+        end
+    end
+    local head = entry.Head
+    if not head or not head.Parent then return end
+    local point = camera:WorldToViewportPoint(head.Position)
+    if point.Z <= 0 then return end
+    local center = Vector2.new(point.X, point.Y)
+    if show.HeadDot then
+        local perStud = (bounds.Max.Y - bounds.Min.Y) / entry.Size.Y
+        local radius = math.clamp(perStud * Kit.Config.Esp.HeadRadius, 2, Kit.Config.Esp.MaxDot)
+        shape.Fill(Kit.Esp.Use(entry, "HeadDot", "Circle", 3), center, Vector2.new(radius, radius), color, 1, true, alpha)
+    end
+end
+
+function Kit.Esp.DrawArrow(entry, camera, world, color, alpha)
+    local tuning = Kit.Esp.Settings
+    if not tuning.Show.Arrows or not (entry.Character or entry.Category.MaxDistance == math.huge) then return end
+    local relative = camera.CFrame:PointToObjectSpace(world)
+    local flat = Vector2.new(relative.X, -relative.Y)
+    if flat.Magnitude < 1e-3 then return end
+    local dir = flat.Unit
+    local pos = camera.ViewportSize / 2 + dir * tuning.ArrowRadius
+    Kit.Esp.Shape.Arrow(Kit.Esp.Use(entry, "Arrow", "Triangle", 3), pos, dir, tuning.ArrowSize, color, alpha)
+end
+
+function Kit.Esp.DrawEntry(entry, camera)
+    local tuning, part = Kit.Esp.Settings, entry.Part
+    if not part or not part.Parent or not entry.Size or (tuning.VisibleOnly and not entry.Visible) then
+        Kit.Esp.SetChams(entry, false)
+        return
+    end
+    local color, alpha = Kit.Esp.ColorOf(entry), 1
+    Kit.Esp.Chams(entry, color, alpha)
+    Kit.Esp.Radar.Blip(entry, camera, color)
+    local frame = part.CFrame * entry.Offset
+    local center = camera:WorldToViewportPoint(frame.Position)
+    local viewport = camera.ViewportSize
+    if center.Z <= 0 or center.X < 0 or center.Y < 0 or center.X > viewport.X or center.Y > viewport.Y then
+        Kit.Esp.DrawArrow(entry, camera, frame.Position, color, alpha)
+        return
+    end
+    local bounds = Kit.Esp.Bounds(entry, frame, camera)
+    if not bounds then return end
+    if tuning.Show.Box then Kit.Esp.DrawBox(entry, bounds, color, alpha) end
+    local above, below = Kit.Esp.DrawBars(entry, bounds, alpha)
+    Kit.Esp.DrawText(entry, bounds, above, below, color, alpha)
+    Kit.Esp.DrawLines(entry, bounds, camera, color, alpha)
+end
+
+function Kit.Esp.Draw()
+    local camera = Workspace.CurrentCamera
+    if not camera then return end
+    Kit.Esp.Frame += 1
+    for _, entry in pairs(Kit.Esp.Entries) do
+        local ok, err = pcall(Kit.Esp.DrawEntry, entry, camera)
+        if not ok then Kit.Log:Warn("esp draw", err) end
+        Kit.Esp.Sweep(entry)
+    end
+    Kit.Esp.Radar.Draw(camera)
+end
+
+Kit.Esp.Radar = { Shapes = {} }
+
+function Kit.Esp.Radar.Shape(key, kind, zIndex)
+    local shape = Kit.Esp.Radar.Shapes[key]
+    if not shape then
+        shape = Kit.Esp.Shape.New(kind, zIndex)
+        Kit.Esp.Radar.Shapes[key] = shape
+    end
+    return shape
+end
+
+---@return Vector2?  blip position on the radar for a world point, clamped to the edge
+function Kit.Esp.Radar.Project(camera, world)
+    local tuning = Kit.Esp.Settings
+    local offset = world - camera.CFrame.Position
+    local flat
+    if tuning.RadarRotate then
+        local look = camera.CFrame.LookVector
+        local yaw = math.atan2(-look.X, -look.Z)
+        local turned = CFrame.Angles(0, -yaw, 0) * offset
+        flat = Vector2.new(turned.X, turned.Z)
+    else
+        flat = Vector2.new(offset.X, offset.Z)
+    end
+    local half = tuning.RadarSize / 2
+    local scaled = flat * (half / tuning.RadarRange)
+    if scaled.Magnitude > half - 3 then scaled = scaled.Unit * (half - 3) end
+    return Kit.Esp.Radar.Corner(camera) + Vector2.new(half, half) + scaled
+end
+
+---@return Vector2  top-left of the radar for the chosen screen corner
+function Kit.Esp.Radar.Corner(camera)
+    local tuning, margin = Kit.Esp.Settings, Kit.Config.Esp.RadarMargin
+    local corner, size, viewport = tuning.RadarCorner, tuning.RadarSize, camera.ViewportSize
+    local x = corner:find("Right") and viewport.X - margin.X - size or margin.X
+    local y = corner:find("Bottom") and viewport.Y - margin.Y - size or margin.Y
+    return Vector2.new(x, y)
+end
+
+function Kit.Esp.Radar.Blip(entry, camera, color)
+    if not Kit.Esp.Settings.Show.Radar or not entry.Character then return end
+    local pos = Kit.Esp.Radar.Project(camera, entry.Part.Position)
+    Kit.Esp.Shape.Fill(Kit.Esp.Use(entry, "Blip", "Circle", 6), pos, Vector2.new(3, 3), color, 1, true, 1)
+end
+
+function Kit.Esp.Radar.Draw(camera)
+    local radar, tuning = Kit.Esp.Radar, Kit.Esp.Settings
+    if not tuning.Show.Radar then
+        for _, shape in pairs(radar.Shapes) do Kit.Esp.Shape.Show(shape, false) end
+        return
+    end
+    local corner, size = Kit.Esp.Radar.Corner(camera), tuning.RadarSize
+    local middle = corner + Vector2.new(size / 2, size / 2)
+    local shape = Kit.Esp.Shape
+    shape.Fill(radar.Shape("Back", "Square", 4), corner, Vector2.new(size, size), Kit.Esp.Outline, 1, true, Kit.Config.Esp.RadarBack)
+    shape.Fill(radar.Shape("Border", "Square", 5), corner, Vector2.new(size, size), tuning.Colors.Focus, 1, false, 0.6)
+    shape.Line(radar.Shape("CrossX", "Line", 5), Vector2.new(corner.X, middle.Y), Vector2.new(corner.X + size, middle.Y), tuning.Colors.Focus, 1, 0.25)
+    shape.Line(radar.Shape("CrossY", "Line", 5), Vector2.new(middle.X, corner.Y), Vector2.new(middle.X, corner.Y + size), tuning.Colors.Focus, 1, 0.25)
+    local look = tuning.RadarRotate and Vector2.new(0, -1) or Vector2.new(camera.CFrame.LookVector.X, camera.CFrame.LookVector.Z)
+    if look.Magnitude > 1e-3 then
+        shape.Arrow(radar.Shape("Me", "Triangle", 7), middle, look.Unit, 5, tuning.Colors.Focus, 1)
+    end
+end
+
+function Kit.Esp.Radar.Destroy()
+    for key, shape in pairs(Kit.Esp.Radar.Shapes) do
+        Kit.Esp.Shape.Remove(shape)
+        Kit.Esp.Radar.Shapes[key] = nil
+    end
+end
+
+---@author xDTaraZ  Mario Hub UI V2
+Kit.Esp.TextKeys = { Name = "Name", Distance = "Distance", Health = "HealthText", Weapon = "Weapon", Status = "Flags" }
+Kit.Esp.KindKeys = { Players = "Player", Bots = "Bot" }
+
+Kit.Esp.Presets = {
+    Legit = {
+        KitEspShowBox = false, KitEspShowChams = true, KitEspChamsMode = "Behind Wall", KitEspShowHealth = false, KitEspShowTracer = false,
+        KitEspShowSkeleton = false, KitEspShowArrows = false, KitEspShowRadar = false, KitEspText = { "Name", "Distance" },
+    },
+    Full = {
+        KitEspShowBox = true, KitEspShowChams = true, KitEspChamsMode = "Always", KitEspShowHealth = true, KitEspShowArmor = true,
+        KitEspShowTracer = true, KitEspShowSkeleton = true, KitEspShowHeadDot = true, KitEspShowArrows = true,
+        KitEspText = { "Name", "Distance", "Health", "Weapon", "Status" },
+    },
+    Mobile = {
+        KitEspShowBox = true, KitEspShowChams = false, KitEspShowHealth = true, KitEspShowTracer = false, KitEspShowSkeleton = false,
+        KitEspShowArrows = true, KitEspShowRadar = false, KitEspDistance = 500, KitEspRate = 0.5, KitEspText = { "Name", "Distance" },
+    },
+}
+
+local function Plain(value)
+    return type(value) == "table" and value.EN or value
+end
+
+---@return function  widget callback writing Settings[key]; `scale` divides numbers (percent sliders)
+function Kit.Esp.Setter(key, scale)
+    return function(value)
+        value = Plain(value)
+        Kit.Esp.Set(key, scale and value / scale or value)
+    end
+end
+
+function Kit.Esp.ShowSetter(key)
+    return function(on)
+        Kit.Esp.Settings.Show[key] = on == true
+        Kit.Esp.Changed()
+    end
+end
+
+function Kit.Esp.ColorSetter(key)
+    return function(color)
+        Kit.Esp.Settings.Colors[key] = color
+        Kit.Esp.Changed()
+    end
+end
+
+function Kit.Esp.ApplyPreset(name)
+    for idx, value in pairs(Kit.Esp.Presets[name] or {}) do
+        local option = Library.Toggles[idx] or Library.Options[idx]
+        if option then option:SetValue(value) end
+    end
+    Kit.Ui.Notify("ESP preset: " .. name, "ตั้งค่า ESP: " .. name, "Success")
+end
+
+---Element toggle; its sub-options pass `DependsOn = Kit.Esp.Under(key)` so they only show while it is on.
+function Kit.Esp.Element(group, key, text)
+    return group:AddToggle("KitEspShow" .. key, { Text = text, Default = Kit.Esp.Settings.Show[key] == true, Callback = Kit.Esp.ShowSetter(key) })
+end
+
+function Kit.Esp.Under(key)
+    return { "KitEspShow" .. key, true }
+end
+
+function Kit.Esp.BuildMain(target, T)
     local tuning = Kit.Esp.Settings
     local main = Kit.Ui.Group(target, "Left", T("ESP", "ESP"), "eye")
     Kit.Ui.Key(main:AddToggle("KitEsp", {
-        Text = T("ESP", "มองทะลุ"),
+        Text = T("Enabled", "เปิดใช้"),
         Callback = function(on)
             if on then Kit.Esp.Start() else Kit.Esp.Stop() end
         end,
@@ -18574,46 +19254,202 @@ function Kit.Esp.Build(target, options)
         local category = Kit.Esp.Categories[name]
         local id = Kit.Esp.Id(name)
         main:AddToggle(id, {
-            Text = category.Text,
+            Text = category.Text, Default = category.Enabled,
             Callback = function(on) Kit.Esp.SetCategory(name, on) end,
         }):AddColorPicker(id .. "Color", {
             Default = category.Color,
             Callback = function(color) Kit.Esp.SetColor(name, color) end,
         })
     end
+    main:AddToggle("KitEspTeamCheck", { Text = T("Team Check", "ไม่แสดงทีมเดียวกัน"), Callback = Kit.Esp.Setter("TeamCheck") })
+    main:AddToggle("KitEspVisibleOnly", { Text = T("Visible Only", "เฉพาะที่มองเห็น"), Callback = Kit.Esp.Setter("VisibleOnly") })
+    main:AddSlider("KitEspDistance", {
+        Text = T("Max Distance", "ระยะสูงสุด"), Min = 50, Max = 5000, Step = 50, Default = tuning.MaxDistance, Suffix = "m",
+        Callback = Kit.Esp.Setter("MaxDistance"),
+    })
+    main:AddSeparatorText(T("Presets", "ค่าสำเร็จรูป"))
+    main:AddButton({ Text = T("Legit", "เนียน"), Style = "Ghost" }, function() Kit.Esp.ApplyPreset("Legit") end)
+        :AddButton({ Text = T("Full", "เต็ม"), Style = "Ghost" }, function() Kit.Esp.ApplyPreset("Full") end)
+        :AddButton({ Text = T("Mobile", "มือถือ"), Style = "Ghost" }, function() Kit.Esp.ApplyPreset("Mobile") end)
+    return main
+end
 
-    local look = Kit.Ui.Group(target, "Right", T("ESP Settings", "ตั้งค่า ESP"), "sliders-horizontal")
-    local show = look:AddDropdown("KitEspShow", {
-        Text = T("Show", "แสดง"),
-        Values = { "Name", "Distance", "Health", "Box", "Tracer" },
-        Multi = true,
-        Default = { "Name", "Distance" },
-        Callback = function(value)
-            if value.Tracer and not Kit.Caps.Drawing then
-                Kit.Ui.Notify("Tracers are not supported on this executor", "เส้นชี้ใช้กับ executor นี้ไม่ได้", "Warn")
+function Kit.Esp.BuildBox(target, T)
+    local tuning = Kit.Esp.Settings
+    local group = Kit.Ui.Group(target, "Left", T("Box", "กรอบ"), "box")
+    Kit.Esp.Element(group, "Box", T("Box", "กรอบ"))
+    group:AddSegmented("KitEspBoxStyle", { Text = T("Style", "แบบ"), Values = { "2D", "Corner", "3D" }, Default = "2D", DependsOn = Kit.Esp.Under("Box"), Callback = Kit.Esp.Setter("BoxStyle") })
+    group:AddToggle("KitEspBoxOutline", { Text = T("Outline", "ขอบดำ"), Default = true, DependsOn = Kit.Esp.Under("Box"), Callback = Kit.Esp.Setter("BoxOutline") })
+    group:AddToggle("KitEspBoxFill", { Text = T("Filled", "ทึบ"), DependsOn = Kit.Esp.Under("Box"), Callback = Kit.Esp.Setter("BoxFill") })
+    group:AddSlider("KitEspBoxFillAlpha", {
+        Text = T("Fill Opacity", "ความทึบพื้น"), Min = 5, Max = 80, Default = tuning.BoxFillAlpha * 100, Suffix = "%",
+        DependsOn = { "KitEspBoxFill", true }, Callback = Kit.Esp.Setter("BoxFillAlpha", 100),
+    })
+    group:AddSlider("KitEspThickness", { Text = T("Line Thickness", "ความหนาเส้น"), Min = 1, Max = 4, Step = 0.5, Rounding = 1, Default = tuning.Thickness, Callback = Kit.Esp.Setter("Thickness") })
+end
+
+function Kit.Esp.BuildChams(target, T)
+    local tuning = Kit.Esp.Settings
+    local group = Kit.Ui.Group(target, "Left", T("Chams", "ไฮไลต์ตัว"), "chams")
+    Kit.Esp.Element(group, "Chams", T("Chams", "ไฮไลต์ตัว"))
+    group:AddDropdown("KitEspChamsMode", {
+        Text = T("Show", "แสดง"), Default = "Always", DependsOn = Kit.Esp.Under("Chams"),
+        Values = { T("Always", "ตลอด"), T("Visible", "เฉพาะที่เห็น"), T("Behind Wall", "เฉพาะหลังกำแพง") }, Callback = Kit.Esp.Setter("ChamsMode"),
+    })
+    group:AddSlider("KitEspChamsFill", { Text = T("Fill Opacity", "ความทึบไส้"), Min = 0, Max = 100, Default = tuning.ChamsFill * 100, Suffix = "%", DependsOn = Kit.Esp.Under("Chams"), Callback = Kit.Esp.Setter("ChamsFill", 100) })
+    group:AddSlider("KitEspChamsOutline", { Text = T("Outline Transparency", "ความโปร่งขอบ"), Min = 0, Max = 100, Default = 0, Suffix = "%", DependsOn = Kit.Esp.Under("Chams"), Callback = Kit.Esp.Setter("ChamsOutline", 100) })
+end
+
+function Kit.Esp.BuildHealth(target, T)
+    local group = Kit.Ui.Group(target, "Left", T("Health", "เลือด"), "health")
+    Kit.Esp.Element(group, "Health", T("Health Bar", "แถบเลือด"))
+    Kit.Esp.Element(group, "Armor", T("Armor Bar", "แถบเกราะ"))
+    group:AddSegmented("KitEspBarSide", {
+        Text = T("Bar Side", "ตำแหน่งแถบ"), Default = "Left",
+        Values = { T("Left", "ซ้าย"), T("Right", "ขวา"), T("Top", "บน"), T("Bottom", "ล่าง") }, Callback = Kit.Esp.Setter("BarSide"),
+    })
+end
+
+function Kit.Esp.BuildText(target, T)
+    local tuning = Kit.Esp.Settings
+    local group = Kit.Ui.Group(target, "Right", T("Text", "ข้อความ"), "edit")
+    group:AddMultiChips("KitEspText", {
+        Text = T("Show", "แสดง"), Default = { "Name", "Distance" },
+        Values = { T("Name", "ชื่อ"), T("Distance", "ระยะ"), T("Health", "เลือด"), T("Weapon", "อาวุธ"), T("Status", "สถานะ") },
+        Callback = function(set)
+            local show = Kit.Esp.Settings.Show
+            for _, key in pairs(Kit.Esp.TextKeys) do show[key] = false end
+            for entry, on in pairs(set or {}) do
+                local key = Kit.Esp.TextKeys[Plain(entry)]
+                if on and key then show[key] = true end
             end
-            tuning.Show = value
             Kit.Esp.Changed()
         end,
     })
-    tuning.Show = show.Value
-    look:AddToggle("KitEspTeamCheck", { Text = T("Team Check", "ไม่แสดงทีมเดียวกัน"), Callback = function(on) tuning.TeamCheck = on end })
-    look:AddToggle("KitEspTeamColor", { Text = T("Team Colors", "ใช้สีทีม"), Callback = function(on) tuning.TeamColor = on Kit.Esp.Changed() end })
-    look:AddSlider("KitEspDistance", {
-        Text = T("Max Distance", "ระยะสูงสุด"), Min = 50, Max = 5000, Step = 50, Default = tuning.MaxDistance, Suffix = "m",
-        Callback = function(value) Kit.Esp.Set("MaxDistance", value) end,
-    })
-    look:AddSlider("KitEspTextSize", {
-        Text = T("Text Size", "ขนาดตัวอักษร"), Min = 8, Max = 24, Step = 1, Default = tuning.TextSize,
-        Callback = function(value) Kit.Esp.Set("TextSize", value) end,
-    })
-    look:AddSlider("KitEspRate", {
-        Text = T("Update Rate", "อัปเดตทุก"), Min = 0.05, Max = 2, Step = 0.05, Default = tuning.Rate, Suffix = "s",
-        Callback = function(value) Kit.Esp.Set("Rate", value) end,
-    })
-    return main, look
+    group:AddSlider("KitEspTextSize", { Text = T("Size", "ขนาด"), Min = 8, Max = 24, Step = 1, Default = tuning.TextSize, Callback = Kit.Esp.Setter("TextSize") })
 end
 
+function Kit.Esp.BuildLines(target, T)
+    local tuning = Kit.Esp.Settings
+    local group = Kit.Ui.Group(target, "Right", T("Tracer & Body", "เส้นและโครง"), "tracer")
+    Kit.Esp.Element(group, "Tracer", T("Tracer", "เส้นชี้"))
+    group:AddDropdown("KitEspTracerOrigin", {
+        Text = T("From", "เริ่มจาก"), Default = "Bottom", DependsOn = Kit.Esp.Under("Tracer"),
+        Values = { T("Bottom", "ล่างจอ"), T("Center", "กลางจอ"), T("Top", "บนจอ"), T("Mouse", "เมาส์") }, Callback = Kit.Esp.Setter("TracerOrigin"),
+    })
+    Kit.Esp.Element(group, "Skeleton", T("Skeleton", "โครงกระดูก"))
+    Kit.Esp.Element(group, "HeadDot", T("Head Dot", "จุดที่หัว"))
+end
+
+function Kit.Esp.BuildOffscreen(target, T)
+    local tuning = Kit.Esp.Settings
+    local group = Kit.Ui.Group(target, "Right", T("Off-screen & Radar", "นอกจอและเรดาร์"), "radar")
+    Kit.Esp.Element(group, "Arrows", T("Off-screen Arrows", "ลูกศรนอกจอ"))
+    group:AddSlider("KitEspArrowRadius", { Text = T("Distance From Center", "ระยะจากกลางจอ"), Min = 60, Max = 400, Step = 10, Default = tuning.ArrowRadius, Suffix = "px", DependsOn = Kit.Esp.Under("Arrows"), Callback = Kit.Esp.Setter("ArrowRadius") })
+    group:AddSlider("KitEspArrowSize", { Text = T("Arrow Size", "ขนาดลูกศร"), Min = 6, Max = 30, Default = tuning.ArrowSize, Suffix = "px", DependsOn = Kit.Esp.Under("Arrows"), Callback = Kit.Esp.Setter("ArrowSize") })
+    Kit.Esp.Element(group, "Radar", T("Radar", "เรดาร์"))
+    group:AddSlider("KitEspRadarSize", { Text = T("Radar Size", "ขนาดเรดาร์"), Min = 100, Max = 300, Step = 10, Default = tuning.RadarSize, Suffix = "px", DependsOn = Kit.Esp.Under("Radar"), Callback = Kit.Esp.Setter("RadarSize") })
+    group:AddSlider("KitEspRadarRange", { Text = T("Radar Range", "ระยะเรดาร์"), Min = 50, Max = 1000, Step = 25, Default = tuning.RadarRange, Suffix = "m", DependsOn = Kit.Esp.Under("Radar"), Callback = Kit.Esp.Setter("RadarRange") })
+    group:AddDropdown("KitEspRadarCorner", {
+        Text = T("Position", "ตำแหน่ง"), Default = "Top Left", DependsOn = Kit.Esp.Under("Radar"),
+        Values = { T("Top Left", "ซ้ายบน"), T("Top Right", "ขวาบน"), T("Bottom Left", "ซ้ายล่าง"), T("Bottom Right", "ขวาล่าง") },
+        Callback = Kit.Esp.Setter("RadarCorner"),
+    })
+    group:AddToggle("KitEspRadarRotate", { Text = T("Rotate With Camera", "หมุนตามกล้อง"), Default = true, DependsOn = Kit.Esp.Under("Radar"), Callback = Kit.Esp.Setter("RadarRotate") })
+end
+
+function Kit.Esp.BuildColors(target, T)
+    local group = Kit.Ui.Group(target, "Right", T("Colors", "สี"), "palette")
+    local colors = Kit.Esp.Settings.Colors
+    group:AddDropdown("KitEspColorMode", {
+        Text = T("Color By", "ใช้สีตาม"), Default = "Relation",
+        Values = { T("Relation", "ศัตรู/ทีม/บอท"), T("Team", "สีทีม"), T("Health", "เลือด") },
+        Callback = Kit.Esp.Setter("ColorMode"),
+    })
+    local pairsList = {
+        { "Enemy", T("Enemy  ·  Visible / Behind Wall", "ศัตรู · เห็น / หลังกำแพง") },
+        { "Team", T("Team  ·  Visible / Behind Wall", "ทีม · เห็น / หลังกำแพง") },
+        { "Bot", T("Bot  ·  Visible / Behind Wall", "บอท · เห็น / หลังกำแพง") },
+    }
+    for _, spec in ipairs(pairsList) do
+        group:AddLabel({ Text = spec[2] })
+            :AddColorPicker("KitEspColor" .. spec[1] .. "Visible", { Default = colors[spec[1] .. "Visible"], Callback = Kit.Esp.ColorSetter(spec[1] .. "Visible") })
+            :AddColorPicker("KitEspColor" .. spec[1] .. "Hidden", { Default = colors[spec[1] .. "Hidden"], Callback = Kit.Esp.ColorSetter(spec[1] .. "Hidden") })
+    end
+    group:AddLabel({ Text = T("Aim Target", "เป้าที่ล็อก") }):AddColorPicker("KitEspColorFocus", { Default = colors.Focus, Callback = Kit.Esp.ColorSetter("Focus") })
+    group:AddToggle("KitEspLowHealth", { Text = T("Low Health Color", "สีเมื่อเลือดต่ำ"), Callback = Kit.Esp.Setter("LowHealth") })
+        :AddColorPicker("KitEspColorLowHealth", { Default = colors.LowHealth, Callback = Kit.Esp.ColorSetter("LowHealth") })
+    group:AddSlider("KitEspLowHealthAt", {
+        Text = T("Below", "ต่ำกว่า"), Min = 5, Max = 90, Step = 5, Default = 30, Suffix = "%",
+        DependsOn = { "KitEspLowHealth", true }, Callback = Kit.Esp.Setter("LowHealthAt"),
+    })
+    group:AddLabel({ Text = T("Health Bar  ·  Full / Empty", "แถบเลือด · เต็ม / หมด") })
+        :AddColorPicker("KitEspElementHealthHigh", { Default = colors.HealthHigh, Callback = Kit.Esp.ColorSetter("HealthHigh") })
+        :AddColorPicker("KitEspElementHealthLow", { Default = colors.HealthLow, Callback = Kit.Esp.ColorSetter("HealthLow") })
+    group:AddLabel({ Text = T("Armor Bar", "แถบเกราะ") }):AddColorPicker("KitEspElementArmor", { Default = colors.Armor, Callback = Kit.Esp.ColorSetter("Armor") })
+end
+
+function Kit.Esp.BuildAdvanced(target, T, kinds)
+    local tuning = Kit.Esp.Settings
+    local group = Kit.Ui.Group(target, "Left", T("Advanced", "ขั้นสูง"), "filter")
+    local values, picked = { T("Players", "ผู้เล่น"), T("Bots", "บอท") }, { "Players", "Bots" }
+    for _, kind in ipairs(kinds or {}) do
+        values[#values + 1], picked[#picked + 1] = kind, kind
+    end
+    group:AddMultiChips("KitEspKinds", {
+        Text = T("Show Types", "ประเภทที่แสดง"), Values = values, Default = picked,
+        Callback = function(set)
+            local kindSet = {}
+            for entry, on in pairs(set or {}) do
+                if on then kindSet[Kit.Esp.KindKeys[Plain(entry)] or Plain(entry)] = true end
+            end
+            Kit.Esp.Set("Kinds", kindSet)
+        end,
+    })
+    group:AddToggle("KitEspHideDead", { Text = T("Hide Dead", "ซ่อนตัวที่ตาย"), Default = true, Callback = Kit.Esp.Setter("HideDead") })
+    group:AddToggle("KitEspWatch", {
+        Text = T("Warn When Watched", "เตือนเมื่อถูกมอง"), Description = T("Marks enemies looking at you", "เปลี่ยนสีศัตรูที่หันมาทางคุณ"),
+        Callback = Kit.Esp.Setter("Watch"),
+    }):AddColorPicker("KitEspColorWatching", { Default = tuning.Colors.Watching, Callback = Kit.Esp.ColorSetter("Watching") })
+    group:AddSlider("KitEspWatchAngle", {
+        Text = T("Watch Angle", "มุมที่นับว่ามอง"), Min = 2, Max = 30, Default = tuning.WatchAngle, Suffix = "°",
+        DependsOn = { "KitEspWatch", true }, Callback = Kit.Esp.Setter("WatchAngle"),
+    })
+    group:AddSlider("KitEspRate", {
+        Text = T("Update Rate", "อัปเดตทุก"), Min = 0.05, Max = 2, Step = 0.05, Rounding = 2, Default = tuning.Rate, Suffix = "s",
+        Callback = Kit.Esp.Setter("Rate"),
+    })
+end
+
+function Kit.Esp.Id(name)
+    return "KitEsp" .. tostring(name):gsub("[^%w]", "")
+end
+
+---@param options table?  { Categories = { { Name, Text, Color, Source, Label } }, Players = true, Kinds = { "Zombies" } }
+---@return table, table  main group (toggle, categories, presets) and the group the preview docks under
+function Kit.Esp.Build(target, options)
+    options = options or {}
+    local T = Kit.T
+    Kit.Esp.Defaults()
+    if options.Players ~= false and not Kit.Esp.Categories.Players then
+        Kit.Esp.AddCategory("Players", { Text = T("Players", "ผู้เล่น"), Color = Color3.fromRGB(240, 92, 80), Source = Kit.Esp.PlayerSource, Characters = true })
+    end
+    for _, spec in ipairs(options.Categories or {}) do
+        Kit.Esp.AddCategory(spec.Name, spec)
+    end
+    local main = Kit.Esp.BuildMain(target, T)
+    Kit.Esp.BuildBox(target, T)
+    Kit.Esp.BuildChams(target, T)
+    Kit.Esp.BuildHealth(target, T)
+    Kit.Esp.BuildAdvanced(target, T, options.Kinds)
+    Kit.Esp.BuildText(target, T)
+    Kit.Esp.BuildLines(target, T)
+    Kit.Esp.BuildOffscreen(target, T)
+    Kit.Esp.BuildColors(target, T)
+    return main, main
+end
+
+---@author xDTaraZ  Mario Hub UI V2
 Kit.Aim = {
     Players = {},
     Ignore = {},

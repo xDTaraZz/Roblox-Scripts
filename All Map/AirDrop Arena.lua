@@ -239,10 +239,6 @@ xDTaraZ.Options = {
     LootGear = { Primary = true, Pistol = true, Helmet = true, Armor = true },
     AutoValuables = false,
     AutoAirDrop = false,
-    LootEspAirDrop = false,
-    LootEspCrate = false,
-    LootEspItem = false,
-    LootEspRange = 400,
     SuperSlide = false,
     SlideSpeed = 120,
     Speed = false,
@@ -275,7 +271,6 @@ Util.HookMeta = Resolve(hookmetamethod)
 Util.GetNamecall = Resolve(getnamecallmethod)
 Util.NewCClosure = Resolve(newcclosure) or function(fn) return fn end
 Util.GetGc = Resolve(getgc)
-Util.GetHui = Resolve(gethui, get_hidden_gui)
 xDTaraZ.Caps = {
     Hook = Util.HookMeta ~= nil and Util.GetNamecall ~= nil,
     Gc = Util.GetGc ~= nil,
@@ -291,14 +286,6 @@ function Util.HttpGet(url)
         if type(response) == "table" and type(response.Body) == "string" then return response.Body end
     end
     error("HttpGet failed: " .. url)
-end
-
-function Util.Hui()
-    if Util.GetHui then
-        local ok, gui = pcall(Util.GetHui)
-        if ok and gui then return gui end
-    end
-    return LocalPlayer:FindFirstChildOfClass("PlayerGui")
 end
 
 function Util.Copy(text)
@@ -397,13 +384,14 @@ local losParams = RaycastParams.new()
 losParams.FilterType = Enum.RaycastFilterType.Exclude
 local losFilter = table.create(3)
 
+---@param withBots boolean?  include bots even when Target Bots is off (ESP)
 ---@return Model[]  every character and bot that could be shot
-function xDTaraZ.Target.Candidates()
+function xDTaraZ.Target.Candidates(withBots)
     local list = {}
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then table.insert(list, player.Character) end
     end
-    local fx = xDTaraZ.Options.TargetBots and Workspace:FindFirstChild("Fx")
+    local fx = (withBots or xDTaraZ.Options.TargetBots) and Workspace:FindFirstChild("Fx")
     if fx then
         for _, model in ipairs(fx:GetChildren()) do
             if model:IsA("Model") and model:GetAttribute("EntityId") then list[#list + 1] = model end
@@ -419,10 +407,12 @@ function xDTaraZ.Target.IsEnemy(model)
     local state = model:GetAttribute("EntityState")
     if state ~= nil and state ~= 1 then return false end
 
+    return not xDTaraZ.Target.SameTeam(model)
+end
+
+function xDTaraZ.Target.SameTeam(model)
     local mine = LocalPlayer.Character and LocalPlayer.Character:GetAttribute("TeamId")
-    local theirs = model:GetAttribute("TeamId")
-    if mine and mine ~= -1 and mine == theirs then return false end
-    return true
+    return mine ~= nil and mine ~= -1 and mine == model:GetAttribute("TeamId")
 end
 
 function xDTaraZ.Target.Part(model, bone)
@@ -749,7 +739,7 @@ function xDTaraZ.Guns.Restore()
     table.clear(xDTaraZ.Guns.Saved)
 end
 
-xDTaraZ.Loot = { Marks = {} }
+xDTaraZ.Loot = {}
 
 function xDTaraZ.Loot.Folder()
     return Workspace:FindFirstChild("DropItemFloder")
@@ -908,44 +898,26 @@ function xDTaraZ.Loot.OnSync(body)
     if type(timer) == "table" and type(timer.endstamp) == "number" then xDTaraZ.State.AirDropAt = timer.endstamp end
 end
 
-function xDTaraZ.Loot.Mark(model, kind)
-    local gui = Instance.new("BillboardGui")
-    gui.Name, gui.AlwaysOnTop, gui.Size, gui.StudsOffset = "xDTaraZLoot", true, UDim2.fromOffset(180, 20), vector3New(0, 2, 0)
-    local label = Instance.new("TextLabel")
-    label.BackgroundTransparency, label.Size, label.Font, label.TextSize = 1, UDim2.fromScale(1, 1), Enum.Font.GothamBold, 12
-    label.TextColor3, label.TextStrokeTransparency = xDTaraZ.Config.LootColors[kind], 0.3
-    label.Parent = gui
-    gui.Adornee = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true)
-    gui.Parent = Util.Hui()
-    return { Gui = gui, Label = label }
+---@return Model[]  drops of one kind lying in the world
+function xDTaraZ.Loot.OfKind(kind)
+    local folder, list = xDTaraZ.Loot.Folder(), {}
+    for _, model in ipairs(folder and folder:GetChildren() or {}) do
+        if xDTaraZ.Loot.Kind(model) == kind then list[#list + 1] = model end
+    end
+    return list
 end
 
-function xDTaraZ.Loot.EspStep()
-    local opts = xDTaraZ.Options
-    local marks = xDTaraZ.Loot.Marks
-    local folder = xDTaraZ.Loot.Folder()
-    local hrp = xDTaraZ.Player.Root()
-    local show = { AirDrop = opts.LootEspAirDrop, Crate = opts.LootEspCrate, Item = opts.LootEspItem }
-    local seen = {}
-
-    if folder and hrp then
-        for _, model in ipairs(folder:GetChildren()) do
-            local kind = xDTaraZ.Loot.Kind(model)
-            if not (kind and show[kind]) then continue end
-            local dist = (model:GetPivot().Position - hrp.Position).Magnitude
-            if dist > opts.LootEspRange and kind ~= "AirDrop" then continue end
-            seen[model] = true
-            marks[model] = marks[model] or xDTaraZ.Loot.Mark(model, kind)
+---@param range number?  own max distance (air drops: any)
+---@return table  Kit ESP category spec for one drop kind
+function xDTaraZ.Loot.Category(kind, text, range)
+    return {
+        Name = "Loot" .. kind, Text = text, Color = xDTaraZ.Config.LootColors[kind], Characters = false, MaxDistance = range,
+        Source = function() return xDTaraZ.Loot.OfKind(kind) end,
+        Label = function(model)
             local opened = kind == "AirDrop" and model:GetAttribute("AirDropOpened") and " (opened)" or ""
-            marks[model].Label.Text = string.format("%s%s [%dm]", xDTaraZ.Loot.Label(model, kind), opened, math.floor(dist))
-        end
-    end
-    for model, mark in pairs(marks) do
-        if not seen[model] then
-            mark.Gui:Destroy()
-            marks[model] = nil
-        end
-    end
+            return (xDTaraZ.Loot.Label(model, kind) or kind) .. opened
+        end,
+    }
 end
 
 xDTaraZ.Slide = { Skill = nil, LastScan = 0, Dir = nil }
@@ -1281,21 +1253,49 @@ function xDTaraZ.Farm.GetStatus()
     return table.concat(parts, " | ")
 end
 
-xDTaraZ.Esp = { Count = 0 }
+xDTaraZ.Esp = { Count = 0, ItemNames = {} }
+
+---@return string?  item name worn in gear slot `slot` (Config.GearSlots index), cached per item id
+function xDTaraZ.Esp.Worn(model, slot)
+    local worn = model:GetAttribute("EPos_" .. xDTaraZ.Config.GearSlots[slot][2])
+    local id = type(worn) == "string" and tonumber(worn:match("^I_(%d+)"))
+    if not id or id <= 0 then return nil end
+    local names = xDTaraZ.Esp.ItemNames
+    if names[id] == nil then
+        local cfg = xDTaraZ.Loot.ItemConfig(id)
+        names[id] = cfg and cfg.name or false
+    end
+    return names[id] or nil
+end
+
+function xDTaraZ.Esp.Gear(model)
+    local flags = {}
+    for _, slot in ipairs({ 8, 9 }) do
+        flags[#flags + 1] = xDTaraZ.Esp.Worn(model, slot)
+    end
+    return xDTaraZ.Esp.Worn(model, 4) or xDTaraZ.Esp.Worn(model, 5), flags
+end
 
 ---@return table[]  targets in the shape Library.Visuals expects
 function xDTaraZ.Esp.Targets()
     local list = {}
-    for _, model in ipairs(xDTaraZ.Target.Candidates()) do
+    for _, model in ipairs(xDTaraZ.Target.Candidates(true)) do
         local hum = model:FindFirstChildOfClass("Humanoid")
         if not hum or hum.Health <= 0 then continue end
+        local player = Players:GetPlayerFromCharacter(model)
+        local weapon, flags = xDTaraZ.Esp.Gear(model)
         list[#list + 1] = {
             Model = model,
-            Name = xDTaraZ.Target.Label(model),
+            Player = player,
+            Name = player and player.DisplayName or model.Name,
+            Kind = player and "Player" or "Bot",
+            Weapon = weapon,
+            Flags = flags,
             Health = hum.Health,
             MaxHealth = hum.MaxHealth > 0 and hum.MaxHealth or 100,
-            Friendly = not xDTaraZ.Target.IsEnemy(model),
+            Enemy = not xDTaraZ.Target.SameTeam(model),
             Root = model:FindFirstChild("HumanoidRootPart"),
+            Head = model:FindFirstChild("Head"),
         }
     end
     xDTaraZ.Esp.Count = #list
@@ -1581,14 +1581,14 @@ end
 
 function xDTaraZ.UI.BuildVisuals(window)
     window:AddTabSection(T("Visuals", "การมองเห็น"))
-    window:AddVisualsTab({ Icon = "esp", Provider = xDTaraZ.Esp.Targets, Preview = true })
-
-    local tab = window:AddTab(T("Loot ESP", "มองเห็นของ"), "chest", T("Air drops, crates and items", "แอร์ดรอป กล่อง และไอเทม"))
-    local esp = tab:AddLeftGroupbox(T("Loot ESP", "มองเห็นของ"), "eye")
-    esp:AddToggle("LootEspAirDrop", { Text = T("Air Drops", "แอร์ดรอป"), Icon = "airdrop" })
-    esp:AddToggle("LootEspCrate", { Text = T("Crates", "กล่อง"), Icon = "box" })
-    esp:AddToggle("LootEspItem", { Text = T("Items", "ไอเทม"), Icon = "loot" })
-    esp:AddSlider("LootEspRange", { Text = T("Range", "ระยะ"), Description = T("Air drops show at any range", "แอร์ดรอปแสดงทุกระยะ"), Icon = "distance", Min = 50, Max = 2000, Default = 400, Suffix = "m" })
+    window:AddVisualsTab({
+        Icon = "esp", Provider = xDTaraZ.Esp.Targets, Focus = function() return xDTaraZ.State.Target end, Preview = true,
+        Categories = {
+            xDTaraZ.Loot.Category("AirDrop", T("Air Drops", "แอร์ดรอป"), math.huge),
+            xDTaraZ.Loot.Category("Crate", T("Crates", "กล่อง")),
+            xDTaraZ.Loot.Category("Item", T("Items", "ไอเทม")),
+        },
+    })
 end
 
 function xDTaraZ.UI.BuildMovement(tab)
@@ -1719,7 +1719,6 @@ function xDTaraZ.Boot()
 
     xDTaraZ.Scheduler.Every("Guns", 0.5, xDTaraZ.Guns.Step)
     xDTaraZ.Scheduler.Every("AirDrop", 1, xDTaraZ.Loot.AirDropStep)
-    xDTaraZ.Scheduler.Every("LootEsp", 0.5, xDTaraZ.Loot.EspStep)
     xDTaraZ.Scheduler.Every("World", 0.5, xDTaraZ.World.Step)
     xDTaraZ.Scheduler.Every("Respawn", 0.5, xDTaraZ.Respawn.Step)
     xDTaraZ.Scheduler.Every("Gear", 0.5, xDTaraZ.Loot.GearStep)
@@ -1737,10 +1736,9 @@ function xDTaraZ:Unload()
     self.State.Alive = false
     xDTaraZ.Combat.Unload()
     xDTaraZ.Guns.Restore()
-    for _, key in ipairs({ "Fullbright", "CameraFov", "LootEspAirDrop", "LootEspCrate", "LootEspItem", "Noclip", "Fly", "Speed" }) do
+    for _, key in ipairs({ "Fullbright", "CameraFov", "Noclip", "Fly", "Speed" }) do
         xDTaraZ.Options[key] = false
     end
-    pcall(xDTaraZ.Loot.EspStep)
     pcall(xDTaraZ.World.Step)
     pcall(xDTaraZ.World.OnRender)
     pcall(xDTaraZ.Movement.OnStepped)
