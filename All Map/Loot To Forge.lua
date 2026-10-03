@@ -148,7 +148,7 @@ xDTaraZ.Config = {
     SaveFolder = "Loot To Forge",
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
-        { "2026-10-04", "Spawn Scrolls, Tickets & Stones\nDupe Whole Inventory\nOP badge on Spawn Items" },
+        { "2026-10-04", "Spawn Scrolls, Tickets & Stones\nDupe Whole Inventory\nAdd Season Coins (OP)\nFaster Tower farm\nRemoved keybinds from auto features" },
         { "2026-10-03", "Fixed World Boss, Auto Click & Codes\nImproved Auto Train\nAuto rune detection" },
     },
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
@@ -168,7 +168,8 @@ xDTaraZ.Config = {
     AcquireRounds = 300,
     StoneWorkers = 8,
     StoneCallsPerWorker = 15,
-    TowerWorkers = 8,
+    TowerWorkers = 128,
+    CoinFarmTimeout = 600,
     TowerCallsPerWorker = 25,
     GearForgeTries = 15,
     GearEnhanceTries = 20,
@@ -329,6 +330,7 @@ xDTaraZ.State = {
         TargetRace = nil,
         SpawnItem = nil,
         SpawnAmount = 100000,
+        CoinTarget = 1000000,
         SpeedOn = false,
         WalkSpeed = 60,
         InfJump = false,
@@ -1619,15 +1621,29 @@ function xDTaraZ.Tower.FarmStep()
     local round = xDTaraZ.Tower.LastRound()
     local start = xDTaraZ.Util.Remote("Dungeon", "StartRoundRE")
     local complete = xDTaraZ.Util.Remote("Dungeon", "CompleteRoundRF")
+    start:FireServer(round)
     xDTaraZ.Util.WaitAll(Config.TowerWorkers, function()
         for _ = 1, Config.TowerCallsPerWorker do
-            start:FireServer(round)
             if complete:InvokeServer(round) then
                 State.TowerLoot += 1
             end
         end
     end)
     return true
+end
+
+---@return number  season coins gained
+function xDTaraZ.Tower.FarmCoins(target)
+    local start = (xDTaraZ.Season.Current() or {}).SeasonCoin or 0
+    local deadline = os.clock() + Config.CoinFarmTimeout
+    local gained = 0
+    while gained < target and os.clock() < deadline do
+        if not State.InTower and xDTaraZ.Data.Count(xDTaraZ.Data.Get(), "Dungeon_Ticket") < 1 then break end
+        if not xDTaraZ.Tower.FarmStep() then break end
+        gained = ((xDTaraZ.Season.Current() or {}).SeasonCoin or 0) - start
+    end
+    xDTaraZ.Tower.Exit()
+    return gained
 end
 
 ---@return string?  basic attack id of the equipped weapon, nil for an unknown weapon type
@@ -2192,7 +2208,9 @@ local function BuildInterface()
         })
     end
 
-    local function Feature(group, key, text, description, onChange, risky)
+    local Feature = Toggle
+
+    local function HotkeyFeature(group, key, text, description, onChange, risky)
         return Toggle(group, key, text, description, onChange, risky):AddKeyPicker(key .. "Key", { Default = "None", Mode = "Toggle" })
     end
 
@@ -2549,6 +2567,12 @@ local function BuildInterface()
             end)
         end })
 
+        local coinBox = tab:AddRightGroupbox(T("Season Coins", "เหรียญซีซั่น"), nil, "OP")
+        NumberInput(coinBox, "CoinTarget", T("Amount", "จำนวน"), nil, 1)
+        coinBox:AddButton({ Text = T("Add Season Coins", "เพิ่มเหรียญซีซั่น"), Style = "Primary", Func = LongAction("Tower", function()
+            return xDTaraZ.Tower.FarmCoins(opt.CoinTarget)
+        end, function(gained) return ("+%s season coins"):format(xDTaraZ.Util.Abbreviate(gained or 0)) end) })
+
         local stoneBox = tab:AddRightGroupbox(T("Enhance Stones", "หินตีบวก"))
         stoneBox:AddButton({ Text = T("Farm Enhance Stones", "ฟาร์มหินตีบวก"), Style = "Primary", Func = LongAction("Stones", function()
             local before = xDTaraZ.Data.Count(xDTaraZ.Data.Get(), "EnhantStone_1")
@@ -2597,7 +2621,7 @@ local function BuildInterface()
         end) })
 
         local moveBox = tab:AddRightGroupbox(T("Movement", "การเคลื่อนที่"))
-        Feature(moveBox, "SpeedOn", T("Speed", "ความเร็ว"), nil, xDTaraZ.Movement.Apply)
+        HotkeyFeature(moveBox, "SpeedOn", T("Speed", "ความเร็ว"), nil, xDTaraZ.Movement.Apply)
         moveBox:AddSlider("WalkSpeed", {
             Text = T("Walk Speed", "ความเร็วเดิน"),
             Min = 16, Max = 200, Default = opt.WalkSpeed, Rounding = 0,
@@ -2606,7 +2630,7 @@ local function BuildInterface()
                 xDTaraZ.Movement.Apply()
             end,
         })
-        Feature(moveBox, "InfJump", T("Infinite Jump", "กระโดดไม่จำกัด"))
+        HotkeyFeature(moveBox, "InfJump", T("Infinite Jump", "กระโดดไม่จำกัด"))
 
         local guardBox = tab:AddRightGroupbox(T("Survival", "เอาตัวรอด"))
         local godMode = Feature(guardBox, "GodMode", T("Invincible", "อมตะ"), T("Monsters and bosses can't kill you", "มอนสเตอร์และบอสฆ่าไม่ตาย"), function(value)

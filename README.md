@@ -73,6 +73,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 - **Auto Complete Index**: finds every missing weapon, armor and hat, shows the chance per forge
 - **Spawn Items**: any ore, enchant rune, Protection Scroll, Tower Ticket or enhance stone, any amount
 - **Dupe Whole Inventory**: one click adds to every stack you own
+- **Add Season Coins**: type an amount, get it in minutes
 - **Kill Aura**, **Kill Ore Boss**, **Invincible**, keep ore on death
 - **Auto Farm Tower** on one ticket: rare stones and season coins
 - **Auto Season**: daily ticket, spins, pass rewards and shop
