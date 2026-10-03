@@ -34,7 +34,7 @@ local xDTaraZ = setmetatable({}, {
 
 xDTaraZ.Config = {
     Discord = "https://discord.gg/FHVfmeSceA",
-    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
+    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui_v2.lua",
     SaveFolder = "Stone Skipping",
     TickDelay = 0.2,
     GcRescan = 5,
@@ -795,58 +795,86 @@ local function BuildInterface()
     local T = function(en, th) return Library:T(en, th) end
     local opt = State.Opt
 
-    local function Notify(text)
-        Library:Notify("Stone Skipping", text, 4)
+    local function Notify(text, kind)
+        Library:Notify("Stone Skipping", text, 4, kind or "Info")
     end
 
     local function Request(name)
         return function() State.Requests[name] = true end
     end
 
-    local function Toggle(group, key, text, description, onChange)
-        return group:AddToggle(key, {
-            Text = text,
-            Description = description,
-            Default = opt[key],
-            Callback = function(value)
-                opt[key] = value
-                if onChange then onChange(value) end
-            end,
-        })
+    local function Mirror(key, onChange)
+        return function(value)
+            opt[key] = value
+            if onChange then onChange(value) end
+        end
     end
 
-    local function NeedCap(idx, cap)
+    ---@param info table  AddFeature info; Callback mirrors the value into State.Opt[key]
+    local function Feature(group, key, info)
+        info.Callback = Mirror(key, info.OnChange)
+        info.OnChange = nil
+        info.Keybind = info.Keybind or { Default = "None", Mode = "Toggle" }
+        return group:AddFeature(key, info)
+    end
+
+    ---@param label string  feature name shown in the warning
+    local function NeedCap(idx, cap, label)
         if xDTaraZ.Caps[cap] then return end
         local option = Options[idx]
         if not option then return end
         option:OnChanged(function(on)
-            if not on then return end
-            local title = option.Row and option.Row.Title
-            Notify((title and title.Text or idx) .. " is not supported on this executor")
-            task.defer(function() option:SetValue(false) end)
+            if on ~= true then return end
+            Notify(label .. " is not supported on this executor", "Warn")
+            task.defer(option.SetValue, option, false)
         end)
     end
 
-    local function BuildTabs()
-        local Window = Library.Window
-        Window:AddTabSection(T("Main", "หลัก"))
-        local MainTab = Window:AddTab(T("Main", "หลัก"), "house", T("Status and all-in-one mode", "สถานะและโหมดทำทุกอย่าง"))
-        Window:AddTabSection(T("Farming", "ฟาร์ม"))
-        local FarmTab = Window:AddTab(T("Auto Farm", "ฟาร์มอัตโนมัติ"), "star", T("Throwing and training", "ปาหินและฝึก"))
-        Window:AddTabSection(T("Progression", "ความคืบหน้า"))
-        local ShopTab = Window:AddTab(T("Stones & Rebirth", "หินและรีเบิร์ธ"), "shop", T("Stones, rebirth and worlds", "หิน รีเบิร์ธ และโลก"))
-        local PetTab = Window:AddTab(T("Pets & Rewards", "สัตว์เลี้ยงและรางวัล"), "mushroom", T("Eggs, potions, rewards and codes", "ไข่ ยา รางวัล และโค้ด"))
-        Window:AddTabSection(T("Misc", "อื่นๆ"))
-        local PlayerTab = Window:AddTab(T("Player", "ผู้เล่น"), "user", T("Movement and teleports", "การเคลื่อนที่และวาร์ป"))
+    local function RegisterIcons()
+        if Library:HasIcon("skipstone") then return end
+        Library:AddIcon("skipstone", {
+            ".........",
+            "...GGG...",
+            ".GGLLGGG.",
+            "GLLLGGGGG",
+            ".GGGGGGD.",
+            "...DDD...",
+            ".........",
+            "B.B...B.B",
+            ".B.B.B.B.",
+        }, {
+            G = Color3.fromRGB(150, 156, 166),
+            L = Color3.fromRGB(214, 220, 228),
+            D = Color3.fromRGB(92, 96, 108),
+            B = Color3.fromRGB(80, 170, 240),
+        })
+    end
 
-        local statusBox = MainTab:AddLeftGroupbox(T("Status", "สถานะ"), "star")
-        local statusLabel = statusBox:AddLabel(T("Loading...", "กำลังโหลด..."))
-        local runLabel = statusBox:AddLabel("-")
+    local function AnyAuto()
+        for _, key in ipairs({ "AutoFarm", "AutoBuyStone", "AutoRebirth", "AutoTravel", "AutoHatch", "AutoInventoryHatch", "AutoPotions", "AutoClaim" }) do
+            if opt[key] then return true end
+        end
+        return false
+    end
 
-        local kaitunBox = MainTab:AddRightGroupbox(T("Kaitun", "ไก่ตัน"), "oneup")
-        kaitunBox:AddToggle("Kaitun", {
-            Text = T("Kaitun (All-in-one)", "ไก่ตัน (ทำทุกอย่าง)"),
+    local function BuildMain(window)
+        window:AddTabSection(T("Main", "หลัก"))
+        local tab = window:AddTab(T("Main", "หลัก"), "home", T("Status and all-in-one mode", "สถานะและโหมดทำทุกอย่าง"))
+
+        local status = tab:AddLeftGroupbox(T("Status", "สถานะ"), "stats")
+        status:AddStatus("StatusFarm", { Text = T("Current task", "งานตอนนี้"), Icon = "activity" })
+        local summary = status:AddLabel(T("Loading...", "กำลังโหลด..."), true)
+
+        local live = tab:AddLeftGroupbox(T("Session", "รอบนี้"), "chart")
+        live:AddStat("StatWins", { Text = T("Wins earned", "Wins ที่ได้"), Icon = "wins", Format = "%s", Token = "Coin" })
+        live:AddStat("StatSkill", { Text = T("Skill earned", "Skill ที่ได้"), Icon = "lightning", Format = "%s", Token = "Good" })
+        live:AddStat("StatThrows", { Text = T("Throws", "จำนวนครั้งที่ปา"), Icon = "skipstone", Format = "%s" })
+
+        local kaitun = tab:AddRightGroupbox(T("Kaitun", "ไก่ตัน"), "rebirth")
+        kaitun:AddToggle("Kaitun", {
+            Text = T("Kaitun", "ไก่ตัน"),
             Description = T("Trains, throws, upgrades, rebirths and claims rewards by itself", "ฝึก ปาหิน อัปเกรด รีเบิร์ธ และรับรางวัลให้เอง"),
+            Icon = "auto-farm",
             NoSave = true,
             Callback = function(value)
                 State.KaitunSet = State.KaitunSet or {}
@@ -862,123 +890,216 @@ local function BuildInterface()
             end,
         })
 
-        local discordBox = MainTab:AddRightGroupbox(T("Discord", "Discord"), "link")
-        discordBox:AddLabel(Config.Discord)
-        discordBox:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ Discord"), Style = "Primary", Func = function()
-            local copy = setclipboard or toclipboard
-            if copy then copy(Config.Discord) end
-            Notify(copy and "Discord link copied" or Config.Discord)
+        local quick = tab:AddRightGroupbox(T("Quick", "ด่วน"), "lightning")
+        quick:AddButton({ Text = T("Panic - All Off", "ฉุกเฉิน ปิดทั้งหมด"), Icon = "stop", Style = "Danger", Callback = function()
+            for _, toggle in pairs(Library.Toggles) do
+                if toggle.Value == true then toggle:SetValue(false) end
+            end
         end })
 
-        local farmBox = FarmTab:AddLeftGroupbox(T("Auto Farm", "ฟาร์มอัตโนมัติ"), "star")
-        Toggle(farmBox, "AutoFarm", T("Auto Farm", "ฟาร์มอัตโนมัติ"), T("Earns skill and wins without stopping", "ฟาร์ม Skill และ Wins ไม่หยุด"))
-        farmBox:AddDropdown("FarmMode", {
-            Text = T("Farm Mode", "โหมดฟาร์ม"),
-            Description = T("Smart: throws for wins when needed, trains otherwise", "Smart: ปาหินเมื่อต้องใช้ Wins นอกนั้นฝึก Skill"),
-            Values = { "Smart", "Train", "Throw" },
-            Default = 1,
-            Callback = function(value) opt.FarmMode = value or "Smart" end,
+        Library.Kit.Discord.Build(tab, Config.Discord)
+        return summary
+    end
+
+    local function BuildFarm(window)
+        window:AddTabSection(T("Farming", "ฟาร์ม"))
+        local tab = window:AddTab(T("Auto Farm", "ฟาร์มอัตโนมัติ"), "farm", T("Throwing and training", "ปาหินและฝึก"))
+
+        local farm = tab:AddLeftGroupbox(T("Auto Farm", "ฟาร์มอัตโนมัติ"), "skipstone")
+        Feature(farm, "AutoFarm", {
+            Text = T("Auto Farm", "ฟาร์มอัตโนมัติ"),
+            Description = T("Earns skill and wins without stopping", "ฟาร์ม Skill และ Wins ไม่หยุด"),
+            Icon = "auto-farm",
+            Now = { Text = T("Throw Now", "ปาหินเดี๋ยวนี้"), Icon = "skipstone", Callback = Request("ThrowNow") },
+            Options = function(options)
+                options:AddSegmented("FarmMode", {
+                    Text = T("Mode", "โหมด"),
+                    Description = T("Smart throws for wins only when you need them", "Smart ปาหินเฉพาะตอนต้องใช้ Wins"),
+                    Icon = "auto",
+                    Values = { "Smart", "Train", "Throw" },
+                    Default = "Smart",
+                    Callback = function(value) opt.FarmMode = value or "Smart" end,
+                })
+            end,
         })
-        local zoneChoices = { "Best" }
-        for _, zone in ipairs(xDTaraZ.TrainZones) do table.insert(zoneChoices, zone.Name) end
-        farmBox:AddDropdown("TrainZone", {
+
+        local zones = { "Best" }
+        for _, zone in ipairs(xDTaraZ.TrainZones) do zones[#zones + 1] = zone.Name end
+
+        local train = tab:AddRightGroupbox(T("Training", "การฝึก"), "train")
+        train:AddDropdown("TrainZone", {
             Text = T("Training Zone", "โซนฝึก"),
             Description = T("Best = strongest zone you have unlocked", "Best = โซนที่ดีที่สุดที่ปลดล็อกแล้ว"),
-            Values = zoneChoices,
-            Default = 1,
+            Icon = "map",
+            Values = zones,
+            Default = "Best",
             Callback = function(value) opt.TrainZone = value or "Best" end,
         })
+        train:AddButton({ Text = T("Go Train Now", "ไปฝึกเดี๋ยวนี้"), Icon = "train", Callback = Request("TrainNow") })
+    end
 
-        local nowBox = FarmTab:AddRightGroupbox(T("Manual", "สั่งเอง"), "target")
-        nowBox:AddButton({ Text = T("Throw Now", "ปาหินเดี๋ยวนี้"), Style = "Primary", Func = Request("ThrowNow") })
-        nowBox:AddButton({ Text = T("Go Train Now", "ไปฝึกเดี๋ยวนี้"), Func = Request("TrainNow") })
+    local function BuildStones(window)
+        window:AddTabSection(T("Progression", "ความคืบหน้า"))
+        local tab = window:AddTab(T("Stones & Rebirth", "หินและรีเบิร์ธ"), "shop", T("Stones, rebirth and worlds", "หิน รีเบิร์ธ และโลก"))
 
-        local stoneBox = ShopTab:AddLeftGroupbox(T("Stones", "หิน"), "coin")
-        Toggle(stoneBox, "AutoBuyStone", T("Auto Buy Best Stone", "ซื้อหินดีสุดอัตโนมัติ"), T("Buys and equips the strongest stone you can afford", "ซื้อและใส่หินที่แรงที่สุดที่ซื้อไหว"))
-        stoneBox:AddSlider("StoneReserve", {
+        local stones = tab:AddLeftGroupbox(T("Stones", "หิน"), "stone")
+        Feature(stones, "AutoBuyStone", {
+            Text = T("Auto Buy Best Stone", "ซื้อหินดีสุดอัตโนมัติ"),
+            Description = T("Buys and equips the strongest stone you can afford", "ซื้อและใส่หินที่แรงที่สุดที่ซื้อไหว"),
+            Icon = "auto-buy",
+            Now = { Text = T("Buy Now", "ซื้อเดี๋ยวนี้"), Icon = "shop", Callback = Request("StoneNow") },
+        })
+        stones:AddSlider("StoneReserve", {
             Text = T("Keep Wins", "กัน Wins ไว้"),
-            Min = 0, Max = 100000, Default = 0, Rounding = 0,
+            Icon = "wins",
+            Min = 0, Max = 100000, Step = 500, Default = 0, Rounding = 0,
             Callback = function(value) opt.StoneReserve = tonumber(value) or 0 end,
         })
-        stoneBox:AddButton({ Text = T("Buy Best Stone Now", "ซื้อหินดีสุดเดี๋ยวนี้"), Func = Request("StoneNow") })
 
-        local rebirthBox = ShopTab:AddRightGroupbox(T("Rebirth & Worlds", "รีเบิร์ธและโลก"), "flag")
-        Toggle(rebirthBox, "AutoRebirth", T("Auto Rebirth", "รีเบิร์ธอัตโนมัติ"), T("Rebirths as soon as your level is high enough", "รีเบิร์ธทันทีเมื่อเลเวลถึง"))
-        rebirthBox:AddButton({ Text = T("Rebirth Now", "รีเบิร์ธเดี๋ยวนี้"), Func = Request("RebirthNow") })
-        Toggle(rebirthBox, "AutoTravel", T("Auto Next World", "ไปโลกถัดไปอัตโนมัติ"), T("Moves to the next world once it is unlocked and this world's stones are done", "ย้ายไปโลกถัดไปเมื่อปลดล็อกและซื้อหินโลกนี้ครบแล้ว"))
-        rebirthBox:AddButton({ Text = T("Next World Now", "ไปโลกถัดไปเดี๋ยวนี้"), Func = Request("TravelNow") })
+        local rebirth = tab:AddRightGroupbox(T("Rebirth & Worlds", "รีเบิร์ธและโลก"), "rebirth")
+        Feature(rebirth, "AutoRebirth", {
+            Text = T("Auto Rebirth", "รีเบิร์ธอัตโนมัติ"),
+            Description = T("Rebirths as soon as your level is high enough", "รีเบิร์ธทันทีเมื่อเลเวลถึง"),
+            Icon = "rebirth",
+            Now = { Text = T("Rebirth Now", "รีเบิร์ธเดี๋ยวนี้"), Icon = "rebirth", Style = "Warning", Callback = Request("RebirthNow") },
+        })
+        Feature(rebirth, "AutoTravel", {
+            Text = T("Auto Next World", "ไปโลกถัดไปอัตโนมัติ"),
+            Description = T("Moves on once the next world is open and this world's stones are done", "ไปโลกถัดไปเมื่อปลดล็อกและซื้อหินโลกนี้ครบแล้ว"),
+            Icon = "portal",
+            Now = { Text = T("Next World Now", "ไปโลกถัดไปเดี๋ยวนี้"), Icon = "world", Callback = Request("TravelNow") },
+        })
+    end
 
-        local eggBox = PetTab:AddLeftGroupbox(T("Eggs", "ไข่"), "mushroom")
-        Toggle(eggBox, "AutoHatch", T("Auto Hatch", "ฟักไข่อัตโนมัติ"), T("Buys and hatches the selected egg with wins", "ซื้อและฟักไข่ที่เลือกด้วย Wins"))
-        local function EggNames()
-            local names = { "Best" }
-            for _, egg in ipairs(xDTaraZ.Pets.EggList()) do table.insert(names, egg[1]) end
-            return names
-        end
-        local eggDropdown = eggBox:AddDropdown("HatchEgg", {
+    local function EggNames()
+        local names = { "Best" }
+        for _, egg in ipairs(xDTaraZ.Pets.EggList()) do table.insert(names, egg[1]) end
+        return names
+    end
+
+    local function BuildPets(window)
+        local tab = window:AddTab(T("Pets & Rewards", "สัตว์เลี้ยงและรางวัล"), "pet", T("Eggs, potions, rewards and codes", "ไข่ ยา รางวัล และโค้ด"))
+
+        local eggs = tab:AddLeftGroupbox(T("Eggs", "ไข่"), "egg")
+        Feature(eggs, "AutoHatch", {
+            Text = T("Auto Hatch", "ฟักไข่อัตโนมัติ"),
+            Description = T("Buys and hatches the selected egg with wins", "ซื้อและฟักไข่ที่เลือกด้วย Wins"),
+            Icon = "auto-hatch",
+            Now = { Text = T("Hatch Now", "ฟักเดี๋ยวนี้"), Icon = "hatch", Callback = Request("HatchNow") },
+        })
+        local eggPicker = eggs:AddDropdown("HatchEgg", {
             Text = T("Egg", "ไข่"),
+            Icon = "egg",
             Values = EggNames(),
-            Default = 1,
+            Default = "Best",
             Callback = function(value) opt.HatchEgg = value or "Best" end,
         })
-        eggBox:AddButton({ Text = T("Refresh Eggs", "รีเฟรชรายการไข่"), Func = function() eggDropdown:SetValues(EggNames()) end })
-        eggBox:AddSlider("HatchReserve", {
+        eggs:AddButton({ Text = T("Refresh Eggs", "รีเฟรชรายการไข่"), Icon = "refresh", Style = "Ghost", Callback = function()
+            eggPicker:SetValues(EggNames())
+        end })
+        eggs:AddSlider("HatchReserve", {
             Text = T("Keep Wins", "กัน Wins ไว้"),
-            Min = 0, Max = 100000, Default = 0, Rounding = 0,
+            Icon = "wins",
+            Min = 0, Max = 100000, Step = 500, Default = 0, Rounding = 0,
             Callback = function(value) opt.HatchReserve = tonumber(value) or 0 end,
         })
-        eggBox:AddButton({ Text = T("Hatch Now", "ฟักเดี๋ยวนี้"), Func = Request("HatchNow") })
-        Toggle(eggBox, "AutoInventoryHatch", T("Auto Open Inventory Eggs", "เปิดไข่ในกระเป๋าอัตโนมัติ"), T("Opens eggs from codes, gifts and daily rewards", "เปิดไข่ที่ได้จากโค้ด ของขวัญ และรางวัลรายวัน"))
-        eggBox:AddButton({ Text = T("Open Inventory Egg Now", "เปิดไข่ในกระเป๋าเดี๋ยวนี้"), Func = Request("InventoryNow") })
 
-        local rewardBox = PetTab:AddRightGroupbox(T("Rewards", "รางวัล"), "coin")
-        Toggle(rewardBox, "AutoClaim", T("Auto Claim", "รับรางวัลอัตโนมัติ"), T("Claims playtime gifts, daily, offline and group rewards", "รับของขวัญเวลาเล่น รางวัลรายวัน ออฟไลน์ และกลุ่ม"))
-        rewardBox:AddButton({ Text = T("Claim Now", "รับเดี๋ยวนี้"), Func = Request("ClaimNow") })
-        Toggle(rewardBox, "AutoPotions", T("Auto Use Potions", "ใช้ยาอัตโนมัติ"), T("Keeps the selected boosts running", "เปิดบูสต์ที่เลือกไว้ตลอด"))
-        rewardBox:AddDropdown("Potions", {
+        eggs:AddDivider()
+        Feature(eggs, "AutoInventoryHatch", {
+            Text = T("Auto Open Inventory Eggs", "เปิดไข่ในกระเป๋าอัตโนมัติ"),
+            Description = T("Opens eggs from codes, gifts and daily rewards", "เปิดไข่ที่ได้จากโค้ด ของขวัญ และรางวัลรายวัน"),
+            Icon = "egg",
+            Now = { Text = T("Open Now", "เปิดเดี๋ยวนี้"), Icon = "hatch", Callback = Request("InventoryNow") },
+        })
+
+        local rewards = tab:AddRightGroupbox(T("Rewards", "รางวัล"), "gift")
+        Feature(rewards, "AutoClaim", {
+            Text = T("Auto Claim", "รับรางวัลอัตโนมัติ"),
+            Description = T("Playtime gifts, daily, offline and group rewards", "ของขวัญเวลาเล่น รายวัน ออฟไลน์ และกลุ่ม"),
+            Icon = "auto-claim",
+            Now = { Text = T("Claim Now", "รับเดี๋ยวนี้"), Icon = "gift", Style = "Success", Callback = Request("ClaimNow") },
+        })
+        Feature(rewards, "AutoPotions", {
+            Text = T("Auto Use Potions", "ใช้ยาอัตโนมัติ"),
+            Description = T("Keeps the selected boosts running", "เปิดบูสต์ที่เลือกไว้ตลอด"),
+            Icon = "potion",
+            Now = { Text = T("Use Now", "ใช้เดี๋ยวนี้"), Icon = "potion", Callback = Request("PotionNow") },
+        })
+        rewards:AddMultiChips("Potions", {
             Text = T("Potions", "ยา"),
+            Icon = "potion",
             Values = { "Skill", "Win", "Luck" },
-            Multi = true,
+            Colors = { Skill = Color3.fromRGB(80, 150, 240), Win = Color3.fromRGB(238, 196, 82), Luck = Color3.fromRGB(96, 200, 110) },
             Default = { "Skill", "Win", "Luck" },
             Callback = function(selected) opt.Potions = selected end,
         })
-        rewardBox:AddButton({ Text = T("Use Potions Now", "ใช้ยาเดี๋ยวนี้"), Func = Request("PotionNow") })
-        rewardBox:AddButton({ Text = T("Redeem All Codes", "ใช้โค้ดทั้งหมด"), Style = "Primary", Func = Request("CodesNow") })
 
-        local moveBox = PlayerTab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "star")
-        Toggle(moveBox, "SpeedOn", T("Speed", "ความเร็ว"), nil, Request("Speed"))
-        moveBox:AddSlider("WalkSpeed", {
+        local codes = tab:AddRightGroupbox(T("Codes", "โค้ด"), "code")
+        codes:AddButton({ Text = T("Redeem All Codes", "ใช้โค้ดทั้งหมด"), Icon = "code", Style = "Primary", Callback = Request("CodesNow") })
+    end
+
+    local function BuildPlayer(window)
+        window:AddTabSection(T("Misc", "อื่นๆ"))
+        local tab = window:AddTab(T("Player", "ผู้เล่น"), "player", T("Movement, teleports and session", "การเคลื่อนที่ วาร์ป และเซสชัน"))
+
+        local move = tab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "speed")
+        move:AddToggle("SpeedOn", { Text = T("Speed", "ความเร็ว"), Icon = "speed", Callback = Mirror("SpeedOn", Request("Speed")) })
+        move:AddSlider("WalkSpeed", {
             Text = T("Walk Speed", "ความเร็วเดิน"),
+            Icon = "speed",
             Min = 16, Max = 150, Default = opt.WalkSpeed, Rounding = 0,
+            DependsOn = { "SpeedOn", true },
             Callback = function(value)
                 opt.WalkSpeed = tonumber(value) or opt.WalkSpeed
                 State.Requests.Speed = true
             end,
         })
-        Toggle(moveBox, "InfJump", T("Infinite Jump", "กระโดดไม่จำกัด"))
+        move:AddToggle("InfJump", { Text = T("Infinite Jump", "กระโดดไม่จำกัด"), Icon = "jump", Callback = Mirror("InfJump") })
 
-        local tpBox = PlayerTab:AddRightGroupbox(T("Teleport", "วาร์ป"), "teleport")
-        tpBox:AddButton({ Text = T("Throw Zone", "โซนปาหิน"), Func = Request("LaunchTp") })
-        tpBox:AddButton({ Text = T("Best Training Zone", "โซนฝึกที่ดีที่สุด"), Func = Request("TrainNow") })
-        tpBox:AddButton({ Text = T("Selected Egg", "ไข่ที่เลือก"), Func = Request("EggTp") })
+        local session = tab:AddLeftGroupbox(T("Session", "เซสชัน"), "clock")
+        session:AddToggle("AntiAfk", { Text = T("Anti AFK", "กันหลุด AFK"), Icon = "antiafk", Callback = Mirror("AntiAfk") })
+        session:AddToggle("AutoRejoin", { Text = T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), Description = T("Rejoins by itself after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"), Icon = "auto-rejoin", Callback = Mirror("AutoRejoin") })
 
-        local settingsTab = Window:AddSettingsTab()
-        local sessionBox = settingsTab:AddLeftGroupbox(T("Session", "เซสชัน"), "gear")
-        Toggle(sessionBox, "AntiAfk", T("Anti AFK", "กันหลุด AFK"), T("Stops the idle kick", "กันโดนเตะเพราะไม่ขยับ"))
-        Toggle(sessionBox, "AutoRejoin", T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), T("Rejoins by itself after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"))
+        local tp = tab:AddRightGroupbox(T("Teleport", "วาร์ป"), "teleport")
+        tp:AddButton({ Text = T("Throw Zone", "โซนปาหิน"), Icon = "skipstone", Callback = Request("LaunchTp") })
+        tp:AddButton({ Text = T("Best Training Zone", "โซนฝึกที่ดีที่สุด"), Icon = "train", Callback = Request("TrainNow") })
+        tp:AddButton({ Text = T("Selected Egg", "ไข่ที่เลือก"), Icon = "egg", Callback = Request("EggTp") })
+    end
 
-        for _, idx in ipairs({ "AutoFarm", "AutoBuyStone", "AutoRebirth", "AutoTravel", "AutoHatch", "AutoInventoryHatch", "AutoPotions", "AutoClaim" }) do
-            NeedCap(idx, "Gc")
-        end
-        NeedCap("AutoTravel", "Prompt")
+    local function Live(summary)
+        Library.Lib.Status("StatusFarm", function()
+            return State.Status, AnyAuto() and "Running" or "Idle"
+        end, 1)
+        Library.Lib.Status("StatWins", function() return State.WinsEarned end, 1)
+        Library.Lib.Status("StatSkill", function() return State.SkillEarned end, 1)
+        Library.Lib.Status("StatThrows", function() return State.Throws end, 1)
 
         Library:Every(1, function()
             while #State.Messages > 0 do
                 Notify(table.remove(State.Messages, 1))
             end
-            statusLabel:SetText(State.Summary or "-")
-            runLabel:SetText(("%s\nThrows %d · Wins +%s · Skill +%s"):format(State.Status, State.Throws, xDTaraZ.Format(State.WinsEarned), xDTaraZ.Format(State.SkillEarned)))
+            summary:SetText(State.Summary or "-")
         end)
+    end
+
+    local function BuildTabs()
+        local window = Library.Window
+        RegisterIcons()
+        local summary = BuildMain(window)
+        BuildFarm(window)
+        BuildStones(window)
+        BuildPets(window)
+        BuildPlayer(window)
+        window:AddSettingsTab()
+
+        local gcFeatures = {
+            AutoFarm = "Auto Farm", AutoBuyStone = "Auto Buy Best Stone", AutoRebirth = "Auto Rebirth", AutoTravel = "Auto Next World",
+            AutoHatch = "Auto Hatch", AutoInventoryHatch = "Auto Open Inventory Eggs", AutoPotions = "Auto Use Potions", AutoClaim = "Auto Claim",
+        }
+        for idx, label in pairs(gcFeatures) do NeedCap(idx, "Gc", label) end
+        NeedCap("AutoTravel", "Prompt", "Auto Next World")
+
+        Live(summary)
     end
 
     Library:OnUnload(xDTaraZ.Scheduler.Stop)
@@ -996,7 +1117,7 @@ local function BuildInterface()
         OnUnlocked = function()
             BuildTabs()
             xDTaraZ.Scheduler.Boot()
-            Notify("Loaded")
+            Notify("Loaded", "Success")
             Library:LoadAutoloadConfig()
         end,
     })

@@ -34,7 +34,7 @@ local xDTaraZ = setmetatable({}, {
 
 xDTaraZ.Config = {
     Discord = "https://discord.gg/FHVfmeSceA",
-    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
+    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui_v2.lua",
     SaveFolder = "Break and Steal an Egg",
     TickDelay = 0.05,
     TpSettle = 0.12,
@@ -1074,24 +1074,34 @@ local function BuildInterface()
     local T = function(en, th) return Library:T(en, th) end
     local opt = State.Opt
 
-    local function Notify(text)
-        Library:Notify("Break and Steal an Egg", text, 4)
+    local function Notify(text, kind)
+        Library:Notify("Break and Steal an Egg", text, 4, kind or "Info")
     end
 
     local function Request(name)
         return function() State.Requests[name] = true end
     end
 
-    local function Toggle(group, key, text, description, onChange)
-        return group:AddToggle(key, {
-            Text = text,
-            Description = description,
-            Default = false,
-            Callback = function(value)
-                opt[key] = value
-                if onChange then onChange(value) end
-            end,
-        })
+    local function Store(key, onChange)
+        return function(value)
+            opt[key] = value
+            if onChange then onChange(value) end
+        end
+    end
+
+    local function Toggle(group, key, info, onChange)
+        info.Default = false
+        info.Callback = Store(key, onChange)
+        return group:AddToggle(key, info)
+    end
+
+    ---@param info table  AddFeature spec; Keybind defaults to an unbound Toggle key
+    local function Feature(group, key, info)
+        info.Default = false
+        info.Callback = Store(key, info.OnChange)
+        info.OnChange = nil
+        info.Keybind = info.Keybind or { Default = "None", Mode = "Toggle" }
+        return group:AddFeature(key, info)
     end
 
     local function ToSet(selected)
@@ -1111,34 +1121,39 @@ local function BuildInterface()
     local function PlayerNames()
         local names = {}
         for _, player in ipairs(Players:GetPlayers()) do
-            if player ~= LocalPlayer then names[#names + 1] = player.Name end
+            if player ~= LocalPlayer then table.insert(names, player.Name) end
         end
         table.sort(names)
         return names
     end
 
-    local function BuildTabs()
-        local Window = Library.Window
-        Window:AddTabSection(T("Main", "หลัก"))
-        local MainTab = Window:AddTab(T("Main", "หลัก"), "house", T("Status and all-in-one mode", "สถานะและโหมดทำทุกอย่าง"))
-        Window:AddTabSection(T("Farming", "ฟาร์ม"))
-        local FarmTab = Window:AddTab(T("Steal & Break", "ขโมยและทุบไข่"), "star", T("Steal animals and break eggs", "ขโมยสัตว์และทุบไข่"))
-        Window:AddTabSection(T("Progression", "ความคืบหน้า"))
-        local BaseTab = Window:AddTab(T("Base & Shop", "ฐานและร้านค้า"), "shop", T("Placing, selling, upgrades and rewards", "วางสัตว์ ขาย อัปเกรด และรางวัล"))
-        Window:AddTabSection(T("Misc", "อื่นๆ"))
-        local PlayerTab = Window:AddTab(T("Player", "ผู้เล่น"), "user", T("Movement and teleports", "การเคลื่อนที่และวาร์ป"))
-        local VisualTab = Window:AddTab(T("Visuals", "มองเห็น"), "eye", T("See animals, eggs and players", "มองเห็นสัตว์ ไข่ และผู้เล่น"))
-        local TrollTab = Window:AddTab(T("Troll", "ป่วน"), "troll", T("Bat other players", "ตีผู้เล่นอื่น"))
+    ---@return string  status kind for AddStatus
+    local function Kind(text)
+        if not text or text == "Idle" then return "Idle" end
+        if string.find(text, "Waiting", 1, true) or string.find(text, "No ", 1, true) then return "Waiting" end
+        return "Running"
+    end
 
-        local statusBox = MainTab:AddLeftGroupbox(T("Status", "สถานะ"), "star")
-        local statusLabel = statusBox:AddLabel(T("Loading...", "กำลังโหลด..."))
-        local runLabel = statusBox:AddLabel("-")
+    local function BuildMain(window)
+        window:AddTabSection(T("Main", "หลัก"))
+        local tab = window:AddTab(T("Main", "หลัก"), "house", T("Status and all-in-one mode", "สถานะและโหมดทำทุกอย่าง"))
 
-        local kaitunBox = MainTab:AddRightGroupbox(T("Kaitun", "ไก่ตัน"), "oneup")
-        kaitunBox:AddToggle("Kaitun", {
+        local status = tab:AddLeftGroupbox(T("Status", "สถานะ"), "stats")
+        status:AddStatus("StatusRun", { Text = T("Doing", "กำลังทำ"), Icon = "status", Default = { T("Idle", "ว่าง"), "Idle" } })
+        local summary = status:AddLabel(T("Loading...", "กำลังโหลด..."), true)
+
+        local live = tab:AddLeftGroupbox(T("Live", "ตัวเลขสด"), "chart")
+        live:AddStat("StatSteals", { Text = T("Steals", "ขโมยได้"), Icon = "rob", Format = "%s", Token = "Good" })
+        live:AddStat("StatEggs", { Text = T("Eggs broken", "ไข่ที่ทุบ"), Icon = "egg", Format = "%s" })
+        live:AddStat("StatBanked", { Text = T("Banked", "เก็บเข้าฐาน"), Icon = "bank", Format = "%s", Token = "Coin" })
+
+        local kaitun = tab:AddRightGroupbox(T("Kaitun", "ไก่ตัน"), "kaitun")
+        kaitun:AddFeature("Kaitun", {
             Text = T("Kaitun (All-in-one)", "ไก่ตัน (ทำทุกอย่าง)"),
             Description = T("Steals, breaks eggs, places, sells, upgrades and claims rewards by itself", "ขโมย ทุบไข่ วางสัตว์ ขาย อัปเกรด และรับรางวัลให้เองทั้งหมด"),
-            NoSave = true,
+            Icon = "kaitun",
+            Save = false,
+            Keybind = { Default = "None", Mode = "Toggle" },
             Callback = function(value)
                 State.KaitunSet = State.KaitunSet or {}
                 for _, key in ipairs({ "AutoSteal", "AutoBreak", "AutoPlace", "AutoSell", "AutoBuyPickaxe", "AutoUpgradePlot", "AutoClaim", "AutoHatch", "AntiAfk" }) do
@@ -1153,170 +1168,297 @@ local function BuildInterface()
             end,
         })
 
-        local discordBox = MainTab:AddRightGroupbox(T("Discord", "Discord"), "link")
-        discordBox:AddLabel(Config.Discord)
-        discordBox:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ Discord"), Style = "Primary", Func = function()
-            local copy = setclipboard or toclipboard
-            if copy then copy(Config.Discord) end
-            Notify(copy and "Discord link copied" or Config.Discord)
-        end })
+        Library.Kit.Discord.Build(tab, Config.Discord)
 
-        local stealBox = FarmTab:AddLeftGroupbox(T("Auto Steal", "ขโมยอัตโนมัติ"), "star")
-        Toggle(stealBox, "AutoSteal", T("Auto Steal", "ขโมยอัตโนมัติ"), T("Grabs the most valuable animals on the map and brings them home instantly", "คว้าสัตว์ที่มีค่าที่สุดบนแมพแล้วพากลับฐานทันที"))
-        stealBox:AddDropdown("Take", {
-            Text = T("Take", "เก็บ"),
-            Description = T("Upgrades Only = only animals that earn more than your weakest one", "Upgrades Only = เฉพาะตัวที่ทำเงินมากกว่าตัวที่อ่อนสุดบนฐาน"),
-            Values = { "Upgrades Only", "Everything" },
-            Default = 1,
-            Callback = function(value) opt.Take = value or "Upgrades Only" end,
-        })
-        stealBox:AddDropdown("StealRarities", {
-            Text = T("Only Rarities", "เฉพาะ rarity"),
-            Description = T("Empty = take everything", "ไม่เลือก = เอาทุกตัว"),
-            Values = xDTaraZ.RarityLadder,
-            Multi = true,
-            Default = {},
-            Callback = function(selected) opt.StealRarities = ToSet(selected) end,
-        })
-        stealBox:AddInput("StealMinValue", {
-            Text = T("Min Cash/s", "เงินต่อวิขั้นต่ำ"),
-            Placeholder = "0",
-            Numeric = true,
-            Callback = function(value) opt.StealMinValue = tonumber(value) or 0 end,
-        })
-        Toggle(stealBox, "RobCarriers", T("Rob Carriers", "ปล้นคนที่แบกสัตว์"), T("Bats players carrying animals and takes what they drop", "ตีผู้เล่นที่แบกสัตว์แล้วเก็บของที่หล่น"))
-        stealBox:AddButton({ Text = T("Steal Best Now", "ขโมยตัวดีสุดเดี๋ยวนี้"), Style = "Primary", Func = Request("StealNow") })
-        stealBox:AddButton({ Text = T("Bank Now", "เก็บเข้าฐานเดี๋ยวนี้"), Func = Request("BankNow") })
+        return summary
+    end
 
-        local breakBox = FarmTab:AddRightGroupbox(T("Auto Break", "ทุบไข่อัตโนมัติ"), "qblock")
-        Toggle(breakBox, "AutoBreak", T("Auto Break Eggs", "ทุบไข่อัตโนมัติ"), T("Breaks eggs in any zone at max speed and takes the animal home", "ทุบไข่ได้ทุกโซนด้วยความเร็วสูงสุดแล้วพาสัตว์กลับฐาน"))
-        local zoneChoices = { "Best" }
-        for _, name in ipairs(xDTaraZ.Teleport.Zones()) do zoneChoices[#zoneChoices + 1] = name end
-        breakBox:AddDropdown("BreakZone", {
-            Text = T("Zone", "โซน"),
-            Description = T("Best = most worth for the time spent", "Best = คุ้มที่สุดต่อเวลาที่ใช้"),
-            Values = zoneChoices,
-            Default = 1,
-            Callback = function(value) opt.BreakZone = value or "Best" end,
+    local function BuildSteal(tab)
+        local steal = tab:AddLeftGroupbox(T("Auto Steal", "ขโมยอัตโนมัติ"), "rob")
+        Feature(steal, "AutoSteal", {
+            Text = T("Auto Steal", "ขโมยอัตโนมัติ"),
+            Description = T("Grabs the most valuable animals on the map and brings them home instantly", "คว้าสัตว์ที่มีค่าที่สุดบนแมพแล้วพากลับฐานทันที"),
+            Icon = "autograb",
+            Now = { Text = T("Steal Best Now", "ขโมยตัวดีสุดเดี๋ยวนี้"), Icon = "grab", Callback = Request("StealNow") },
+            Options = function(options)
+                options:AddSegmented("Take", {
+                    Text = T("Take", "เก็บ"),
+                    Description = T("Upgrades Only = only animals that earn more than your weakest one", "Upgrades Only = เฉพาะตัวที่ทำเงินมากกว่าตัวที่อ่อนสุดบนฐาน"),
+                    Icon = "filter",
+                    Values = { "Upgrades Only", "Everything" },
+                    Default = "Upgrades Only",
+                    Callback = function(value) opt.Take = value or "Upgrades Only" end,
+                })
+                options:AddMultiChips("StealRarities", {
+                    Text = T("Only rarities", "เฉพาะ rarity"),
+                    Description = T("None selected = take everything", "ไม่เลือก = เอาทุกตัว"),
+                    Icon = "rarity",
+                    Values = xDTaraZ.RarityLadder,
+                    Default = {},
+                    Callback = function(selected) opt.StealRarities = ToSet(selected) end,
+                })
+                options:AddInput("StealMinValue", {
+                    Text = T("Min cash/s", "เงินต่อวิขั้นต่ำ"),
+                    Icon = "income",
+                    Placeholder = "0",
+                    Numeric = true,
+                    Callback = function(value) opt.StealMinValue = tonumber(value) or 0 end,
+                })
+            end,
         })
-        breakBox:AddSlider("MaxHits", {
-            Text = T("Max Hits Per Egg", "จำนวนตีสูงสุดต่อไข่"),
-            Description = T("Skips eggs that take longer than this", "ข้ามไข่ที่ใช้นานกว่านี้"),
-            Min = 1, Max = 200, Default = opt.MaxHits, Rounding = 0,
-            Callback = function(value) opt.MaxHits = tonumber(value) or opt.MaxHits end,
+        Toggle(steal, "RobCarriers", {
+            Text = T("Rob Carriers", "ปล้นคนที่แบกสัตว์"),
+            Description = T("Bats players carrying animals and takes what they drop", "ตีผู้เล่นที่แบกสัตว์แล้วเก็บของที่หล่น"),
+            Icon = "knockback",
+            Risky = true,
         })
+        steal:AddButton({ Text = T("Bank Now", "เก็บเข้าฐานเดี๋ยวนี้"), Icon = "bank", Style = "Ghost", Callback = Request("BankNow") })
+    end
 
-        local placeBox = BaseTab:AddLeftGroupbox(T("Animals", "สัตว์"), "mushroom")
-        Toggle(placeBox, "AutoPlace", T("Auto Place Best", "วางตัวดีสุดอัตโนมัติ"), T("Keeps the best earners standing on your base", "วางตัวที่ทำเงินดีสุดไว้บนฐานตลอด"))
-        placeBox:AddButton({ Text = T("Place Best Now", "วางตัวดีสุดเดี๋ยวนี้"), Func = Request("Place") })
-        Toggle(placeBox, "AutoSell", T("Auto Sell Leftovers", "ขายตัวที่เหลืออัตโนมัติ"), T("Sells animals in your backpack that did not fit on the base", "ขายสัตว์ในกระเป๋าที่ไม่ได้วางบนฐาน"))
-        placeBox:AddDropdown("KeepRarities", {
-            Text = T("Never Sell", "ไม่ขาย"),
-            Values = xDTaraZ.RarityLadder,
-            Multi = true,
-            Default = {},
-            Callback = function(selected) opt.KeepRarities = ToSet(selected) end,
-        })
-        placeBox:AddButton({ Text = T("Sell All Now", "ขายทั้งหมดเดี๋ยวนี้"), Func = Request("SellNow") })
+    local function BuildBreak(tab)
+        local zones = { "Best" }
+        for _, name in ipairs(xDTaraZ.Teleport.Zones()) do zones[#zones + 1] = name end
 
-        local shopBox = BaseTab:AddRightGroupbox(T("Upgrades", "อัปเกรด"), "coin")
-        Toggle(shopBox, "AutoBuyPickaxe", T("Auto Buy Pickaxe", "ซื้อ Pickaxe อัตโนมัติ"), T("Jumps straight to the best pickaxe you can afford", "ข้ามไปซื้อ Pickaxe ที่ดีที่สุดที่ซื้อไหวทันที"))
-        shopBox:AddButton({ Text = T("Buy Pickaxe Now", "ซื้อ Pickaxe เดี๋ยวนี้"), Func = Request("PickaxeNow") })
-        Toggle(shopBox, "AutoUpgradePlot", T("Auto Upgrade Base", "อัปเกรดฐานอัตโนมัติ"), T("More animal slots as soon as you can pay", "เพิ่มช่องวางสัตว์ทันทีที่เงินพอ"))
-        shopBox:AddButton({ Text = T("Upgrade Base Now", "อัปเกรดฐานเดี๋ยวนี้"), Func = Request("PlotNow") })
-        Toggle(shopBox, "AutoTrail", T("Auto Buy Trail", "ซื้อ Trail อัตโนมัติ"), T("Buys and wears the strongest trail", "ซื้อและใส่ Trail ที่แรงที่สุด"))
-        shopBox:AddButton({ Text = T("Buy Trail Now", "ซื้อ Trail เดี๋ยวนี้"), Func = Request("TrailNow") })
-        Toggle(shopBox, "AutoTreadmill", T("Auto Upgrade Treadmill", "อัปเกรดลู่วิ่งอัตโนมัติ"))
-        shopBox:AddButton({ Text = T("Upgrade Treadmill Now", "อัปเกรดลู่วิ่งเดี๋ยวนี้"), Func = Request("TreadmillNow") })
-        shopBox:AddInput("CashReserve", {
-            Text = T("Keep Cash", "กันเงินไว้"),
+        local breaker = tab:AddRightGroupbox(T("Auto Break", "ทุบไข่อัตโนมัติ"), "egg")
+        Feature(breaker, "AutoBreak", {
+            Text = T("Auto Break Eggs", "ทุบไข่อัตโนมัติ"),
+            Description = T("Breaks eggs in any zone at max speed and takes the animal home", "ทุบไข่ได้ทุกโซนด้วยความเร็วสูงสุดแล้วพาสัตว์กลับฐาน"),
+            Icon = "pickaxe",
+            Options = function(options)
+                options:AddDropdown("BreakZone", {
+                    Text = T("Zone", "โซน"),
+                    Description = T("Best = most worth for the time spent", "Best = คุ้มที่สุดต่อเวลาที่ใช้"),
+                    Icon = "zone",
+                    Values = zones,
+                    Default = "Best",
+                    Callback = function(value) opt.BreakZone = value or "Best" end,
+                })
+                options:AddSlider("MaxHits", {
+                    Text = T("Max hits per egg", "จำนวนตีสูงสุดต่อไข่"),
+                    Description = T("Skips eggs that take longer than this", "ข้ามไข่ที่ใช้นานกว่านี้"),
+                    Icon = "hit",
+                    Min = 1, Max = 200, Default = opt.MaxHits, Rounding = 0,
+                    Callback = function(value) opt.MaxHits = tonumber(value) or opt.MaxHits end,
+                })
+            end,
+        })
+    end
+
+    local function BuildAnimals(tab)
+        local animals = tab:AddLeftGroupbox(T("Animals", "สัตว์"), "paw")
+        Feature(animals, "AutoPlace", {
+            Text = T("Auto Place Best", "วางตัวดีสุดอัตโนมัติ"),
+            Description = T("Keeps the best earners standing on your base", "วางตัวที่ทำเงินดีสุดไว้บนฐานตลอด"),
+            Icon = "plot",
+            Now = { Text = T("Place Best Now", "วางตัวดีสุดเดี๋ยวนี้"), Icon = "base", Callback = Request("Place") },
+        })
+        Feature(animals, "AutoSell", {
+            Text = T("Auto Sell Leftovers", "ขายตัวที่เหลืออัตโนมัติ"),
+            Description = T("Sells animals in your backpack that did not fit on the base", "ขายสัตว์ในกระเป๋าที่ไม่ได้วางบนฐาน"),
+            Icon = "sell",
+            Now = { Text = T("Sell All Now", "ขายทั้งหมดเดี๋ยวนี้"), Icon = "sellall", Style = "Warning", Callback = Request("SellNow") },
+            Options = function(options)
+                options:AddMultiChips("KeepRarities", {
+                    Text = T("Never sell", "ไม่ขาย"),
+                    Icon = "favorite",
+                    Values = xDTaraZ.RarityLadder,
+                    Default = {},
+                    Callback = function(selected) opt.KeepRarities = ToSet(selected) end,
+                })
+            end,
+        })
+    end
+
+    local function BuildUpgrades(tab)
+        local shop = tab:AddRightGroupbox(T("Upgrades", "อัปเกรด"), "upgrade")
+        Feature(shop, "AutoBuyPickaxe", {
+            Text = T("Auto Buy Pickaxe", "ซื้อ Pickaxe อัตโนมัติ"),
+            Description = T("Jumps straight to the best pickaxe you can afford", "ข้ามไปซื้อ Pickaxe ที่ดีที่สุดที่ซื้อไหวทันที"),
+            Icon = "pickaxe",
+            Now = { Text = T("Buy Pickaxe Now", "ซื้อ Pickaxe เดี๋ยวนี้"), Icon = "buy", Callback = Request("PickaxeNow") },
+        })
+        Feature(shop, "AutoUpgradePlot", {
+            Text = T("Auto Upgrade Base", "อัปเกรดฐานอัตโนมัติ"),
+            Description = T("More animal slots as soon as you can pay", "เพิ่มช่องวางสัตว์ทันทีที่เงินพอ"),
+            Icon = "house-plus",
+            Now = { Text = T("Upgrade Base Now", "อัปเกรดฐานเดี๋ยวนี้"), Icon = "upgrade", Callback = Request("PlotNow") },
+        })
+        Feature(shop, "AutoTrail", {
+            Text = T("Auto Buy Trail", "ซื้อ Trail อัตโนมัติ"),
+            Description = T("Buys and wears the strongest trail", "ซื้อและใส่ Trail ที่แรงที่สุด"),
+            Icon = "sparkles",
+            Now = { Text = T("Buy Trail Now", "ซื้อ Trail เดี๋ยวนี้"), Icon = "buy", Callback = Request("TrailNow") },
+        })
+        Feature(shop, "AutoTreadmill", {
+            Text = T("Auto Upgrade Treadmill", "อัปเกรดลู่วิ่งอัตโนมัติ"),
+            Icon = "run",
+            Now = { Text = T("Upgrade Treadmill Now", "อัปเกรดลู่วิ่งเดี๋ยวนี้"), Icon = "upgrade", Callback = Request("TreadmillNow") },
+        })
+        shop:AddInput("CashReserve", {
+            Text = T("Keep cash", "กันเงินไว้"),
+            Description = T("Upgrades never spend below this", "อัปเกรดจะไม่ใช้เงินต่ำกว่านี้"),
+            Icon = "wallet",
             Placeholder = "0",
             Numeric = true,
             Callback = function(value) opt.CashReserve = tonumber(value) or 0 end,
         })
+    end
 
-        local rewardBox = BaseTab:AddLeftGroupbox(T("Rewards", "รางวัล"), "star")
-        Toggle(rewardBox, "AutoClaim", T("Auto Claim", "รับรางวัลอัตโนมัติ"), T("Claims index, offline, group and community rewards, no joining needed", "รับรางวัล Index ออฟไลน์ กลุ่ม และคอมมูนิตี้ ไม่ต้องเข้ากลุ่ม"))
-        rewardBox:AddButton({ Text = T("Claim Now", "รับเดี๋ยวนี้"), Func = Request("ClaimNow") })
-        Toggle(rewardBox, "AutoHatch", T("Auto Hatch Eggs", "ฟักไข่อัตโนมัติ"), T("Places eggs from your backpack on your base and hatches them when ready", "วางไข่ในกระเป๋าบนฐานแล้วฟักเมื่อพร้อม"))
-        rewardBox:AddButton({ Text = T("Hatch Eggs Now", "ฟักไข่เดี๋ยวนี้"), Func = Request("HatchNow") })
+    local function BuildRewards(tab)
+        local rewards = tab:AddLeftGroupbox(T("Rewards", "รางวัล"), "gift")
+        Feature(rewards, "AutoClaim", {
+            Text = T("Auto Claim", "รับรางวัลอัตโนมัติ"),
+            Description = T("Claims index, offline, group and community rewards, no joining needed", "รับรางวัล Index ออฟไลน์ กลุ่ม และคอมมูนิตี้ ไม่ต้องเข้ากลุ่ม"),
+            Icon = "autoclaim",
+            Now = { Text = T("Claim Now", "รับเดี๋ยวนี้"), Icon = "claim", Style = "Success", Callback = Request("ClaimNow") },
+        })
+        Feature(rewards, "AutoHatch", {
+            Text = T("Auto Hatch Eggs", "ฟักไข่อัตโนมัติ"),
+            Description = T("Places eggs from your backpack on your base and hatches them when ready", "วางไข่ในกระเป๋าบนฐานแล้วฟักเมื่อพร้อม"),
+            Icon = "autohatch",
+            Now = { Text = T("Hatch Eggs Now", "ฟักไข่เดี๋ยวนี้"), Icon = "hatch", Callback = Request("HatchNow") },
+        })
+    end
 
-        local moveBox = PlayerTab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "star")
-        Toggle(moveBox, "SpeedOn", T("Speed", "ความเร็ว"), nil, Request("Speed"))
-        moveBox:AddSlider("WalkSpeed", {
-            Text = T("Walk Speed", "ความเร็วเดิน"),
-            Min = 16, Max = 300, Default = opt.WalkSpeed, Rounding = 0,
-            Callback = function(value)
-                opt.WalkSpeed = tonumber(value) or opt.WalkSpeed
-                if opt.SpeedOn then State.Requests.Speed = true end
+    local function BuildPlayer(window)
+        local tab = window:AddTab(T("Player", "ผู้เล่น"), "player", T("Movement and teleports", "การเคลื่อนที่และวาร์ป"))
+
+        local move = tab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "movement")
+        Feature(move, "SpeedOn", {
+            Text = T("Speed", "ความเร็ว"),
+            Icon = "speed",
+            OnChange = Request("Speed"),
+            Options = function(options)
+                options:AddSlider("WalkSpeed", {
+                    Text = T("Walk speed", "ความเร็วเดิน"),
+                    Icon = "walkspeed",
+                    Min = 16, Max = 300, Default = opt.WalkSpeed, Rounding = 0,
+                    Callback = function(value)
+                        opt.WalkSpeed = tonumber(value) or opt.WalkSpeed
+                        if opt.SpeedOn then State.Requests.Speed = true end
+                    end,
+                })
             end,
         })
-        Toggle(moveBox, "InfJump", T("Infinite Jump", "กระโดดไม่จำกัด"))
-        Toggle(moveBox, "Noclip", T("Noclip", "ทะลุกำแพง"), nil, function(on) if not on then xDTaraZ.Move.SetNoclip(false) end end)
+        Feature(move, "InfJump", { Text = T("Infinite Jump", "กระโดดไม่จำกัด"), Icon = "infjump" })
+        Feature(move, "Noclip", {
+            Text = T("Noclip", "ทะลุกำแพง"),
+            Icon = "noclip",
+            OnChange = function(on) if not on then xDTaraZ.Move.SetNoclip(false) end end,
+        })
 
-        local tpBox = PlayerTab:AddRightGroupbox(T("Teleport", "วาร์ป"), "teleport")
-        tpBox:AddDropdown("TpZone", {
+        local tp = tab:AddRightGroupbox(T("Teleport", "วาร์ป"), "teleport")
+        tp:AddDropdown("TpZone", {
             AllowNull = true,
             Text = T("Zone", "โซน"),
+            Icon = "zone",
             Values = xDTaraZ.Teleport.Zones(),
             Searchable = true,
-            NoSave = true,
+            Save = false,
             Callback = function(value) if value then Goto(xDTaraZ.Teleport.Zone, value) end end,
         })
-        tpBox:AddDropdown("TpPlace", {
+        tp:AddDropdown("TpPlace", {
             AllowNull = true,
             Text = T("Place", "สถานที่"),
+            Icon = "map-pin",
             Values = xDTaraZ.Teleport.Places(),
-            NoSave = true,
+            Save = false,
             Callback = function(value) if value then Goto(xDTaraZ.Teleport.Place, value) end end,
         })
-        local tpPlayer = tpBox:AddDropdown("TpPlayer", {
+        local tpPlayer = tp:AddDropdown("TpPlayer", {
             AllowNull = true,
             Text = T("Player", "ผู้เล่น"),
+            Icon = "users",
             Values = PlayerNames(),
             Searchable = true,
-            NoSave = true,
+            Save = false,
             Callback = function(value) if value then Goto(xDTaraZ.Teleport.Player, value) end end,
         })
-        tpBox:AddButton({ Text = T("Refresh Players", "รีเฟรชผู้เล่น"), Func = function() tpPlayer:SetValues(PlayerNames()) end })
+        tp:AddButton({ Text = T("Refresh Players", "รีเฟรชผู้เล่น"), Icon = "refresh", Style = "Ghost", Callback = function() tpPlayer:SetValues(PlayerNames()) end })
+    end
 
-        local espBox = VisualTab:AddLeftGroupbox(T("ESP", "ESP"), "eye")
-        Toggle(espBox, "EspPickups", T("Animals", "สัตว์"), T("Name, rarity, weight and cash per second", "ชื่อ rarity น้ำหนัก และเงินต่อวิ"))
-        espBox:AddDropdown("EspMinRarity", {
-            Text = T("Min Rarity", "rarity ขั้นต่ำ"),
+    local function BuildVisuals(window)
+        local tab = window:AddTab(T("Visuals", "มองเห็น"), "eye", T("See animals, eggs and players", "มองเห็นสัตว์ ไข่ และผู้เล่น"))
+        local esp = tab:AddLeftGroupbox(T("ESP", "ESP"), "esp")
+        Toggle(esp, "EspPickups", { Text = T("Animals", "สัตว์"), Description = T("Name, rarity, weight and cash per second", "ชื่อ rarity น้ำหนัก และเงินต่อวิ"), Icon = "paw" })
+        esp:AddDropdown("EspMinRarity", {
+            Text = T("Min rarity", "rarity ขั้นต่ำ"),
+            Icon = "rarity",
             Values = xDTaraZ.RarityLadder,
-            Default = 1,
+            Default = xDTaraZ.RarityLadder[1],
+            DependsOn = { "EspPickups", true },
             Callback = function(value) opt.EspMinRarity = value or "Common" end,
         })
-        Toggle(espBox, "EspEggs", T("Eggs", "ไข่"), T("HP and how many hits it takes", "HP และจำนวนครั้งที่ต้องตี"))
-        Toggle(espBox, "EspPlayers", T("Players", "ผู้เล่น"), T("Distance and what they carry", "ระยะและสิ่งที่แบกอยู่"))
+        Toggle(esp, "EspEggs", { Text = T("Eggs", "ไข่"), Description = T("HP and how many hits it takes", "HP และจำนวนครั้งที่ต้องตี"), Icon = "egg" })
+        Toggle(esp, "EspPlayers", { Text = T("Players", "ผู้เล่น"), Description = T("Distance and what they carry", "ระยะและสิ่งที่แบกอยู่"), Icon = "players" })
+    end
 
-        local batBox = TrollTab:AddLeftGroupbox(T("Bat", "ไม้ตี"), "swords")
-        local batTarget = batBox:AddDropdown("BatTarget", {
+    local function BuildTroll(window)
+        local tab = window:AddTab(T("Troll", "ป่วน"), "troll", T("Bat other players", "ตีผู้เล่นอื่น"))
+        local bat = tab:AddLeftGroupbox(T("Bat", "ไม้ตี"), "swords")
+        local target = bat:AddDropdown("BatTarget", {
             AllowNull = true,
             Text = T("Target", "เป้าหมาย"),
+            Icon = "target",
             Values = PlayerNames(),
             Searchable = true,
-            NoSave = true,
+            Save = false,
             Callback = function(value) opt.BatTarget = value end,
         })
-        batBox:AddButton({ Text = T("Refresh Players", "รีเฟรชผู้เล่น"), Func = function() batTarget:SetValues(PlayerNames()) end })
-        Toggle(batBox, "BatLoop", T("Loop Bat Target", "ตีเป้าหมายวนไป"), T("Follows the target and keeps knocking them over", "ตามเป้าหมายแล้วตีล้มไม่หยุด"))
-        batBox:AddButton({ Text = T("Bat Target Now", "ตีเป้าหมายเดี๋ยวนี้"), Func = Request("BatNow") })
-        Toggle(batBox, "BatAura", T("Bat Aura", "ออร่าไม้ตี"), T("Knocks over anyone who gets close", "ตีล้มทุกคนที่เข้าใกล้"))
+        bat:AddButton({ Text = T("Refresh Players", "รีเฟรชผู้เล่น"), Icon = "refresh", Style = "Ghost", Callback = function() target:SetValues(PlayerNames()) end })
+        Feature(bat, "BatLoop", {
+            Text = T("Loop Bat Target", "ตีเป้าหมายวนไป"),
+            Description = T("Follows the target and keeps knocking them over", "ตามเป้าหมายแล้วตีล้มไม่หยุด"),
+            Icon = "loop",
+            Risky = true,
+            Now = { Text = T("Bat Target Now", "ตีเป้าหมายเดี๋ยวนี้"), Icon = "attack", Style = "Danger", Callback = Request("BatNow") },
+        })
+        Feature(bat, "BatAura", {
+            Text = T("Bat Aura", "ออร่าไม้ตี"),
+            Description = T("Knocks over anyone who gets close", "ตีล้มทุกคนที่เข้าใกล้"),
+            Icon = "aura",
+            Risky = true,
+        })
+    end
 
-        local settingsTab = Window:AddSettingsTab()
-        local sessionBox = settingsTab:AddLeftGroupbox(T("Session", "เซสชัน"), "gear")
-        Toggle(sessionBox, "AntiAfk", T("Anti AFK", "กันหลุด AFK"), T("Stops the idle kick", "กันโดนเตะเพราะไม่ขยับ"))
-        Toggle(sessionBox, "AutoRejoin", T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), T("Rejoins by itself after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"))
-        sessionBox:AddButton({ Text = T("Rejoin Now", "เข้าเกมใหม่เดี๋ยวนี้"), Func = xDTaraZ.Session.Rejoin })
+    local function BuildSettings(window)
+        local tab = window:AddSettingsTab()
+        local session = tab:AddLeftGroupbox(T("Session", "เซสชัน"), "session")
+        Toggle(session, "AntiAfk", { Text = T("Anti AFK", "กันหลุด AFK"), Description = T("Stops the idle kick", "กันโดนเตะเพราะไม่ขยับ"), Icon = "antiafk" })
+        Toggle(session, "AutoRejoin", { Text = T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), Description = T("Rejoins by itself after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"), Icon = "autorejoin" })
+        session:AddButton({ Text = T("Rejoin Now", "เข้าเกมใหม่เดี๋ยวนี้"), Icon = "rejoin", Callback = xDTaraZ.Session.Rejoin })
+    end
+
+    local function BuildTabs()
+        local window = Library.Window
+        local summary = BuildMain(window)
+
+        window:AddTabSection(T("Farming", "ฟาร์ม"))
+        local farm = window:AddTab(T("Steal & Break", "ขโมยและทุบไข่"), "rob", T("Steal animals and break eggs", "ขโมยสัตว์และทุบไข่"))
+        BuildSteal(farm)
+        BuildBreak(farm)
+
+        window:AddTabSection(T("Progression", "ความคืบหน้า"))
+        local base = window:AddTab(T("Base & Shop", "ฐานและร้านค้า"), "shop", T("Placing, selling, upgrades and rewards", "วางสัตว์ ขาย อัปเกรด และรางวัล"))
+        BuildAnimals(base)
+        BuildUpgrades(base)
+        BuildRewards(base)
+
+        window:AddTabSection(T("Misc", "อื่นๆ"))
+        BuildPlayer(window)
+        BuildVisuals(window)
+        BuildTroll(window)
+        BuildSettings(window)
 
         Library:Every(0.5, function()
             while #State.Messages > 0 do
                 Notify(table.remove(State.Messages, 1))
             end
-            statusLabel:SetText(State.Summary or "-")
-            runLabel:SetText(State.RunText or State.Status)
+            summary:SetText(State.Summary or "-")
+            Options.StatusRun:SetValue(State.Status, Kind(State.Status))
+            Options.StatSteals:SetValue(State.Steals)
+            Options.StatEggs:SetValue(State.Broken)
+            Options.StatBanked:SetValue(State.Banked)
         end)
     end
 
@@ -1335,7 +1477,7 @@ local function BuildInterface()
         OnUnlocked = function()
             BuildTabs()
             xDTaraZ.Scheduler.Boot()
-            Notify("Loaded")
+            Notify("Loaded", "Success")
             Library:LoadAutoloadConfig()
         end,
     })

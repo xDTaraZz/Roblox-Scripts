@@ -41,7 +41,7 @@ local xDTaraZ = setmetatable({}, {
 })
 
 xDTaraZ.Config = {
-    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
+    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui_v2.lua",
     ReloadSource = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/loader.lua"))()',
     Discord = "https://discord.gg/FHVfmeSceA",
     SaveFolder = "Ride A Pet",
@@ -1125,6 +1125,18 @@ xDTaraZ.UI.OffHooks = {
     Fling = function() xDTaraZ.Troll.StopFling() end,
 }
 
+xDTaraZ.UI.Bound = {
+    "Kaitun", "SmartSpend",
+    "AutoEggs", "SmartEggs", "ReturnAfter", "EggHunter", "HuntMinRarity", "EggRarities", "EggNames", "MinLuck",
+    "AutoPlaceEggs", "AutoHatch", "FastestFirst", "AutoNests",
+    "AutoEquipBest", "AutoCollectCash", "AutoFeed", "FoodTypes",
+    "AutoUpgrade", "AutoRebirth", "AutoClaim",
+    "SpeedOn", "WalkSpeed", "JumpOn", "JumpPower", "InfJump", "NoClip", "Fly", "FlySpeed", "AntiAfk",
+    "EggEsp", "EspMinRarity", "TrollTarget", "Fling", "Stick",
+}
+
+xDTaraZ.UI.KaitunSet = { "AutoEggs", "SmartEggs", "AutoPlaceEggs", "AutoHatch", "AutoEquipBest", "AutoCollectCash", "AutoFeed", "AutoUpgrade", "SmartSpend", "AutoRebirth", "AutoNests", "AutoClaim", "AntiAfk" }
+
 function xDTaraZ.UI.Bind(idx, option)
     xDTaraZ.Options[idx] = option.Value
     option:OnChanged(function(value)
@@ -1135,175 +1147,311 @@ function xDTaraZ.UI.Bind(idx, option)
     return option
 end
 
-function xDTaraZ.UI.Toggle(group, idx, en, th, desc, risky)
-    return xDTaraZ.UI.Bind(idx, group:AddToggle(idx, { Text = T(en, th), Description = desc, Default = false, Risky = risky }))
+---@return function  runs fn off the UI thread, warns on error
+function xDTaraZ.UI.Detach(fn)
+    return function(...)
+        local args = table.pack(...)
+        task.spawn(function()
+            local ok, err = pcall(fn, table.unpack(args, 1, args.n))
+            if not ok then warn(Config.Tag, "ui:", err) end
+        end)
+    end
+end
+
+---@return string  status kind for AddStatus
+function xDTaraZ.UI.Kind(text)
+    if text == "Idle" or text == "" then return "Idle" end
+    if text:find("Waiting", 1, true) or text:find("hopping", 1, true) then return "Waiting" end
+    if text:find("refused", 1, true) then return "Warn" end
+    return "Running"
 end
 
 function xDTaraZ.UI.Home(window)
     local tab = window:AddTab(T("Home", "หน้าแรก"), "mushroom", T("Status and full auto", "สถานะและโหมดอัตโนมัติ"))
-    local status = tab:AddLeftGroupbox(T("Status", "สถานะ"), "info")
-    xDTaraZ.UI.StatusLabel = status:AddLabel("...")
-    xDTaraZ.UI.CashLabel = status:AddLabel("...")
-    xDTaraZ.UI.EggLabel = status:AddLabel("...")
 
-    local kaitun = tab:AddLeftGroupbox(T("Kaitun", "ไก่ตัน"), "star")
+    local status = tab:AddLeftGroupbox(T("Status", "สถานะ"), "status")
+    status:AddStatus("StatusMain", { Text = T("Activity", "กำลังทำ"), Icon = "activity" })
+    status:AddStatus("StatusRebirth", { Text = T("Next rebirth", "รีเบิร์ธถัดไป"), Icon = "rebirths" })
+    status:AddStat("StatCash", { Text = T("Cash", "เงิน"), Icon = "cash", Token = "Coin" })
+    status:AddStat("StatRebirths", { Text = T("Rebirths", "รีเบิร์ธ"), Icon = "level-up" })
+    status:AddStat("StatEggs", { Text = T("Eggs collected", "ไข่ที่เก็บได้"), Icon = "eggs", Token = "Good" })
+    status:AddStat("StatWanted", { Text = T("Wanted eggs on map", "ไข่ที่ต้องการบนแมพ"), Icon = "rarity" })
+
+    local kaitun = tab:AddLeftGroupbox(T("Kaitun", "ไก่ตัน"), "kaitun")
     kaitun:AddToggle("Kaitun", {
         Text = T("Kaitun", "ไก่ตัน"),
         Description = T("Plays the whole account for you, from eggs to rebirth", "เล่นแทนทั้งบัญชี ตั้งแต่ไข่จนถึงรีเบิร์ธ"),
+        Icon = "kaitun",
         Default = false,
         Callback = function(on)
-            for _, idx in ipairs({ "AutoEggs", "SmartEggs", "AutoPlaceEggs", "AutoHatch", "AutoEquipBest", "AutoCollectCash", "AutoFeed", "AutoUpgrade", "SmartSpend", "AutoRebirth", "AutoNests", "AutoClaim", "AntiAfk" }) do
+            for _, idx in ipairs(xDTaraZ.UI.KaitunSet) do
                 local option = Library.Options[idx]
                 if option then option:SetValue(on) end
             end
         end,
     })
-    xDTaraZ.UI.Toggle(kaitun, "SmartSpend", "Save For Rebirth", "เก็บเงินไว้รีเบิร์ธ", T("Holds luck upgrades until rebirth is paid for", "รอซื้ออัปโชคจนกว่าจะรีเบิร์ธได้"))
+    kaitun:AddToggle("SmartSpend", { Text = T("Save For Rebirth", "เก็บเงินไว้รีเบิร์ธ"), Description = T("Holds luck upgrades until rebirth is paid for", "รอซื้ออัปโชคจนกว่าจะรีเบิร์ธได้"), Icon = "safe", Default = false })
 
-    local discord = tab:AddRightGroupbox(T("Discord", "ดิสคอร์ด"), "link")
-    discord:AddLabel(Config.Discord)
-    discord:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ดิสคอร์ด"), Func = function()
-        if xDTaraZ.Util.Copy(Config.Discord) then
-            Library:Notify("Discord", "Link copied", 3, "Success")
-        else
-            Library:Notify("Discord", Config.Discord, 6, "Info")
+    local quick = tab:AddRightGroupbox(T("Quick", "ด่วน"), "lightning")
+    quick:AddButton({ Text = T("Panic - All Off", "ฉุกเฉิน ปิดทั้งหมด"), Icon = "panic", Style = "Danger", Callback = function()
+        for _, toggle in pairs(Library.Toggles) do
+            if toggle.Value == true then toggle:SetValue(false) end
         end
     end })
+
+    Library.Kit.Discord.Build(tab, Config.Discord)
 end
 
 function xDTaraZ.UI.EggFarm(window)
-    local tab = window:AddTab(T("Egg Farm", "ฟาร์มไข่"), "coin", T("Instant wild egg collecting", "เก็บไข่ป่าทันที"))
-    local farm = tab:AddLeftGroupbox(T("Instant Eggs", "เก็บไข่ทันที"), "zap")
-    xDTaraZ.UI.Toggle(farm, "AutoEggs", "Auto Collect Eggs", "เก็บไข่อัตโนมัติ", T("Grabs every wanted egg on the map and brings it home instantly", "เก็บไข่ที่เลือกทั่วแมพแล้วพากลับบ้านทันที"), true)
-    xDTaraZ.UI.Toggle(farm, "SmartEggs", "Smart Egg Stock", "เก็บไข่แบบฉลาด", T("Once your bag is stocked, only grabs eggs better than what you hold", "พอไข่ในกระเป๋าเยอะแล้ว เก็บเฉพาะไข่ที่ดีกว่าที่มี"))
-    xDTaraZ.UI.Toggle(farm, "ReturnAfter", "Return To Spot", "กลับจุดเดิม", T("Go back where you stood after each run", "กลับไปจุดเดิมหลังเก็บเสร็จ"))
-    farm:AddButton({ Text = T("Collect Eggs Now", "เก็บไข่เดี๋ยวนี้"), Style = "Primary", Func = function()
-        task.spawn(function()
+    local tab = window:AddTab(T("Eggs", "ไข่"), "eggs", T("Wild eggs, hunter and filters", "ไข่ป่า ล่าไข่ และตัวกรอง"))
+
+    local farm = tab:AddLeftGroupbox(T("Collect", "เก็บไข่"), "eggs")
+    farm:AddFeature("AutoEggs", {
+        Text = T("Auto Collect Eggs", "เก็บไข่อัตโนมัติ"),
+        Description = T("Grabs every wanted egg on the map and brings it home", "เก็บไข่ที่เลือกทั่วแมพแล้วพากลับบ้าน"),
+        Icon = "autocollect",
+        Risky = true,
+        Keybind = { Default = "None", Mode = "Toggle" },
+        Now = { Text = T("Collect Eggs Now", "เก็บไข่เดี๋ยวนี้"), Icon = "basket", Callback = xDTaraZ.UI.Detach(function()
             Library:Notify("Eggs", "Collected " .. xDTaraZ.Eggs.CollectNow(), 3, "Success")
-        end)
-    end })
-    farm:AddButton({ Text = T("Teleport To Best Egg", "วาร์ปไปไข่ที่ดีที่สุด"), Func = xDTaraZ.Teleport.BestEgg })
+        end) },
+        Options = function(options)
+            options:AddToggle("SmartEggs", { Text = T("Better Eggs Only", "เก็บเฉพาะไข่ที่ดีกว่า"), Description = T("Once your bag is full, only takes better eggs", "กระเป๋าเต็มแล้ว เก็บเฉพาะไข่ที่ดีกว่า"), Icon = "storage", Default = false })
+            options:AddToggle("ReturnAfter", { Text = T("Return To Spot", "กลับจุดเดิม"), Icon = "restore", Default = false })
+        end,
+    })
+    farm:AddButton({ Text = T("Teleport To Best Egg", "วาร์ปไปไข่ที่ดีที่สุด"), Icon = "pipe-teleport", Style = "Ghost", Callback = xDTaraZ.Teleport.BestEgg })
 
-    local hunter = tab:AddLeftGroupbox(T("Rare Egg Hunter", "ล่าไข่หายาก"), "star")
-    xDTaraZ.UI.Toggle(hunter, "EggHunter", "Rare Egg Hunter", "ล่าไข่หายาก", T("Grabs only top rarity eggs and hops servers until it finds them", "เก็บเฉพาะไข่ระดับสูง ไม่มีก็ย้ายเซิร์ฟหาเอง"), true)
-    xDTaraZ.UI.Bind("HuntMinRarity", hunter:AddDropdown("HuntMinRarity", { Text = T("Minimum Rarity", "ความหายากขั้นต่ำ"), Values = xDTaraZ.Rarities, Default = "Mythic" }))
-    hunter:AddButton({ Text = T("Hop Server Now", "ย้ายเซิร์ฟเดี๋ยวนี้"), Func = xDTaraZ.Server.Hop })
+    local hunter = tab:AddLeftGroupbox(T("Rare Egg Hunter", "ล่าไข่หายาก"), "rare")
+    hunter:AddFeature("EggHunter", {
+        Text = T("Rare Egg Hunter", "ล่าไข่หายาก"),
+        Description = T("Takes only top rarity eggs, changes server when none are left", "เก็บเฉพาะไข่ระดับสูง ไม่มีก็ย้ายเซิร์ฟ"),
+        Icon = "rare",
+        Risky = true,
+        Badge = T("Hops", "ย้ายเซิร์ฟ"),
+        Now = { Text = T("Hop Server Now", "ย้ายเซิร์ฟเดี๋ยวนี้"), Icon = "serverhop", Style = "Warning", Callback = xDTaraZ.UI.Detach(xDTaraZ.Server.Hop) },
+        Options = function(options)
+            options:AddDropdown("HuntMinRarity", { Text = T("Minimum rarity", "ความหายากขั้นต่ำ"), Icon = "rarity", Values = xDTaraZ.Rarities, Default = "Mythic" })
+        end,
+    })
 
-    local filters = tab:AddRightGroupbox(T("Egg Filters", "ตัวกรองไข่"), "target")
-    xDTaraZ.UI.Bind("EggRarities", filters:AddDropdown("EggRarities", { Text = T("Rarities (empty = all)", "ความหายาก (ว่าง = ทั้งหมด)"), Values = xDTaraZ.Rarities, Multi = true, Default = {} }))
-    local eggNames = xDTaraZ.UI.Bind("EggNames", filters:AddDropdown("EggNames", { Text = T("Eggs (empty = all)", "ไข่ (ว่าง = ทั้งหมด)"), Values = xDTaraZ.EggNames, Multi = true, Searchable = true, Default = {} }))
-    xDTaraZ.UI.Bind("MinLuck", filters:AddSlider("MinLuck", { Text = T("Minimum Luck (1 in X)", "โชคขั้นต่ำ (1 ใน X)"), Min = 0, Max = 1000000, Default = 0, Rounding = 0 }))
-    filters:AddButton({ Text = T("Refresh Egg List", "รีเฟรชรายการไข่"), Func = function()
+    local filters = tab:AddRightGroupbox(T("Egg Filters", "ตัวกรองไข่"), "filters")
+    filters:AddMultiChips("EggRarities", {
+        Text = T("Rarities", "ความหายาก"),
+        Description = T("None selected takes all", "ไม่เลือก = เก็บทั้งหมด"),
+        Icon = "rarity",
+        Values = xDTaraZ.Rarities,
+        Colors = Config.RarityColors,
+        Default = {},
+    })
+    local eggNames = filters:AddDropdown("EggNames", { Text = T("Eggs", "ไข่"), Placeholder = T("All eggs", "ไข่ทั้งหมด"), Icon = "eggs", Values = xDTaraZ.EggNames, Multi = true, Searchable = true, Default = {} })
+    filters:AddSlider("MinLuck", { Text = T("Minimum luck (1 in X)", "โชคขั้นต่ำ (1 ใน X)"), Icon = "luck", Min = 0, Max = 1000000, Default = 0, Rounding = 0 })
+    filters:AddButton({ Text = T("Refresh Egg List", "รีเฟรชรายการไข่"), Icon = "refresh-cw", Style = "Ghost", Callback = function()
         xDTaraZ.BuildLists()
         eggNames:SetValues(xDTaraZ.EggNames)
+        Library.Options.EggRarities:SetValues(xDTaraZ.Rarities, Config.RarityColors)
     end })
 end
 
 function xDTaraZ.UI.Hatching(window)
-    local tab = window:AddTab(T("Hatch", "ฟักไข่"), "flower", T("Nests and hatching", "รังและการฟัก"))
-    local hatch = tab:AddLeftGroupbox(T("Hatching", "ฟักไข่"), "flower")
-    xDTaraZ.UI.Toggle(hatch, "AutoPlaceEggs", "Auto Place Eggs", "วางไข่ลงรังอัตโนมัติ", T("Puts your best eggs into free nests", "เอาไข่ที่ดีที่สุดลงรังที่ว่าง"))
-    xDTaraZ.UI.Toggle(hatch, "AutoHatch", "Auto Hatch", "ฟักอัตโนมัติ", T("Hatches eggs from anywhere as soon as they are ready", "ฟักไข่จากที่ไหนก็ได้ทันทีที่พร้อม"))
-    xDTaraZ.UI.Toggle(hatch, "FastestFirst", "Fastest Eggs First", "ไข่ที่ฟักเร็วก่อน", T("Off = best luck first", "ปิด = ไข่โชคดีสุดก่อน"))
-    hatch:AddButton({ Text = T("Place Eggs Now", "วางไข่เดี๋ยวนี้"), Func = function() task.spawn(xDTaraZ.Hatch.PlaceNow) end })
-    hatch:AddButton({ Text = T("Hatch Now", "ฟักเดี๋ยวนี้"), Style = "Primary", Func = function() xDTaraZ.Hatch.HatchNow(true) end })
+    local tab = window:AddTab(T("Hatch", "ฟักไข่"), "hatch", T("Nests and hatching", "รังและการฟัก"))
 
-    local nests = tab:AddRightGroupbox(T("Nests", "รัง"), "castle")
-    xDTaraZ.UI.Toggle(nests, "AutoNests", "Auto Buy Nests", "ซื้อรังอัตโนมัติ", T("Unlocks new nests when you can afford them", "ปลดล็อกรังใหม่เมื่อเงินพอ"))
-    nests:AddButton({ Text = T("Buy Nests Now", "ซื้อรังเดี๋ยวนี้"), Func = function() task.spawn(xDTaraZ.Progress.BuyNestsNow) end })
+    local hatch = tab:AddLeftGroupbox(T("Hatching", "ฟักไข่"), "hatch")
+    hatch:AddFeature("AutoPlaceEggs", {
+        Text = T("Auto Place Eggs", "วางไข่ลงรังอัตโนมัติ"),
+        Description = T("Puts your best eggs into free nests", "เอาไข่ที่ดีที่สุดลงรังที่ว่าง"),
+        Icon = "incubate",
+        Now = { Text = T("Place Eggs Now", "วางไข่เดี๋ยวนี้"), Icon = "incubate", Callback = xDTaraZ.UI.Detach(xDTaraZ.Hatch.PlaceNow) },
+        Options = function(options)
+            options:AddToggle("FastestFirst", { Text = T("Fastest Eggs First", "ไข่ที่ฟักเร็วก่อน"), Description = T("Off = best luck first", "ปิด = ไข่โชคดีสุดก่อน"), Icon = "fast", Default = false })
+        end,
+    })
+    hatch:AddFeature("AutoHatch", {
+        Text = T("Auto Hatch", "ฟักอัตโนมัติ"),
+        Description = T("Hatches from anywhere as soon as eggs are ready", "ฟักจากที่ไหนก็ได้ทันทีที่ไข่พร้อม"),
+        Icon = "autohatch",
+        Now = { Text = T("Hatch Now", "ฟักเดี๋ยวนี้"), Icon = "hatch", Callback = xDTaraZ.UI.Detach(function() xDTaraZ.Hatch.HatchNow(true) end) },
+    })
+
+    local nests = tab:AddRightGroupbox(T("Nests", "รัง"), "house-plus")
+    nests:AddFeature("AutoNests", {
+        Text = T("Auto Buy Nests", "ซื้อรังอัตโนมัติ"),
+        Description = T("Unlocks new nests when you can afford them", "ปลดล็อกรังใหม่เมื่อเงินพอ"),
+        Icon = "house-plus",
+        Now = { Text = T("Buy Nests Now", "ซื้อรังเดี๋ยวนี้"), Icon = "purchase", Callback = xDTaraZ.UI.Detach(xDTaraZ.Progress.BuyNestsNow) },
+    })
 end
 
 function xDTaraZ.UI.PetsTab(window)
-    local tab = window:AddTab(T("Pets", "สัตว์เลี้ยง"), "shell", T("Ranch, feeding and cash", "ฟาร์ม ให้อาหาร และเงิน"))
-    local ranch = tab:AddLeftGroupbox(T("Ranch", "ฟาร์ม"), "house")
-    xDTaraZ.UI.Toggle(ranch, "AutoEquipBest", "Auto Place Best Pets", "วางสัตว์ตัวดีสุดอัตโนมัติ", T("Keeps your ranch filled with the highest income pets", "ใส่สัตว์ที่ทำเงินได้มากสุดลงฟาร์มเสมอ"))
-    xDTaraZ.UI.Toggle(ranch, "AutoCollectCash", "Auto Collect Cash", "เก็บเงินอัตโนมัติ", T("Collects pet cash from anywhere", "เก็บเงินจากสัตว์จากที่ไหนก็ได้"))
-    ranch:AddButton({ Text = T("Place Best Now", "วางตัวดีสุดเดี๋ยวนี้"), Style = "Primary", Func = function() task.spawn(xDTaraZ.Pets.EquipBestNow) end })
-    ranch:AddButton({ Text = T("Collect Cash Now", "เก็บเงินเดี๋ยวนี้"), Func = xDTaraZ.Pets.CollectNow })
+    local tab = window:AddTab(T("Pets", "สัตว์เลี้ยง"), "paw", T("Ranch, feeding and cash", "ฟาร์ม ให้อาหาร และเงิน"))
 
-    local feed = tab:AddRightGroupbox(T("Feeding", "ให้อาหาร"), "heart")
-    xDTaraZ.UI.Toggle(feed, "AutoFeed", "Auto Feed", "ให้อาหารอัตโนมัติ", T("Feeds your best pets with the food you own", "ให้อาหารสัตว์ตัวดีสุดด้วยอาหารที่มี"))
-    xDTaraZ.UI.Bind("FoodTypes", feed:AddDropdown("FoodTypes", { Text = T("Foods to use (empty = all)", "อาหารที่ใช้ (ว่าง = ทั้งหมด)"), Values = xDTaraZ.FoodNames, Multi = true, Default = {} }))
-    feed:AddButton({ Text = T("Feed Now", "ให้อาหารเดี๋ยวนี้"), Func = function() task.spawn(xDTaraZ.Pets.FeedNow) end })
+    local ranch = tab:AddLeftGroupbox(T("Ranch", "ฟาร์ม"), "pets")
+    ranch:AddFeature("AutoEquipBest", {
+        Text = T("Auto Place Best Pets", "วางสัตว์ตัวดีสุดอัตโนมัติ"),
+        Description = T("Keeps the ranch filled with your top earners", "ใส่สัตว์ที่ทำเงินมากสุดลงฟาร์มเสมอ"),
+        Icon = "best",
+        Now = { Text = T("Place Best Now", "วางตัวดีสุดเดี๋ยวนี้"), Icon = "best", Callback = xDTaraZ.UI.Detach(xDTaraZ.Pets.EquipBestNow) },
+    })
+    ranch:AddFeature("AutoCollectCash", {
+        Text = T("Auto Collect Cash", "เก็บเงินอัตโนมัติ"),
+        Description = T("Collects pet cash from anywhere", "เก็บเงินจากสัตว์จากที่ไหนก็ได้"),
+        Icon = "coins",
+        Now = { Text = T("Collect Cash Now", "เก็บเงินเดี๋ยวนี้"), Icon = "cash", Style = "Success", Callback = xDTaraZ.UI.Detach(xDTaraZ.Pets.CollectNow) },
+    })
+
+    local feed = tab:AddRightGroupbox(T("Feeding", "ให้อาหาร"), "food")
+    feed:AddFeature("AutoFeed", {
+        Text = T("Auto Feed", "ให้อาหารอัตโนมัติ"),
+        Description = T("Feeds your best pets with the food you own", "ให้อาหารสัตว์ตัวดีสุดด้วยอาหารที่มี"),
+        Icon = "food",
+        Now = { Text = T("Feed Now", "ให้อาหารเดี๋ยวนี้"), Icon = "eat", Callback = xDTaraZ.UI.Detach(xDTaraZ.Pets.FeedNow) },
+    })
+    feed:AddMultiChips("FoodTypes", {
+        Text = T("Foods to use", "อาหารที่ใช้"),
+        Description = T("None selected uses all", "ไม่เลือก = ใช้ทั้งหมด"),
+        Icon = "food",
+        Values = xDTaraZ.FoodNames,
+        Default = {},
+    })
 end
 
 function xDTaraZ.UI.Upgrades(window)
-    local tab = window:AddTab(T("Upgrades", "อัปเกรด"), "oneup", T("Luck, rebirth, rewards", "โชค รีเบิร์ธ รางวัล"))
-    local up = tab:AddLeftGroupbox(T("Upgrades", "อัปเกรด"), "oneup")
-    xDTaraZ.UI.Toggle(up, "AutoUpgrade", "Auto Upgrade Hatch Luck", "อัปโชคฟักอัตโนมัติ", T("Buys as many luck upgrades as you can afford", "ซื้ออัปเกรดโชคเท่าที่เงินพอ"))
-    up:AddButton({ Text = T("Upgrade Max Now", "อัปสุดเดี๋ยวนี้"), Style = "Primary", Func = xDTaraZ.Progress.UpgradeNow })
-    xDTaraZ.UI.Toggle(up, "AutoRebirth", "Auto Rebirth", "รีเบิร์ธอัตโนมัติ", T("Rebirths when you have the cash (needs the required pet)", "รีเบิร์ธเมื่อเงินพอ (ต้องมีสัตว์ที่กำหนด)"), true)
-    up:AddButton({ Text = T("Rebirth Now", "รีเบิร์ธเดี๋ยวนี้"), Style = "Warning", DoubleClick = true, Func = xDTaraZ.Progress.RebirthNow })
+    local tab = window:AddTab(T("Upgrades", "อัปเกรด"), "upgrades", T("Luck, rebirth, rewards", "โชค รีเบิร์ธ รางวัล"))
 
-    local rewards = tab:AddRightGroupbox(T("Rewards", "รางวัล"), "key")
-    xDTaraZ.UI.Toggle(rewards, "AutoClaim", "Auto Claim Rewards", "รับรางวัลอัตโนมัติ", T("Index and offline rewards", "รางวัลสมุดสะสมและออฟไลน์"))
-    rewards:AddButton({ Text = T("Claim Now", "รับเดี๋ยวนี้"), Func = xDTaraZ.Progress.ClaimNow })
+    local up = tab:AddLeftGroupbox(T("Upgrades", "อัปเกรด"), "upgrades")
+    up:AddFeature("AutoUpgrade", {
+        Text = T("Auto Upgrade Hatch Luck", "อัปโชคฟักอัตโนมัติ"),
+        Description = T("Buys every luck upgrade you can afford", "ซื้ออัปเกรดโชคเท่าที่เงินพอ"),
+        Icon = "luck",
+        Now = { Text = T("Upgrade Max Now", "อัปสุดเดี๋ยวนี้"), Icon = "upgrades", Callback = xDTaraZ.UI.Detach(xDTaraZ.Progress.UpgradeNow) },
+    })
+
+    local rebirth = tab:AddLeftGroupbox(T("Rebirth", "รีเบิร์ธ"), "rebirths")
+    rebirth:AddFeature("AutoRebirth", {
+        Text = T("Auto Rebirth", "รีเบิร์ธอัตโนมัติ"),
+        Description = T("Rebirths when you have the cash and the required pet", "รีเบิร์ธเมื่อเงินพอและมีสัตว์ที่กำหนด"),
+        Icon = "rebirths",
+        Risky = true,
+        Now = { Text = T("Rebirth Now", "รีเบิร์ธเดี๋ยวนี้"), Icon = "rebirths", Style = "Warning", DoubleClick = true, Callback = xDTaraZ.UI.Detach(xDTaraZ.Progress.RebirthNow) },
+    })
+
+    local rewards = tab:AddRightGroupbox(T("Rewards", "รางวัล"), "rewards")
+    rewards:AddFeature("AutoClaim", {
+        Text = T("Auto Claim Rewards", "รับรางวัลอัตโนมัติ"),
+        Description = T("Index and offline rewards", "รางวัลสมุดสะสมและออฟไลน์"),
+        Icon = "claim",
+        Now = { Text = T("Claim Now", "รับเดี๋ยวนี้"), Icon = "gift", Style = "Success", Callback = xDTaraZ.UI.Detach(xDTaraZ.Progress.ClaimNow) },
+    })
 end
 
 function xDTaraZ.UI.TeleportTab(window)
-    local tab = window:AddTab(T("Teleport", "วาร์ป"), "pipe", T("Places and players", "สถานที่และผู้เล่น"))
-    local places = tab:AddLeftGroupbox(T("Places", "สถานที่"), "map")
-    local placeDrop = places:AddDropdown("TeleportPlace", { Text = T("Place", "สถานที่"), Values = xDTaraZ.Teleport.PlaceNames(), Searchable = true })
-    places:AddButton({ Text = T("Teleport", "วาร์ป"), Style = "Primary", Func = function() xDTaraZ.Teleport.To(placeDrop.Value) end })
-    places:AddButton({ Text = T("Refresh", "รีเฟรช"), Func = function() placeDrop:SetValues(xDTaraZ.Teleport.PlaceNames()) end })
+    local tab = window:AddTab(T("Teleport", "วาร์ป"), "teleport", T("Places and players", "สถานที่และผู้เล่น"))
 
-    local players = tab:AddRightGroupbox(T("Players", "ผู้เล่น"), "user")
-    local playerDrop = players:AddDropdown("TeleportPlayer", { Text = T("Player", "ผู้เล่น"), SpecialType = "Player", Searchable = true })
-    players:AddButton({ Text = T("Teleport To Player", "วาร์ปไปหาผู้เล่น"), Func = function() xDTaraZ.Teleport.ToPlayer(playerDrop.Value) end })
+    local places = tab:AddLeftGroupbox(T("Places", "สถานที่"), "map")
+    local placeDrop = places:AddDropdown("TeleportPlace", { Text = T("Place", "สถานที่"), Icon = "map-pin", Values = xDTaraZ.Teleport.PlaceNames(), Searchable = true })
+    places:AddButton({ Text = T("Teleport", "วาร์ป"), Icon = "teleport", Style = "Primary", Callback = function() xDTaraZ.Teleport.To(placeDrop.Value) end })
+        :AddButton({ Text = T("Refresh", "รีเฟรช"), Icon = "refresh-cw", Style = "Ghost", Callback = function() placeDrop:SetValues(xDTaraZ.Teleport.PlaceNames()) end })
+
+    local players = tab:AddRightGroupbox(T("Players", "ผู้เล่น"), "users")
+    local playerDrop = players:AddDropdown("TeleportPlayer", { Text = T("Player", "ผู้เล่น"), Icon = "user", SpecialType = "Player", Searchable = true })
+    players:AddButton({ Text = T("Teleport To Player", "วาร์ปไปหาผู้เล่น"), Icon = "teleport", Callback = function() xDTaraZ.Teleport.ToPlayer(playerDrop.Value) end })
+
+    local troll = tab:AddRightGroupbox(T("Troll", "ป่วน"), "troll")
+    troll:AddDropdown("TrollTarget", { Text = T("Target", "เป้าหมาย"), Icon = "target", SpecialType = "Player", Searchable = true })
+    troll:AddFeature("Fling", { Text = T("Fling", "เหวี่ยงกระเด็น"), Description = T("Pauses egg farming while on", "หยุดฟาร์มไข่ชั่วคราวระหว่างเปิด"), Icon = "yeet", Risky = true, Keybind = { Default = "None", Mode = "Toggle" } })
+    troll:AddFeature("Stick", { Text = T("Stick To Player", "เกาะติดผู้เล่น"), Description = T("Pauses egg farming while on", "หยุดฟาร์มไข่ชั่วคราวระหว่างเปิด"), Icon = "stick", Keybind = { Default = "None", Mode = "Toggle" } })
+    troll:AddButton({ Text = T("Spectate", "ส่องดู"), Icon = "spec", Callback = function() xDTaraZ.Troll.Spectate(xDTaraZ.Options.TrollTarget) end })
+        :AddButton({ Text = T("Stop", "เลิกส่อง"), Icon = "eye-off", Style = "Ghost", Callback = function() xDTaraZ.Troll.Spectate(nil) end })
 end
 
 function xDTaraZ.UI.PlayerTab(window)
-    local tab = window:AddTab(T("Player", "ผู้เล่น"), "user", T("Movement and utility", "การเคลื่อนที่และอรรถประโยชน์"))
-    local move = tab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "zap")
-    xDTaraZ.UI.Toggle(move, "SpeedOn", "Speed", "วิ่งเร็ว")
-    xDTaraZ.UI.Bind("WalkSpeed", move:AddSlider("WalkSpeed", { Text = T("Walk Speed", "ความเร็ว"), Min = 16, Max = 300, Default = Config.WalkSpeed, Rounding = 0 }))
-    xDTaraZ.UI.Toggle(move, "JumpOn", "Jump Power", "กระโดดสูง")
-    xDTaraZ.UI.Bind("JumpPower", move:AddSlider("JumpPower", { Text = T("Jump Power", "แรงกระโดด"), Min = 50, Max = 300, Default = Config.JumpPower, Rounding = 0 }))
-    xDTaraZ.UI.Toggle(move, "InfJump", "Infinite Jump", "กระโดดไม่จำกัด")
-    xDTaraZ.UI.Toggle(move, "NoClip", "Noclip", "เดินทะลุ")
-    xDTaraZ.UI.Toggle(move, "Fly", "Fly", "บิน")
-    xDTaraZ.UI.Bind("FlySpeed", move:AddSlider("FlySpeed", { Text = T("Fly Speed", "ความเร็วบิน"), Min = 20, Max = 500, Default = Config.FlySpeed, Rounding = 0 }))
+    local tab = window:AddTab(T("Player", "ผู้เล่น"), "player", T("Movement, ESP and server", "การเคลื่อนที่ มองเห็น และเซิร์ฟ"))
 
-    local misc = tab:AddRightGroupbox(T("Utility", "อรรถประโยชน์"), "gear")
-    xDTaraZ.UI.Toggle(misc, "AntiAfk", "Anti AFK", "กันหลุด AFK")
-    misc:AddButton({ Text = T("Rejoin", "เข้าเซิร์ฟใหม่"), Func = xDTaraZ.Server.Rejoin })
-    misc:AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), Func = xDTaraZ.Server.Hop })
+    local move = tab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "movement")
+    move:AddFeature("SpeedOn", {
+        Text = T("Speed", "วิ่งเร็ว"),
+        Icon = "walkspeed",
+        Keybind = { Default = "None", Mode = "Toggle" },
+        Options = function(options)
+            options:AddSlider("WalkSpeed", { Text = T("Walk speed", "ความเร็ว"), Icon = "walkspeed", Min = 16, Max = 300, Default = Config.WalkSpeed, Rounding = 0 })
+        end,
+    })
+    move:AddFeature("JumpOn", {
+        Text = T("Jump Power", "กระโดดสูง"),
+        Icon = "jumppower",
+        Keybind = { Default = "None", Mode = "Toggle" },
+        Options = function(options)
+            options:AddSlider("JumpPower", { Text = T("Power", "แรงกระโดด"), Icon = "jumppower", Min = 50, Max = 300, Default = Config.JumpPower, Rounding = 0 })
+        end,
+    })
+    move:AddFeature("Fly", {
+        Text = T("Fly", "บิน"),
+        Icon = "flight",
+        Keybind = { Default = "None", Mode = "Toggle" },
+        Options = function(options)
+            options:AddSlider("FlySpeed", { Text = T("Fly speed", "ความเร็วบิน"), Icon = "flight", Min = 20, Max = 500, Default = Config.FlySpeed, Rounding = 0 })
+        end,
+    })
+    move:AddFeature("NoClip", { Text = T("Noclip", "เดินทะลุ"), Icon = "no-clip", Keybind = { Default = "None", Mode = "Toggle" } })
+    move:AddToggle("InfJump", { Text = T("Infinite Jump", "กระโดดไม่จำกัด"), Icon = "inf-jump", Default = false })
 
     local esp = tab:AddRightGroupbox(T("Egg ESP", "มองเห็นไข่"), "eye")
-    xDTaraZ.UI.Toggle(esp, "EggEsp", "Egg ESP", "มองเห็นไข่", T("Shows eggs through walls with rarity and distance", "แสดงไข่ทะลุกำแพง พร้อมความหายากและระยะ"))
-    xDTaraZ.UI.Bind("EspMinRarity", esp:AddDropdown("EspMinRarity", { Text = T("Minimum Rarity", "ความหายากขั้นต่ำ"), Values = xDTaraZ.Rarities, Default = xDTaraZ.Rarities[1] }))
+    esp:AddFeature("EggEsp", {
+        Text = T("Egg ESP", "มองเห็นไข่"),
+        Description = T("Eggs through walls with rarity and distance", "เห็นไข่ทะลุกำแพง พร้อมความหายากและระยะ"),
+        Icon = "eye",
+        Keybind = { Default = "None", Mode = "Toggle" },
+        Options = function(options)
+            options:AddDropdown("EspMinRarity", { Text = T("Minimum rarity", "ความหายากขั้นต่ำ"), Icon = "rarity", Values = xDTaraZ.Rarities, Default = xDTaraZ.Rarities[1] })
+        end,
+    })
 
-    local troll = tab:AddLeftGroupbox(T("Troll", "ป่วน"), "troll")
-    xDTaraZ.UI.Bind("TrollTarget", troll:AddDropdown("TrollTarget", { Text = T("Target", "เป้าหมาย"), SpecialType = "Player", Searchable = true }))
-    xDTaraZ.UI.Toggle(troll, "Fling", "Fling", "เหวี่ยงกระเด็น", T("Pauses egg farming while on", "หยุดฟาร์มไข่ชั่วคราวระหว่างเปิด"), true)
-    xDTaraZ.UI.Toggle(troll, "Stick", "Stick To Player", "เกาะติดผู้เล่น", T("Pauses egg farming while on", "หยุดฟาร์มไข่ชั่วคราวระหว่างเปิด"))
-    troll:AddButton({ Text = T("Spectate", "ส่องดู"), Func = function() xDTaraZ.Troll.Spectate(xDTaraZ.Options.TrollTarget) end })
-    troll:AddButton({ Text = T("Stop Spectate", "เลิกส่อง"), Func = function() xDTaraZ.Troll.Spectate(nil) end })
+    local server = tab:AddRightGroupbox(T("Server", "เซิร์ฟเวอร์"), "servers")
+    server:AddToggle("AntiAfk", { Text = T("Anti AFK", "กันหลุด AFK"), Icon = "anti-afk", Default = false })
+    server:AddButton({ Text = T("Rejoin", "เข้าเซิร์ฟใหม่"), Icon = "re-join", Callback = xDTaraZ.UI.Detach(xDTaraZ.Server.Rejoin) })
+        :AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), Icon = "serverhop", Callback = xDTaraZ.UI.Detach(xDTaraZ.Server.Hop) })
+end
+
+function xDTaraZ.UI.Live()
+    local lib, format = Library.Lib, xDTaraZ.Util.FormatNumber
+    lib.Status("StatusMain", function()
+        local saving = xDTaraZ.Progress.SavingForRebirth() and " (saving for rebirth)" or ""
+        return State.Status .. saving, xDTaraZ.UI.Kind(State.Status)
+    end, 0.5)
+    lib.Status("StatusRebirth", function()
+        local cost = State.NextRebirthCost
+        if cost == math.huge then return "Max", "Idle" end
+        return format(cost), xDTaraZ:Cash() >= cost and "Running" or "Waiting"
+    end, 1)
+    lib.Status("StatCash", function() return xDTaraZ:Cash() end, 1)
+    lib.Status("StatRebirths", function() return xDTaraZ:Rebirths() end, 2)
+    lib.Status("StatEggs", function() return State.EggsCollected end, 1)
+    lib.Status("StatWanted", function() return #xDTaraZ.Eggs.Available() end, 1)
 end
 
 function xDTaraZ.UI.Build()
     local window = Library.Window
     window:AddTabSection(T("Main", "หลัก"))
     xDTaraZ.UI.Home(window)
+
     window:AddTabSection(T("Farming", "ฟาร์ม"))
     xDTaraZ.UI.EggFarm(window)
     xDTaraZ.UI.Hatching(window)
+
     window:AddTabSection(T("Progression", "พัฒนา"))
     xDTaraZ.UI.PetsTab(window)
     xDTaraZ.UI.Upgrades(window)
+
     window:AddTabSection(T("Misc", "อื่นๆ"))
     xDTaraZ.UI.TeleportTab(window)
     xDTaraZ.UI.PlayerTab(window)
     window:AddSettingsTab()
-end
 
-function xDTaraZ.UI.Refresh()
-    if not xDTaraZ.UI.StatusLabel then return end
-    local saving = xDTaraZ.Progress.SavingForRebirth() and " (saving for rebirth)" or ""
-    xDTaraZ.UI.StatusLabel:SetText("Status: " .. State.Status .. saving)
-    xDTaraZ.UI.CashLabel:SetText(string.format("Cash: %s | Rebirths: %d | Next: %s", xDTaraZ.Util.FormatNumber(xDTaraZ:Cash()), xDTaraZ:Rebirths(), xDTaraZ.Util.FormatNumber(State.NextRebirthCost)))
-    xDTaraZ.UI.EggLabel:SetText(string.format("Eggs collected: %d | Wanted on map: %d", State.EggsCollected, #xDTaraZ.Eggs.Available()))
-    xDTaraZ.Esp.Refresh()
+    for _, idx in ipairs(xDTaraZ.UI.Bound) do
+        local option = Library.Options[idx]
+        if option then xDTaraZ.UI.Bind(idx, option) end
+    end
+    xDTaraZ.UI.Live()
 end
 
 function xDTaraZ:Unload()
@@ -1332,7 +1480,7 @@ local function BuildInterface()
         Theme = "Overworld",
         OnUnlocked = function()
             xDTaraZ.UI.Build()
-            Library:Every(Config.EspRefresh, xDTaraZ.UI.Refresh)
+            Library:Every(Config.EspRefresh, xDTaraZ.Esp.Refresh)
             xDTaraZ.Scheduler.Boot()
             Library:LoadAutoloadConfig()
             local hunt = environment.RideAPetHunt

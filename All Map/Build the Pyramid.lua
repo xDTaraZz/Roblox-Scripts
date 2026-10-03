@@ -35,7 +35,7 @@ local xDTaraZ = setmetatable({}, {
 
 xDTaraZ.Config = {
     Discord = "https://discord.gg/FHVfmeSceA",
-    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
+    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui_v2.lua",
     SaveFolder = "Build the Pyramid",
     TickDelay = 0.1,
     LoadTimeout = 10,
@@ -831,6 +831,7 @@ function xDTaraZ.Scheduler.Summarize()
         if entry[1] < cutoff then table.remove(State.CoinLog, i) else recent += entry[2] end
     end
     local carried, cap = xDTaraZ.Game.Carried(), xDTaraZ.Game.Capacity()
+    State.CarryShown = carried
     State.Summary = ("Coins %s · %s/min\nStrength Lv %s · Speed Lv %s · Carry %d/%d\nPyramids %s · Placed %d"):format(
         xDTaraZ.Format(State.Stats.Coins), xDTaraZ.Format(recent * 60 / Config.RateWindow),
         tostring(xDTaraZ.Game.Attr("StrengthLevel") or 0), tostring(xDTaraZ.Game.Attr("SpeedLevel") or 0),
@@ -883,29 +884,26 @@ function xDTaraZ.Scheduler.Stop()
     RunService:Set3dRenderingEnabled(true)
 end
 
+
 local function BuildInterface()
     local Library = loadstring(xDTaraZ.Util.HttpGet(Config.UiSource))()
     local T = function(en, th) return Library:T(en, th) end
     local opt = State.Opt
 
-    local function Notify(text)
-        Library:Notify("Build the Pyramid", text, 4)
+    local function Notify(text, kind)
+        Library:Notify("Build the Pyramid", text, 4, kind or "Info")
     end
 
     local function Request(name)
         return function() State.Requests[name] = true end
     end
 
-    local function Toggle(group, key, text, description, onChange)
-        return group:AddToggle(key, {
-            Text = text,
-            Description = description,
-            Default = false,
-            Callback = function(value)
-                opt[key] = value
-                if onChange then onChange(value) end
-            end,
-        })
+    ---@param onChange function?  runs after the option is stored
+    local function Store(key, onChange, cast)
+        return function(value)
+            opt[key] = cast and cast(value) or value
+            if onChange then onChange(value) end
+        end
     end
 
     local function PlayerNames()
@@ -925,135 +923,261 @@ local function BuildInterface()
         return names
     end
 
-    local function BuildTabs()
-        local Window = Library.Window
-        Window:AddTabSection(T("Main", "หลัก"))
-        local MainTab = Window:AddTab(T("Main", "หลัก"), "house", T("Status and Discord", "สถานะและ Discord"))
-        Window:AddTabSection(T("Farming", "ฟาร์ม"))
-        local FarmTab = Window:AddTab(T("Auto Farm", "ฟาร์มอัตโนมัติ"), "brick", T("Blocks and coins", "บล็อกและเหรียญ"))
-        local GymTab = Window:AddTab(T("Training", "ฝึก"), "heart", T("Strength, speed and the pool", "พลัง ความเร็ว และสระ"))
-        Window:AddTabSection(T("Progression", "ความคืบหน้า"))
-        local ShopTab = Window:AddTab(T("Upgrades & Codes", "อัปเกรดและโค้ด"), "shop", T("Spend coins and redeem codes", "ใช้เหรียญและใส่โค้ด"))
-        Window:AddTabSection(T("Misc", "อื่นๆ"))
-        local PlayerTab = Window:AddTab(T("Player", "ผู้เล่น"), "user", T("Movement and teleports", "การเคลื่อนที่และวาร์ป"))
+    local function RegisterIcons()
+        if Library:HasIcon("pyramid") then return end
+        Library:AddIcon("pyramid", {
+            ".........",
+            "....Y....",
+            "...YYS...",
+            "...YSS...",
+            "..YYSSS..",
+            "..YSSSS..",
+            ".YYSSSSS.",
+            "YYYSSSSSS",
+            "KKKKKKKKK",
+        }, {
+            Y = Color3.fromRGB(240, 200, 110),
+            S = Color3.fromRGB(196, 146, 70),
+            K = Color3.fromRGB(92, 64, 38),
+        })
+    end
 
-        local statusBox = MainTab:AddLeftGroupbox(T("Status", "สถานะ"), "star")
-        local statusLabel = statusBox:AddLabel(T("Loading...", "กำลังโหลด..."))
-        local runLabel = statusBox:AddLabel("-")
+    local function BuildMain(window)
+        window:AddTabSection(T("Main", "หลัก"))
+        local tab = window:AddTab(T("Main", "หลัก"), "main", T("Status and Discord", "สถานะและ Discord"))
 
-        local discordBox = MainTab:AddRightGroupbox(T("Discord", "Discord"), "link")
-        discordBox:AddLabel(Config.Discord)
-        discordBox:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ Discord"), Style = "Primary", Func = function()
-            Notify(xDTaraZ.Util.Copy(Config.Discord) and "Discord link copied" or Config.Discord)
-        end })
+        local status = tab:AddLeftGroupbox(T("Status", "สถานะ"), "stats")
+        status:AddStatus("StatusTask", { Text = T("Doing", "กำลังทำ"), Icon = "play" })
+        status:AddStatus("StatusCarry", { Text = T("Carrying", "ถืออยู่"), Icon = "box" })
 
-        local farmBox = FarmTab:AddLeftGroupbox(T("Auto Farm", "ฟาร์มอัตโนมัติ"), "brick")
-        Toggle(farmBox, "AutoFarm", T("Auto Farm", "ฟาร์มอัตโนมัติ"), T("Grabs blocks and builds the pyramid for coins", "หยิบบล็อกแล้วสร้างพีระมิดเพื่อเหรียญ"), function(on)
-            if not on then State.Requests.FarmStop = true end
-        end)
-        Toggle(farmBox, "ReturnOnStop", T("Return On Stop", "กลับที่เดิมเมื่อหยุด"), T("Goes back to where you started", "กลับไปจุดที่เริ่มฟาร์ม"))
+        local live = tab:AddLeftGroupbox(T("Live", "ตัวเลขสด"), "chart")
+        live:AddStat("StatCoins", { Text = T("Coins", "เหรียญ"), Icon = "money", Token = "Coin" })
+        live:AddStat("StatPlaced", { Text = T("Blocks placed", "บล็อกที่วาง"), Icon = "pyramid", Format = "%s" })
+        live:AddStat("StatStrength", { Text = T("Strength level", "เลเวลพลัง"), Icon = "power", Format = "%s" })
+        live:AddStat("StatSpeed", { Text = T("Speed level", "เลเวลความเร็ว"), Icon = "speed", Format = "%s" })
+        live:AddStat("StatPyramids", { Text = T("Pyramids built", "พีระมิดที่สร้างเสร็จ"), Icon = "trophy", Format = "%s", Token = "Good" })
 
-        local orderBox = FarmTab:AddRightGroupbox(T("Farm vs Training", "ฟาร์มกับฝึก"), "sliders-horizontal")
-        orderBox:AddDropdown("Priority", {
-            Text = T("When Both Are On", "เมื่อเปิดทั้งคู่"),
+        Library.Kit.Discord.Build(tab, Config.Discord)
+    end
+
+    local function BuildFarm(window)
+        window:AddTabSection(T("Farming", "ฟาร์ม"))
+        local tab = window:AddTab(T("Auto Farm", "ฟาร์มอัตโนมัติ"), "autofarm", T("Blocks, coins and training", "บล็อก เหรียญ และการฝึก"))
+
+        local farm = tab:AddLeftGroupbox(T("Pyramid", "พีระมิด"), "pyramid")
+        farm:AddFeature("AutoFarm", {
+            Text = T("Auto Farm", "ฟาร์มอัตโนมัติ"),
+            Description = T("Grabs blocks and builds the pyramid for coins", "หยิบบล็อกแล้วสร้างพีระมิดเพื่อเหรียญ"),
+            Icon = "pyramid",
+            Risky = true,
+            Keybind = { Default = "None", Mode = "Toggle" },
+            Callback = Store("AutoFarm", function(on)
+                if not on then State.Requests.FarmStop = true end
+            end),
+            Options = function(options)
+                options:AddToggle("ReturnOnStop", { Text = T("Return On Stop", "กลับที่เดิมเมื่อหยุด"), Icon = "waypoint", Callback = Store("ReturnOnStop") })
+            end,
+        })
+
+        local gym = tab:AddLeftGroupbox(T("Gym", "ยิม"), "gravity")
+        gym:AddFeature("AutoStrength", {
+            Text = T("Auto Train Strength", "ฝึกพลังอัตโนมัติ"),
+            Description = T("Bench press at your strongest gym", "ยกน้ำหนักที่ยิมแรงสุดที่ใช้ได้"),
+            Icon = "power",
+            Keybind = { Default = "None", Mode = "Toggle" },
+            Callback = Store("AutoStrength", function(on)
+                if not on then State.Requests.TrainStop = true end
+            end),
+        })
+        gym:AddFeature("AutoSpeed", {
+            Text = T("Auto Train Speed", "ฝึกความเร็วอัตโนมัติ"),
+            Description = T("Runs on your strongest treadmill", "วิ่งบนลู่ที่แรงสุดที่ใช้ได้"),
+            Icon = "speed",
+            Keybind = { Default = "None", Mode = "Toggle" },
+            Callback = Store("AutoSpeed"),
+        })
+
+        local pool = tab:AddRightGroupbox(T("Waters of Nu", "สระ Waters of Nu"), "water")
+        pool:AddFeature("AutoPool", {
+            Text = T("Auto Join Pool", "ลงสระอัตโนมัติ"),
+            Description = T("Trains in the pool when a pyramid is finished", "ฝึกในสระเมื่อพีระมิดสร้างเสร็จ"),
+            Icon = "water",
+            Keybind = { Default = "None", Mode = "Toggle" },
+            Callback = Store("AutoPool"),
+        })
+
+        local order = tab:AddRightGroupbox(T("Farm vs Training", "ฟาร์มกับฝึก"), "sort")
+        order:AddSegmented("Priority", {
+            Text = T("When both are on", "เมื่อเปิดทั้งคู่"),
+            Icon = "sort",
             Values = { "Farm", "Train", "Alternate" },
-            Default = 1,
-            Callback = function(value) opt.Priority = value or "Farm" end,
+            Default = "Farm",
+            Callback = Store("Priority", nil, function(value) return value or "Farm" end),
         })
-        orderBox:AddSlider("AlternateMinutes", {
-            Text = T("Alternate Every (min)", "สลับทุก (นาที)"),
-            Min = 1, Max = 30, Default = opt.AlternateMinutes, Rounding = 0,
-            Callback = function(value) opt.AlternateMinutes = tonumber(value) or 5 end,
+        order:AddStepper("AlternateMinutes", {
+            Text = T("Switch every", "สลับทุก"),
+            Icon = "timer",
+            Min = 1, Max = 30, Step = 1, Default = opt.AlternateMinutes, Suffix = " min",
+            DependsOn = { "Priority", "Alternate" },
+            Callback = Store("AlternateMinutes", nil, function(value) return tonumber(value) or 5 end),
         })
+    end
 
-        local gymBox = GymTab:AddLeftGroupbox(T("Gym", "ยิม"), "heart")
-        Toggle(gymBox, "AutoStrength", T("Auto Train Strength", "ฝึกพลังอัตโนมัติ"), T("Bench press at your strongest gym", "ยกน้ำหนักที่ยิมแรงสุดที่ใช้ได้"), function(on)
-            if not on then State.Requests.TrainStop = true end
-        end)
-        Toggle(gymBox, "AutoSpeed", T("Auto Train Speed", "ฝึกความเร็วอัตโนมัติ"), T("Runs on your strongest treadmill", "วิ่งบนลู่ที่แรงสุดที่ใช้ได้"))
+    local function BuildProgression(window)
+        window:AddTabSection(T("Progression", "ความคืบหน้า"))
+        local tab = window:AddTab(T("Upgrades & Codes", "อัปเกรดและโค้ด"), "upgrade", T("Spend coins and redeem codes", "ใช้เหรียญและใส่โค้ด"))
 
-        local poolBox = GymTab:AddRightGroupbox(T("Waters of Nu", "สระ Waters of Nu"), "pipe")
-        Toggle(poolBox, "AutoPool", T("Auto Join Pool", "ลงสระอัตโนมัติ"), T("Trains in the pool when a pyramid is finished", "ฝึกในสระเมื่อพีระมิดสร้างเสร็จ"))
-
-        local upgradeBox = ShopTab:AddLeftGroupbox(T("Upgrades", "อัปเกรด"), "coin")
-        Toggle(upgradeBox, "AutoUpgrade", T("Auto Upgrade", "อัปเกรดอัตโนมัติ"), T("Buys the selected upgrades with coins", "ซื้ออัปเกรดที่เลือกด้วยเหรียญ"))
-        upgradeBox:AddDropdown("Upgrades", {
+        local upgrades = tab:AddLeftGroupbox(T("Upgrades", "อัปเกรด"), "upgrade")
+        upgrades:AddFeature("AutoUpgrade", {
+            Text = T("Auto Upgrade", "อัปเกรดอัตโนมัติ"),
+            Description = T("Buys the selected upgrades with coins", "ซื้ออัปเกรดที่เลือกด้วยเหรียญ"),
+            Icon = "upgrade",
+            Keybind = { Default = "None", Mode = "Toggle" },
+            Callback = Store("AutoUpgrade"),
+            Now = { Text = T("Buy Now", "ซื้อเดี๋ยวนี้"), Icon = "buy", Callback = Request("UpgradeNow") },
+        })
+        upgrades:AddMultiChips("Upgrades", {
             Text = T("Upgrades", "อัปเกรด"),
+            Icon = "filter",
             Values = xDTaraZ.UpgradeNames,
-            Multi = true,
             Default = {},
-            Callback = function(selected) opt.Upgrades = selected or {} end,
+            Callback = Store("Upgrades", nil, function(selected) return selected or {} end),
         })
-        upgradeBox:AddDropdown("UpgradeOrder", {
+        upgrades:AddSegmented("UpgradeOrder", {
             Text = T("Order", "ลำดับ"),
+            Icon = "sort",
             Values = { "Cheapest First", "In Order" },
-            Default = 1,
-            Callback = function(value) opt.UpgradeOrder = value or "Cheapest First" end,
+            Default = "Cheapest First",
+            Callback = Store("UpgradeOrder", nil, function(value) return value or "Cheapest First" end),
         })
-        upgradeBox:AddSlider("KeepCoins", {
-            Text = T("Keep Coins", "กันเหรียญไว้"),
+        upgrades:AddSlider("KeepCoins", {
+            Text = T("Keep coins", "กันเหรียญไว้"),
+            Icon = "money",
             Min = 0, Max = 1000000, Default = 0, Rounding = 0,
-            Callback = function(value) opt.KeepCoins = tonumber(value) or 0 end,
+            Callback = Store("KeepCoins", nil, function(value) return tonumber(value) or 0 end),
         })
-        upgradeBox:AddButton({ Text = T("Buy Now", "ซื้อเดี๋ยวนี้"), Func = Request("UpgradeNow") })
 
-        local codeBox = ShopTab:AddRightGroupbox(T("Codes", "โค้ด"), "code")
-        codeBox:AddButton({ Text = T("Redeem All Codes", "ใช้โค้ดทั้งหมด"), Style = "Primary", Func = Request("CodesNow") })
+        local codes = tab:AddRightGroupbox(T("Codes", "โค้ด"), "code")
+        codes:AddButton({ Text = T("Redeem All Codes", "ใช้โค้ดทั้งหมด"), Icon = "code", Style = "Primary", Callback = Request("CodesNow") })
+    end
 
-        local moveBox = PlayerTab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "star")
-        Toggle(moveBox, "SpeedOn", T("Speed", "ความเร็ว"), nil, Request("Movement"))
-        moveBox:AddSlider("WalkSpeed", {
-            Text = T("Walk Speed", "ความเร็วเดิน"),
-            Min = 16, Max = 200, Default = opt.WalkSpeed, Rounding = 0,
-            Callback = function(value) opt.WalkSpeed = tonumber(value) or opt.WalkSpeed end,
+    local function BuildMovement(tab)
+        local move = tab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "speed")
+        move:AddFeature("SpeedOn", {
+            Text = T("Speed", "ความเร็ว"),
+            Icon = "speed",
+            Keybind = { Default = "None", Mode = "Toggle" },
+            Callback = Store("SpeedOn", Request("Movement")),
+            Options = function(options)
+                options:AddSlider("WalkSpeed", {
+                    Text = T("Walk speed", "ความเร็วเดิน"), Icon = "speed",
+                    Min = 16, Max = 200, Default = opt.WalkSpeed, Rounding = 0,
+                    Callback = Store("WalkSpeed", nil, function(value) return tonumber(value) or opt.WalkSpeed end),
+                })
+            end,
         })
-        Toggle(moveBox, "Fly", T("Fly", "บิน"), nil, Request("Movement"))
-        moveBox:AddSlider("FlySpeed", {
-            Text = T("Fly Speed", "ความเร็วบิน"),
-            Min = 10, Max = 200, Default = opt.FlySpeed, Rounding = 0,
-            Callback = function(value) opt.FlySpeed = tonumber(value) or opt.FlySpeed end,
+        move:AddFeature("Fly", {
+            Text = T("Fly", "บิน"),
+            Icon = "fly",
+            Keybind = { Default = "None", Mode = "Toggle" },
+            Callback = Store("Fly", Request("Movement")),
+            Options = function(options)
+                options:AddSlider("FlySpeed", {
+                    Text = T("Fly speed", "ความเร็วบิน"), Icon = "wingcap",
+                    Min = 10, Max = 200, Default = opt.FlySpeed, Rounding = 0,
+                    Callback = Store("FlySpeed", nil, function(value) return tonumber(value) or opt.FlySpeed end),
+                })
+            end,
         })
-        Toggle(moveBox, "Noclip", T("Noclip", "ทะลุกำแพง"), nil, Request("Movement"))
-        Toggle(moveBox, "InfJump", T("Infinite Jump", "กระโดดไม่จำกัด"))
+        move:AddFeature("Noclip", {
+            Text = T("Noclip", "ทะลุกำแพง"),
+            Icon = "noclip",
+            Keybind = { Default = "None", Mode = "Toggle" },
+            Callback = Store("Noclip", Request("Movement")),
+        })
+        move:AddToggle("InfJump", { Text = T("Infinite Jump", "กระโดดไม่จำกัด"), Icon = "infjump", Callback = Store("InfJump") })
+    end
 
-        local tpBox = PlayerTab:AddRightGroupbox(T("Teleport", "วาร์ป"), "teleport")
-        tpBox:AddButton({ Text = T("Quarry", "เหมืองหิน"), Func = Request("TpQuarry") })
-        tpBox:AddButton({ Text = T("Pyramid", "พีระมิด"), Func = Request("TpPyramid") })
-        tpBox:AddButton({ Text = T("Pool", "สระ"), Func = Request("TpPool") })
-        tpBox:AddDropdown("GymTarget", {
+    local function BuildTeleport(tab)
+        local tp = tab:AddRightGroupbox(T("Teleport", "วาร์ป"), "teleport")
+        tp:AddButton({ Text = T("Quarry", "เหมืองหิน"), Icon = "mine", Callback = Request("TpQuarry") })
+            :AddButton({ Text = T("Pyramid", "พีระมิด"), Icon = "pyramid", Callback = Request("TpPyramid") })
+        tp:AddButton({ Text = T("Pool", "สระ"), Icon = "water", Callback = Request("TpPool") })
+
+        tp:AddDropdown("GymTarget", {
             Text = T("Gym", "ยิม"),
+            Icon = "gravity",
             Values = GymNames(),
             Default = 1,
             Callback = function(value) State.GymTarget = value and value:match("^Gym (%S+)") end,
         })
-        tpBox:AddButton({ Text = T("Go To Gym", "ไปยิม"), Func = Request("TpGym") })
-        local playerDropdown = tpBox:AddDropdown("PlayerTarget", {
+        tp:AddButton({ Text = T("Go To Gym", "ไปยิม"), Icon = "teleport", Callback = Request("TpGym") })
+
+        local playerDropdown = tp:AddDropdown("PlayerTarget", {
             Text = T("Player", "ผู้เล่น"),
+            Icon = "players",
             Values = PlayerNames(),
             Searchable = true,
+            AllowNull = true,
             Callback = function(value) State.PlayerTarget = value end,
         })
-        tpBox:AddButton({ Text = T("Refresh Players", "รีเฟรชผู้เล่น"), Func = function() playerDropdown:SetValues(PlayerNames()) end })
-        tpBox:AddButton({ Text = T("Go To Player", "ไปหาผู้เล่น"), Func = Request("TpPlayer") })
+        tp:AddButton({ Text = T("Go To Player", "ไปหาผู้เล่น"), Icon = "teleport", Callback = Request("TpPlayer") })
+            :AddButton({ Text = T("Refresh", "รีเฟรช"), Icon = "refresh", Style = "Ghost", Callback = function()
+                playerDropdown:SetValues(PlayerNames())
+            end })
+    end
 
-        local settingsTab = Window:AddSettingsTab()
-        local sessionBox = settingsTab:AddLeftGroupbox(T("Session", "เซสชัน"), "gear")
-        Toggle(sessionBox, "AntiAfk", T("Anti AFK", "กันหลุด AFK"), T("Stops the idle kick", "กันโดนเตะเพราะไม่ขยับ"))
-        Toggle(sessionBox, "AutoRejoin", T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), T("Rejoins by itself after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"))
-        Toggle(sessionBox, "NoRender", T("Disable 3D Rendering", "ปิดการเรนเดอร์ 3D"), T("Saves battery and CPU while farming", "ประหยัดแบตและ CPU ตอนฟาร์ม"), function(on)
-            RunService:Set3dRenderingEnabled(not on)
-        end)
-        sessionBox:AddButton({ Text = T("FPS Boost", "เพิ่ม FPS"), Func = Request("Boost") })
-        sessionBox:AddButton({ Text = T("Rejoin", "เข้าเซิร์ฟเดิมใหม่"), Func = Request("Rejoin") })
-        sessionBox:AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), Func = Request("Hop") })
+    local function BuildMisc(window)
+        window:AddTabSection(T("Misc", "อื่นๆ"))
+        local tab = window:AddTab(T("Player", "ผู้เล่น"), "player", T("Movement, teleports and session", "การเคลื่อนที่ วาร์ป และเซสชัน"))
+        BuildMovement(tab)
+        BuildTeleport(tab)
+
+        local session = tab:AddLeftGroupbox(T("Session", "เซสชัน"), "server")
+        session:AddToggle("AntiAfk", { Text = T("Anti AFK", "กันหลุด AFK"), Icon = "antiafk", Callback = Store("AntiAfk") })
+        session:AddToggle("AutoRejoin", { Text = T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), Description = T("Rejoins by itself after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"), Icon = "rejoin", Callback = Store("AutoRejoin") })
+        session:AddToggle("NoRender", {
+            Text = T("Disable 3D Rendering", "ปิดการเรนเดอร์ 3D"),
+            Description = T("Saves battery and CPU while farming", "ประหยัดแบตและ CPU ตอนฟาร์ม"),
+            Icon = "lowfps",
+            Callback = Store("NoRender", function(on) RunService:Set3dRenderingEnabled(not on) end),
+        })
+        session:AddButton({ Text = T("FPS Boost", "เพิ่ม FPS"), Icon = "fpsboost", Callback = Request("Boost") })
+        session:AddButton({ Text = T("Rejoin", "เข้าเซิร์ฟเดิมใหม่"), Icon = "rejoin", Callback = Request("Rejoin") })
+            :AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), Icon = "hop", Callback = Request("Hop") })
+    end
+
+    local function Live()
+        local status = Library.Lib.Status
+        status("StatusTask", function()
+            if State.Task == "None" then return "Idle", "Idle" end
+            return ("%s: %s"):format(State.Task, State.Status), "Running"
+        end, 1)
+        status("StatusCarry", function()
+            return ("%d / %d"):format(State.CarryShown or 0, xDTaraZ.Game.Capacity())
+        end, 1)
+        status("StatCoins", xDTaraZ.Game.Coins, 1)
+        status("StatPlaced", function() return State.Placed end, 1)
+        status("StatStrength", function() return tonumber(xDTaraZ.Game.Attr("StrengthLevel")) or 0 end, 2)
+        status("StatSpeed", function() return tonumber(xDTaraZ.Game.Attr("SpeedLevel")) or 0 end, 2)
+        status("StatPyramids", function() return tonumber(xDTaraZ.Game.Attr("Pyramids")) or 0 end, 5)
 
         Library:Every(1, function()
             while #State.Messages > 0 do
                 Notify(table.remove(State.Messages, 1))
             end
-            statusLabel:SetText(State.Summary or "-")
-            runLabel:SetText(("%s: %s"):format(State.Task, State.Status))
         end)
+    end
+
+    local function BuildTabs()
+        local window = Library.Window
+        RegisterIcons()
+        BuildMain(window)
+        BuildFarm(window)
+        BuildProgression(window)
+        BuildMisc(window)
+        window:AddSettingsTab()
+        Live()
     end
 
     Library:OnUnload(xDTaraZ.Scheduler.Stop)
@@ -1071,7 +1195,7 @@ local function BuildInterface()
         OnUnlocked = function()
             BuildTabs()
             xDTaraZ.Scheduler.Boot()
-            Notify("Loaded")
+            Notify("Loaded", "Success")
             Library:LoadAutoloadConfig()
         end,
     })

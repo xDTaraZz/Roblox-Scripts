@@ -8305,7 +8305,7 @@ Config.Widget.Stepper = { Value = 54, Big = 10 }
 Config.Widget.Chip = { Height = 28, TouchHeight = 44, PadX = 10, Gap = 6, Dot = 8, Depth = 2 }
 Config.Widget.Priority = { Rank = 22, Handle = 28, Arrow = 44, Gap = 4 }
 Config.Widget.Table = { Rows = 6, CellPad = 8 }
-Config.Widget.Status = { Dot = 10, Halo = 18, Gap = 8, Tokens = {
+Config.Widget.Status = { Dot = 10, Halo = 18, Gap = 8, MaxText = 0.5, Tokens = {
     Idle = "Muted", Off = "Muted", Stopped = "Muted", Running = "Good", Active = "Good", On = "Good", Done = "Good",
     Busy = "Info", Travel = "Info", Waiting = "Warn", Warn = "Warn", Error = "Bad", Failed = "Bad",
 } }
@@ -9336,8 +9336,11 @@ function WidgetHost:AddStatus(idx, info)
     local holder = Draw.New("Frame", { Name = "Status", BackgroundTransparency = 1, Size = UDim2.fromOffset(settings.Halo, Platform.Metric("Item")) })
     status.Halo = Draw.Box("Frame", { Name = "Halo", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(settings.Halo, settings.Halo), BackgroundTransparency = 0.7, ZIndex = Config.Z.Detail, Parent = holder }, nil, nil, UDim.new(1, 0))
     status.Dot = Draw.Box("Frame", { Name = "Dot", AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromOffset(settings.Dot, settings.Dot), BackgroundTransparency = 0, ZIndex = Config.Z.Raised, Parent = status.Halo }, nil, "Outline", UDim.new(1, 0), 1)
-    status.Label = Draw.Text({ AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -settings.Halo - settings.Gap, 0, 0), Size = UDim2.new(0, 0, 1, 0), TextXAlignment = Enum.TextXAlignment.Right, ZIndex = Config.Z.Detail, Parent = holder }, "Strong", Util.TextSize("Label"), "Text")
+    status.Label = Draw.Text({ AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, -settings.Halo - settings.Gap, 0, 0), Size = UDim2.new(0, 0, 1, 0), TextXAlignment = Enum.TextXAlignment.Right, TextTruncate = Enum.TextTruncate.AtEnd, ZIndex = Config.Z.Detail, Parent = holder }, "Strong", Util.TextSize("Label"), "Text")
     status.Holder = holder
+    status.Row.Holder:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+        status:FitLabel()
+    end)
     status.Row:AddRight(holder, settings.Halo)
     Widget.Register(status, idx, info)
     local default = info.Default
@@ -9357,15 +9360,25 @@ function Status:SetValue(text, kind)
     local changed = token ~= self.Token
     self.Value, self.Kind, self.Token = text, kind, token
     self.Label.Text = resolved
-    local width = Layout.Measure(resolved, self.Label.TextSize, "Strong", 1000).X
-    self.Label.Size = UDim2.new(0, width, 1, 0)
-    self.Row:SetRightWidth(self.Holder, settings.Halo + settings.Gap + width)
+    self:FitLabel()
     Widget.Paint(self, self.Dot, "BackgroundColor3", token, true)
     Widget.Paint(self, self.Halo, "BackgroundColor3", token, true)
     Widget.Paint(self, self.Label, "TextColor3", token == "Muted" and "SubText" or token, true)
     if changed then
         Motion.Pop(self.Halo)
     end
+end
+
+---Long status text truncates at half the row so it never runs over the title.
+function Status:FitLabel()
+    local settings = Config.Widget.Status
+    local full = Layout.Measure(self.Label.Text, self.Label.TextSize, "Strong", 1000).X
+    local rowWidth = self.Row.Holder.AbsoluteSize.X / math.max(State.UserScale or 1, 0.01)
+    local width = rowWidth > 0 and math.min(full, math.floor(rowWidth * settings.MaxText)) or full
+    local slot = settings.Halo + settings.Gap + width
+    self.Label.Size = UDim2.new(0, width, 1, 0)
+    self.Holder.Size = UDim2.fromOffset(slot, self.Holder.Size.Y.Offset)
+    self.Row:SetRightWidth(self.Holder, slot)
 end
 
 function Status:Fire() end
@@ -9396,16 +9409,17 @@ function WidgetHost:AddStat(idx, info)
     return stat
 end
 
----@return string  1234567 -> 1.23M
+Stat.Suffixes = { "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc" }
+
+---@return string  1234567 -> 1.23M, 3.48e21 -> 3.48Sx; never longer than a few characters
 function Stat.Abbreviate(value)
     local absolute = math.abs(value)
-    local suffixes = { { 1e12, "T" }, { 1e9, "B" }, { 1e6, "M" }, { 1e3, "K" } }
-    for _, entry in ipairs(suffixes) do
-        if absolute >= entry[1] then
-            return string.format("%.2f", value / entry[1]):gsub("%.?0+$", "") .. entry[2]
-        end
+    if absolute < 1e3 then
+        return tostring(Util.Round(value, absolute < 10 and 2 or 0))
     end
-    return tostring(Util.Round(value, absolute < 10 and 2 or 0))
+    local tier = math.min(math.floor(math.log10(absolute) / 3), #Stat.Suffixes)
+    local text = string.format("%.2f", value / 10 ^ (tier * 3)):gsub("%.?0+$", "")
+    return text .. Stat.Suffixes[tier]
 end
 
 function Stat:Text(value)

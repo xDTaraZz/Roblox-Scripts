@@ -33,7 +33,7 @@ local GameConfig = ReplicatedStorage:WaitForChild("Config")
 xDTaraZ.Config = {
     SaveFolder = "Loot To Forge",
     Discord = "https://discord.gg/FHVfmeSceA",
-    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
+    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui_v2.lua",
     LoaderUrl = "",
     TickDelay = 0.25,
     StatusInterval = 2,
@@ -1153,22 +1153,8 @@ local function BuildInterface()
     local opt = State.Opt
     local rarityNames = xDTaraZ.Util.RarityNames()
 
-    local function Notify(text)
-        Library:Notify("Loot To Forge", text, 4)
-    end
-
-    local function Toggle(group, key, text, description, onChange)
-        return group:AddToggle(key, {
-            Text = text,
-            Description = description,
-            Default = opt[key],
-            Callback = function(value)
-                opt[key] = value
-                if onChange then
-                    onChange(value)
-                end
-            end,
-        })
+    local function Notify(text, kind)
+        Library:Notify("Loot To Forge", text, 4, kind or "Info")
     end
 
     local function Action(action)
@@ -1177,57 +1163,91 @@ local function BuildInterface()
         end
     end
 
-    local function MultiSelect(group, key, text, description, values)
-        opt[key] = xDTaraZ.Util.AllSet(values)
-        return group:AddDropdown(key, {
-            Text = text,
-            Description = description,
-            Values = values,
-            Multi = true,
-            Default = values,
-            Searchable = #values > 8,
-            Callback = function(selected)
-                opt[key] = selected
-            end,
+    local function Store(key, onChange)
+        return function(value)
+            opt[key] = value
+            if onChange then onChange(value) end
+        end
+    end
+
+    ---@param info table  AddFeature info; Callback is wrapped to mirror opt[key]
+    local function Feature(group, key, info)
+        info.Default = opt[key]
+        info.Keybind = info.Keybind or { Default = "None", Mode = "Toggle" }
+        info.Callback = Store(key, info.Callback)
+        return group:AddFeature(key, info)
+    end
+
+    local function Toggle(group, key, info)
+        info.Default = opt[key]
+        info.Callback = Store(key, info.Callback)
+        return group:AddToggle(key, info)
+    end
+
+    local function Chips(group, key, info)
+        opt[key] = xDTaraZ.Util.AllSet(info.Values)
+        info.Default = info.Values
+        info.Callback = Store(key)
+        return group:AddMultiChips(key, info)
+    end
+
+    local function Count(group, key, info)
+        info.Default = opt[key]
+        info.Callback = Store(key)
+        return group:AddStepper(key, info)
+    end
+
+    local function Refresh(group, idx, list)
+        group:AddButton({ Text = T("Refresh", "รีเฟรช"), Icon = "refresh", Style = "Ghost", Callback = function()
+            Options[idx]:SetValues(list())
+        end })
+    end
+
+    local function RegisterIcons()
+        if Library:HasIcon("anvil") then return end
+        Library:AddIcon("anvil", {
+            "............",
+            "..kkkkkkkkk.",
+            "kkeeeeeeeenk",
+            "keeeeeeeeNk.",
+            ".kkNNNNNNk..",
+            "...kNNNNk...",
+            "...knnnNk...",
+            "..kkNNNNkk..",
+            ".kNNNNNNNNk.",
+            ".kkkkkkkkkk.",
+            "....oooo....",
+            "............",
+        }, {
+            k = Color3.fromRGB(28, 24, 30),
+            e = Color3.fromRGB(214, 220, 230),
+            n = Color3.fromRGB(150, 158, 172),
+            N = Color3.fromRGB(96, 104, 120),
+            o = Color3.fromRGB(255, 140, 40),
         })
     end
 
-    local function NumberInput(group, key, text, description)
-        return group:AddInput(key, {
-            Text = text,
-            Description = description,
-            Default = tostring(opt[key]),
-            Numeric = true,
-            Finished = true,
-            Callback = function(value)
-                opt[key] = math.max(0, tonumber(value) or opt[key])
-            end,
-        })
-    end
+    local function BuildMain(window)
+        window:AddTabSection(T("Main", "หลัก"))
+        local tab = window:AddTab(T("Main", "หลัก"), "mushroom", T("Status, Kaitun and rewards", "สถานะ ไก่ตัน และรางวัล"))
 
-    local function BuildTabs()
-        local Window = Library.Window
-        Window:AddTabSection(T("Farm", "ฟาร์ม"))
-        local MainTab = Window:AddTab(T("Main", "หลัก"), "house", T("Status, all-in-one mode and rewards", "สถานะ โหมดทำทุกอย่าง และรางวัล"))
-        local FarmTab = Window:AddTab(T("Combat & Farm", "ต่อสู้และฟาร์ม"), "swords", T("Stages, ore collection and monsters", "ด่าน เก็บแร่ และมอนสเตอร์"))
-        local ForgeTab = Window:AddTab(T("Forge", "หลอม"), "zap", T("Forge gear from your ores", "หลอมอุปกรณ์จากแร่ที่มี"))
-        local SellTab = Window:AddTab(T("Sell", "ขาย"), "upload", T("Sell gear by type and rarity", "ขายอุปกรณ์ตามประเภทและ rarity"))
-        Window:AddTabSection(T("Progress", "ความคืบหน้า"))
-        local ProgressTab = Window:AddTab(T("Upgrade & Rebirth", "อัปเกรดและรีเบิร์ธ"), "sliders-horizontal", T("Training, rebirth and upgrades", "ฝึก รีเบิร์ธ และอัปเกรด"))
-        local TowerTab = Window:AddTab(T("Tower", "หอคอย"), "shield", T("Tower loot farming", "ฟาร์มของจากหอคอย"))
-        local OreTab = Window:AddTab(T("Spawn Ore", "เสกแร่"), "target", T("Add any ore to your storage", "เพิ่มแร่ชนิดไหนก็ได้เข้าคลัง"))
-        Window:AddTabSection(T("Other", "อื่นๆ"))
-        local PlayerTab = Window:AddTab(T("Player", "ผู้เล่น"), "user", T("Race and movement", "เผ่าและการเคลื่อนที่"))
+        local status = tab:AddLeftGroupbox(T("Status", "สถานะ"), "stats")
+        status:AddStatus("StatusGear", { Text = T("Gear", "อุปกรณ์"), Icon = "sword" })
+        status:AddStatus("StatusTask", { Text = T("Max Gear", "อุปกรณ์สูงสุด"), Icon = "upgrade" })
 
-        local statusBox = MainTab:AddLeftGroupbox(T("Status", "สถานะ"))
-        local statusLabel = statusBox:AddLabel("Loading...")
-        local gearLabel = statusBox:AddLabel("Equipped: -")
+        local live = tab:AddLeftGroupbox(T("Live", "ตัวเลขสด"), "chart")
+        live:AddStat("StatLevel", { Text = T("Level", "เลเวล"), Icon = "up", Format = "%s" })
+        live:AddStat("StatRebirth", { Text = T("Rebirth", "รีเบิร์ธ"), Icon = "rebirth", Format = "%s" })
+        live:AddStat("StatCoins", { Text = T("Coins", "เหรียญ"), Icon = "coin", Format = function(coins) return xDTaraZ.Util.Abbreviate(math.floor(coins)) end, Token = "Coin" })
+        live:AddStat("StatTowerLoot", { Text = T("Tower loot", "ของจากหอคอย"), Icon = "loot", Format = "%s", Token = "Good" })
 
-        local kaitunBox = MainTab:AddLeftGroupbox(T("Kaitun", "ไก่ตัน"))
-        kaitunBox:AddToggle("Kaitun", {
-            Text = T("Kaitun (All-in-one)", "ไก่ตัน (ทำทุกอย่าง)"),
-            Description = T("Best gear, money, level, upgrades, rewards and ore bosses all at once", "ของดีสุด เงิน เลเวล อัปเกรด รางวัล และบอสแร่ ทำพร้อมกันทั้งหมด"),
+        local kaitun = tab:AddLeftGroupbox(T("Kaitun", "ไก่ตัน"), "crown")
+        kaitun:AddFeature("Kaitun", {
+            Text = T("Kaitun", "ไก่ตัน"),
+            Description = T("Best gear, money, level, upgrades, rewards and ore bosses at once", "ของดีสุด เงิน เลเวล อัปเกรด รางวัล และบอสแร่ พร้อมกันทั้งหมด"),
+            Icon = "crown",
             NoSave = true,
+            Keybind = { Default = "None", Mode = "Toggle" },
             Callback = function(value)
                 for _, key in ipairs(Config.KaitunToggles) do
                     Options[key]:SetValue(value)
@@ -1235,41 +1255,28 @@ local function BuildInterface()
             end,
         })
 
-        local discordBox = MainTab:AddRightGroupbox("Discord", "link")
-        discordBox:AddLabel(Config.Discord)
-        discordBox:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ Discord"), Style = "Primary", Func = function()
-            local copy = setclipboard or toclipboard
-            if copy then copy(Config.Discord) end
-            Notify(copy and "Discord link copied" or Config.Discord)
+        Library.Kit.Discord.Build(tab, Config.Discord)
+
+        local quick = tab:AddRightGroupbox(T("Quick", "ด่วน"), "lightning")
+        quick:AddButton({ Text = T("Panic - All Off", "ฉุกเฉิน ปิดทั้งหมด"), Icon = "stop", Style = "Danger", Callback = function()
+            for _, toggle in pairs(Library.Toggles) do
+                if toggle.Value == true then toggle:SetValue(false) end
+            end
         end })
 
-        local gearBox = MainTab:AddRightGroupbox(T("Max Gear", "อุปกรณ์สูงสุด"))
-        Toggle(gearBox, "MaxGear", T("Max Gear", "อุปกรณ์สูงสุด"),
-            T("Best weapon, armor and hat, enhanced to your target with the best enchants. Finds anything missing by itself", "อาวุธ เกราะ หมวกที่ดีที่สุด ตีบวกถึงเป้า พร้อม enchant ดีสุด ขาดอะไรหาเองหมด"),
-            function()
-                State.GearForged = false
-            end)
-        Toggle(gearBox, "AutoEquip", T("Auto Equip Best", "ใส่ของดีสุดอัตโนมัติ"), T("Always wears your strongest weapon, armor and hat, counting enhance level", "ใส่อาวุธ เกราะ และหมวกที่แรงที่สุดเสมอ นับระดับตีบวกด้วย"))
-        gearBox:AddButton({ Text = T("Equip Best Now", "ใส่ของดีสุดเดี๋ยวนี้"), Func = function()
-            local changed = xDTaraZ.Gear.EquipBest()
-            Notify(changed > 0 and ("Equipped %d better item(s)"):format(changed) or "Already wearing your best gear")
-        end })
-        gearBox:AddSlider("EnhanceTarget", {
-            Text = T("Enhance Target", "ตีบวกถึง"),
-            Description = T("Above +10 the success rate gets very low and can take a long time", "เกิน +10 โอกาสสำเร็จต่ำมาก อาจใช้เวลานาน"),
-            Min = 5, Max = 20, Default = opt.EnhanceTarget, Rounding = 0, Suffix = "",
-            Callback = function(value)
-                opt.EnhanceTarget = value
-            end,
+        local rewards = tab:AddRightGroupbox(T("Rewards", "รางวัล"), "trophy")
+        Feature(rewards, "AutoClaim", {
+            Text = T("Auto Claim", "รับรางวัลอัตโนมัติ"),
+            Description = T("Every free reward, index included", "รางวัลฟรีทุกอย่าง รวมสมุดสะสม"),
+            Icon = "collect",
+            Now = { Text = T("Claim Now", "รับเดี๋ยวนี้"), Icon = "trophy", Style = "Success", Callback = Action(xDTaraZ.Claim.All) },
         })
-
-        local rewardBox = MainTab:AddRightGroupbox(T("Rewards", "รางวัล"))
-        Toggle(rewardBox, "AutoClaim", T("Auto Claim", "รับรางวัลอัตโนมัติ"), T("Claims every free reward, including index", "รับรางวัลฟรีทุกอย่าง รวมสมุดสะสม"))
-        rewardBox:AddButton({ Text = T("Redeem All Codes", "ใช้โค้ดทั้งหมด"), Style = "Primary", Func = function()
-            Library:Notify("Codes", xDTaraZ.Claim.AllCodes(), 6)
+        rewards:AddButton({ Text = T("Redeem All Codes", "ใช้โค้ดทั้งหมด"), Icon = "code", Style = "Primary", Callback = function()
+            Library:Notify("Codes", xDTaraZ.Claim.AllCodes(), 6, "Success")
         end })
-        rewardBox:AddInput("Code", {
+        rewards:AddInput("Code", {
             Text = T("Redeem Code", "ใส่โค้ด"),
+            Icon = "edit",
             Placeholder = T("Code", "โค้ด"),
             Finished = true,
             NoSave = true,
@@ -1279,220 +1286,360 @@ local function BuildInterface()
                 end
             end,
         })
+    end
 
-        local stageBox = FarmTab:AddLeftGroupbox(T("Stage", "ด่าน"))
+    local function BuildFarm(window)
+        window:AddTabSection(T("Farming", "ฟาร์ม"))
+        local tab = window:AddTab(T("Farm", "ฟาร์ม"), "autofarm", T("Stages, ore, monsters and tower", "ด่าน แร่ มอนสเตอร์ และหอคอย"))
+
+        local stage = tab:AddLeftGroupbox(T("Stage", "ด่าน"), "map")
         local stageList = xDTaraZ.Stage.List()
         opt.Stage = stageList[1]
-        stageBox:AddDropdown("Stage", {
+        stage:AddDropdown("Stage", {
             Text = T("Stage", "ด่าน"),
-            Description = T("Any stage, no unlock needed", "เลือกด่านไหนก็ได้ ไม่ต้องปลดล็อก"),
+            Description = T("Any stage, no unlock needed", "ด่านไหนก็ได้ ไม่ต้องปลดล็อก"),
+            Icon = "map",
             Values = stageList,
-            Default = 1,
+            Default = stageList[1],
             Searchable = true,
-            Callback = function(value)
-                opt.Stage = value
+            Callback = Store("Stage"),
+        })
+        Refresh(stage, "Stage", xDTaraZ.Stage.List)
+        Feature(stage, "CollectOre", {
+            Text = T("Auto Collect Ore", "เก็บแร่อัตโนมัติ"),
+            Description = T("Clears the stage and collects its ores nonstop", "เคลียร์ด่านแล้วเก็บแร่ไม่หยุด"),
+            Icon = "pickaxe",
+            Options = function(sub)
+                Chips(sub, "CollectRarities", { Text = T("Collect rarities", "rarity ที่เก็บ"), Icon = "filter", Values = rarityNames })
             end,
         })
-        Toggle(stageBox, "CollectOre", T("Auto Collect Ore", "เก็บแร่อัตโนมัติ"), T("Clears the stage and collects its ores nonstop", "เคลียร์ด่านแล้วเก็บแร่ไม่หยุด"))
-        MultiSelect(stageBox, "CollectRarities", T("Ore Rarity Filter", "กรอง rarity แร่"), T("Only collect these rarities", "เก็บเฉพาะ rarity ที่เลือก"), rarityNames)
 
-        local combatBox = FarmTab:AddRightGroupbox(T("Combat", "ต่อสู้"))
-        Toggle(combatBox, "KillAura", T("Instant Kill", "ฆ่าทันที"), T("Every monster in your stage dies instantly", "มอนสเตอร์ทุกตัวในด่านตายทันที"), function(value)
-            if value then
-                xDTaraZ.Combat.Start()
-            end
-        end)
-        Toggle(combatBox, "SuperLootAura", T("Kill Ore Boss", "ฆ่าบอสแร่"), T("Kills rare ore bosses the moment they spawn", "ฆ่าบอสแร่หายากทันทีที่เกิด"), function(value)
-            if value then
-                xDTaraZ.SuperLoot.KillExisting()
-            end
-        end)
-        combatBox:AddButton({ Text = T("Exit Fight Now", "ออกจากการต่อสู้เดี๋ยวนี้"), Func = Action(xDTaraZ.Stage.ExitFight) })
-
-        local indexBox = FarmTab:AddRightGroupbox(T("Index", "สมุดสะสม"))
-        indexBox:AddButton({
+        local index = tab:AddLeftGroupbox(T("Index", "สมุดสะสม"), "list")
+        index:AddButton({
             Text = T("Complete Index", "เก็บสมุดสะสมให้ครบ"),
-            Description = T("Collects every ore and gear type, then claims all index rewards", "เก็บแร่และอุปกรณ์ทุกชนิด แล้วรับรางวัลสมุดสะสมทั้งหมด"),
+            Description = T("Every ore and gear type, then all index rewards", "แร่และอุปกรณ์ทุกชนิด แล้วรับรางวัลสมุดสะสมทั้งหมด"),
+            Icon = "check",
             Style = "Primary",
-            Func = function()
-                if State.GearBusy then
-                    return
-                end
+            Callback = function()
+                if State.GearBusy then return end
                 Notify("Completing index...")
                 local before = xDTaraZ.Index.Unlocked()
                 xDTaraZ.Util.Try(xDTaraZ.Index.UnlockAll)
                 State.GearBusy = false
                 local after, level = xDTaraZ.Index.Unlocked()
-                Notify(("Index +%d (total %d, level %d)"):format(after - before, after, level))
+                Notify(("Index +%d (total %d, level %d)"):format(after - before, after, level), "Success")
             end,
         })
 
-        local forgeBox = ForgeTab:AddLeftGroupbox(T("Forge", "หลอม"))
+        local combat = tab:AddRightGroupbox(T("Combat", "ต่อสู้"), "sword")
+        Feature(combat, "KillAura", {
+            Text = T("Instant Kill", "ฆ่าทันที"),
+            Description = T("Every monster in your stage dies instantly", "มอนสเตอร์ทุกตัวในด่านตายทันที"),
+            Icon = "killaura",
+            Callback = function(value)
+                if value then xDTaraZ.Combat.Start() end
+            end,
+        })
+        Feature(combat, "SuperLootAura", {
+            Text = T("Kill Ore Boss", "ฆ่าบอสแร่"),
+            Description = T("Rare ore bosses die the moment they spawn", "บอสแร่หายากตายทันทีที่เกิด"),
+            Icon = "boss",
+            Callback = function(value)
+                if value then xDTaraZ.SuperLoot.KillExisting() end
+            end,
+        })
+        combat:AddButton({ Text = T("Exit Fight Now", "ออกจากการต่อสู้เดี๋ยวนี้"), Icon = "close", Style = "Warning", Callback = Action(xDTaraZ.Stage.ExitFight) })
+
+        local tower = tab:AddRightGroupbox(T("Tower", "หอคอย"), "shield")
+        Feature(tower, "AutoTower", {
+            Text = T("Auto Farm Tower", "ฟาร์มหอคอยอัตโนมัติ"),
+            Description = T("Tower loot nonstop on a single ticket", "ฟาร์มของหอคอยไม่หยุดด้วยตั๋วใบเดียว"),
+            Icon = "loot",
+            Callback = function(value)
+                local ok, entered = pcall(function()
+                    return not value or xDTaraZ.Tower.Enter()
+                end)
+                if not (ok and entered) then Notify("No tower ticket", "Warn") end
+            end,
+        })
+        tower:AddButton({ Text = T("Exit Tower Now", "ออกจากหอคอยเดี๋ยวนี้"), Icon = "close", Style = "Warning", Callback = function()
+            Options.AutoTower:SetValue(false)
+            xDTaraZ.Util.Try(xDTaraZ.Tower.Exit)
+        end })
+    end
+
+    local function BuildForge(tab)
+        local forge = tab:AddLeftGroupbox(T("Forge", "หลอม"), "anvil")
         local targetNames = {}
         for _, target in ipairs(Config.ForgeTargets) do
-            table.insert(targetNames, target.name)
+            targetNames[#targetNames + 1] = target.name
         end
-        forgeBox:AddDropdown("ForgeTarget", {
-            Text = T("Target Gear", "อุปกรณ์ที่จะหลอม"),
+        forge:AddSegmented("ForgeTarget", {
+            Text = T("Target gear", "อุปกรณ์ที่จะหลอม"),
+            Icon = "craft",
             Values = targetNames,
-            Default = 1,
+            Default = opt.ForgeTarget,
             Callback = function(value)
                 opt.ForgeTarget = value or opt.ForgeTarget
             end,
         })
-        Toggle(forgeBox, "AutoForge", T("Auto Forge", "หลอมอัตโนมัติ"), T("Forges the target gear nonstop", "หลอมอุปกรณ์ที่เลือกไม่หยุด"))
-        forgeBox:AddButton({ Text = T("Forge Now", "หลอมเดี๋ยวนี้"), Style = "Primary", Func = function()
-            Notify(xDTaraZ.Forge.Once() and "Forged" or "Not enough ore")
-        end })
+        Feature(forge, "AutoForge", {
+            Text = T("Auto Forge", "หลอมอัตโนมัติ"),
+            Description = T("Forges the target gear nonstop", "หลอมอุปกรณ์ที่เลือกไม่หยุด"),
+            Icon = "anvil",
+            Now = { Text = T("Forge Now", "หลอมเดี๋ยวนี้"), Icon = "fire", Callback = function()
+                Notify(xDTaraZ.Forge.Once() and "Forged" or "Not enough ore")
+            end },
+        })
 
-        local oreUseBox = ForgeTab:AddRightGroupbox(T("Ore Usage", "การใช้แร่"))
-        Toggle(oreUseBox, "InfiniteOre", T("Infinite Ore", "แร่ไม่จำกัด"), T("Your best ore refills itself while forging", "แร่ที่ดีที่สุดเติมเองระหว่างหลอม"))
-        Toggle(oreUseBox, "BestOreFirst", T("Spend Best Ore First", "ใช้แร่ดีสุดก่อน"), T("Off = spend the weakest ore first", "ปิด = ใช้แร่ที่อ่อนที่สุดก่อน"))
-        MultiSelect(oreUseBox, "ForgeRarities", T("Forge Ore Rarity", "rarity แร่ที่ใช้หลอม"), T("Only these ore rarities are used for forging", "ใช้แร่เฉพาะ rarity ที่เลือกในการหลอม"), rarityNames)
-        NumberInput(oreUseBox, "KeepPerOre", T("Keep Per Ore", "เก็บแร่ไว้ชนิดละ"), T("Never forge below this amount of each ore", "ไม่หลอมจนแร่แต่ละชนิดต่ำกว่าจำนวนนี้"))
+        local ore = tab:AddLeftGroupbox(T("Ore Usage", "การใช้แร่"), "gem")
+        Toggle(ore, "InfiniteOre", {
+            Text = T("Infinite Ore", "แร่ไม่จำกัด"),
+            Description = T("Your best ore refills itself while forging", "แร่ที่ดีที่สุดเติมเองระหว่างหลอม"),
+            Icon = "gem",
+            Risky = true,
+            Badge = T("Risky", "เสี่ยง"),
+        })
+        Toggle(ore, "BestOreFirst", {
+            Text = T("Spend Best Ore First", "ใช้แร่ดีสุดก่อน"),
+            Description = T("Off = weakest ore first", "ปิด = ใช้แร่อ่อนสุดก่อน"),
+            Icon = "sort",
+        })
+        Chips(ore, "ForgeRarities", { Text = T("Forge rarities", "rarity แร่ที่ใช้หลอม"), Icon = "filter", Values = rarityNames })
+        Count(ore, "KeepPerOre", { Text = T("Keep per ore", "เก็บแร่ไว้ชนิดละ"), Icon = "box", Min = 0, Max = 100000, Step = 10 })
+    end
 
-        local sellBox = SellTab:AddLeftGroupbox(T("Auto Sell", "ขายอัตโนมัติ"))
-        Toggle(sellBox, "AutoSell", T("Auto Sell", "ขายอัตโนมัติ"), T("Sells gear that matches your filters. Equipped gear is never sold", "ขายอุปกรณ์ที่ตรงตัวกรอง ของที่ใส่อยู่จะไม่ขาย"))
-        sellBox:AddButton({ Text = T("Sell All Now", "ขายทั้งหมดเดี๋ยวนี้"), Style = "Primary", Func = function()
-            xDTaraZ.Sell.Run(xDTaraZ.Data.Get())
-            Notify("Sold")
-        end })
+    local function BuildGear(window)
+        local tab = window:AddTab(T("Gear", "อุปกรณ์"), "anvil", T("Max gear, forging and selling", "อุปกรณ์สูงสุด หลอม และขาย"))
+        BuildForge(tab)
 
-        local sellFilterBox = SellTab:AddRightGroupbox(T("Filters", "ตัวกรอง"))
-        MultiSelect(sellFilterBox, "SellTypes", T("Sell Item Types", "ประเภทที่จะขาย"), nil, Config.GearTypes)
-        MultiSelect(sellFilterBox, "SellRarities", T("Sell Rarity Filter", "กรอง rarity ที่จะขาย"), T("Only sell these rarities", "ขายเฉพาะ rarity ที่เลือก"), rarityNames)
-        NumberInput(sellFilterBox, "KeepPerItem", T("Keep Per Item", "เก็บไว้ชิ้นละ"), T("Keeps this many of each item, highest enhance first", "เก็บแต่ละไอเทมไว้ตามจำนวนนี้ เลือกตัวตีบวกสูงสุดก่อน"))
-
-        local trainBox = ProgressTab:AddLeftGroupbox(T("Training", "ฝึก"))
-        Toggle(trainBox, "AutoTrain", T("Auto Train", "ฝึกอัตโนมัติ"), T("Trains at the x100 area nonstop", "ฝึกที่โซน x100 ไม่หยุด"), function(value)
-            task.spawn(xDTaraZ.Util.Try, xDTaraZ.Level.SetTraining, value)
-        end)
-        Toggle(trainBox, "AutoClick", T("Auto Click", "คลิกอัตโนมัติ"), T("Clicks to train as fast as the game allows", "คลิกฝึกเร็วสุดเท่าที่เกมยอม"), function(value)
-            if value then
-                xDTaraZ.Level.StartClicking()
-            end
-        end)
-        Toggle(trainBox, "AutoRebirth", T("Auto Rebirth", "รีเบิร์ธอัตโนมัติ"), T("Rebirths as soon as your level is high enough", "รีเบิร์ธทันทีเมื่อเลเวลถึง"))
-        trainBox:AddButton({ Text = T("Rebirth Now", "รีเบิร์ธเดี๋ยวนี้"), Func = Action(xDTaraZ.Level.Rebirth) })
-
-        local upgradeBox = ProgressTab:AddRightGroupbox(T("Upgrades", "อัปเกรด"))
-        MultiSelect(upgradeBox, "Upgrades", T("Upgrades To Buy", "อัปเกรดที่จะซื้อ"), nil, xDTaraZ.Upgrade.Names())
-        Toggle(upgradeBox, "AutoUpgrade", T("Auto Buy Upgrades", "ซื้ออัปเกรดอัตโนมัติ"), T("Buys the selected upgrades whenever possible", "ซื้ออัปเกรดที่เลือกทุกครั้งที่ซื้อได้"))
-        upgradeBox:AddButton({ Text = T("Buy Upgrade Now", "ซื้ออัปเกรดเดี๋ยวนี้"), Func = Action(xDTaraZ.Upgrade.BuySelected) })
-
-        local towerBox = TowerTab:AddLeftGroupbox(T("Tower", "หอคอย"))
-        Toggle(towerBox, "AutoTower", T("Auto Farm Tower", "ฟาร์มหอคอยอัตโนมัติ"), T("Farms tower loot nonstop with a single ticket", "ฟาร์มของหอคอยไม่หยุดด้วยตั๋วใบเดียว"), function(value)
-            local ok, entered = pcall(function()
-                return not value or xDTaraZ.Tower.Enter()
-            end)
-            if not (ok and entered) then
-                Notify("No tower ticket")
-            end
-        end)
-        towerBox:AddButton({ Text = T("Exit Tower Now", "ออกจากหอคอยเดี๋ยวนี้"), Func = function()
-            Options.AutoTower:SetValue(false)
-            xDTaraZ.Util.Try(xDTaraZ.Tower.Exit)
-        end })
-
-        local spawnBox = OreTab:AddLeftGroupbox(T("Spawn Ore", "เสกแร่"))
-        local oreLabels = xDTaraZ.Ore.Choices()
-        opt.SpawnOre = oreLabels[1]
-        spawnBox:AddDropdown("SpawnOre", {
-            Text = T("Ore", "แร่"),
-            Description = T("Any ore in the game, even ones you don't have yet", "แร่ทุกชนิดในเกม แม้ยังไม่เคยได้"),
-            Values = oreLabels,
-            Default = 1,
-            Searchable = true,
-            NoSave = true,
-            Callback = function(value)
-                opt.SpawnOre = value
+        local gear = tab:AddRightGroupbox(T("Max Gear", "อุปกรณ์สูงสุด"), "upgrade")
+        Feature(gear, "MaxGear", {
+            Text = T("Max Gear", "อุปกรณ์สูงสุด"),
+            Description = T("Best weapon, armor and hat with top enchants, enhanced to your target", "อาวุธ เกราะ หมวกดีสุด enchant ดีสุด ตีบวกถึงเป้า"),
+            Icon = "upgrade",
+            Callback = function()
+                State.GearForged = false
+            end,
+            Options = function(sub)
+                sub:AddSlider("EnhanceTarget", {
+                    Text = T("Enhance target", "ตีบวกถึง"),
+                    Description = T("Above +10 it can take a long time", "เกิน +10 อาจใช้เวลานาน"),
+                    Icon = "plus",
+                    Min = 5, Max = 20, Default = opt.EnhanceTarget, Rounding = 0, Prefix = "+",
+                    Callback = Store("EnhanceTarget"),
+                })
             end,
         })
-        NumberInput(spawnBox, "SpawnAmount", T("Amount", "จำนวน"))
-        spawnBox:AddButton({ Text = T("Spawn", "เสก"), Style = "Primary", Func = function()
+        Feature(gear, "AutoEquip", {
+            Text = T("Auto Equip Best", "ใส่ของดีสุดอัตโนมัติ"),
+            Description = T("Always wears your strongest gear, enhance counted", "ใส่ของที่แรงสุดเสมอ นับระดับตีบวกด้วย"),
+            Icon = "shield",
+            Now = { Text = T("Equip Best Now", "ใส่ของดีสุดเดี๋ยวนี้"), Icon = "check", Callback = function()
+                local changed = xDTaraZ.Gear.EquipBest()
+                Notify(changed > 0 and ("Equipped %d better item(s)"):format(changed) or "Already wearing your best gear")
+            end },
+        })
+
+        local sell = tab:AddRightGroupbox(T("Sell", "ขาย"), "sell")
+        Feature(sell, "AutoSell", {
+            Text = T("Auto Sell", "ขายอัตโนมัติ"),
+            Description = T("Equipped gear is never sold", "ของที่ใส่อยู่จะไม่ถูกขาย"),
+            Icon = "sell",
+            Now = { Text = T("Sell Now", "ขายเดี๋ยวนี้"), Icon = "money", Style = "Warning", Callback = function()
+                xDTaraZ.Sell.Run(xDTaraZ.Data.Get())
+                Notify("Sold", "Coin")
+            end },
+        })
+        Chips(sell, "SellTypes", { Text = T("Sell types", "ประเภทที่ขาย"), Icon = "sword", Values = Config.GearTypes })
+        Chips(sell, "SellRarities", { Text = T("Sell rarities", "rarity ที่ขาย"), Icon = "filter", Values = rarityNames })
+        Count(sell, "KeepPerItem", {
+            Text = T("Keep per item", "เก็บไว้ชิ้นละ"),
+            Description = T("Highest enhance kept first", "เก็บตัวตีบวกสูงสุดก่อน"),
+            Icon = "favorite",
+            Min = 0, Max = 50, Step = 1,
+        })
+    end
+
+    local function BuildProgress(window)
+        window:AddTabSection(T("Progression", "ความคืบหน้า"))
+        local tab = window:AddTab(T("Progress", "ความคืบหน้า"), "up", T("Training, rebirth, upgrades and ore", "ฝึก รีเบิร์ธ อัปเกรด และแร่"))
+
+        local train = tab:AddLeftGroupbox(T("Training", "ฝึก"), "power")
+        Feature(train, "AutoTrain", {
+            Text = T("Auto Train", "ฝึกอัตโนมัติ"),
+            Description = T("Trains at the x100 area nonstop", "ฝึกที่โซน x100 ไม่หยุด"),
+            Icon = "power",
+            Callback = function(value)
+                task.spawn(xDTaraZ.Util.Try, xDTaraZ.Level.SetTraining, value)
+            end,
+        })
+        Feature(train, "AutoClick", {
+            Text = T("Auto Click", "คลิกอัตโนมัติ"),
+            Description = T("As fast as the game allows", "เร็วสุดเท่าที่เกมยอม"),
+            Icon = "mouse",
+            Callback = function(value)
+                if value then xDTaraZ.Level.StartClicking() end
+            end,
+        })
+        Feature(train, "AutoRebirth", {
+            Text = T("Auto Rebirth", "รีเบิร์ธอัตโนมัติ"),
+            Description = T("Rebirths as soon as your level allows", "รีเบิร์ธทันทีเมื่อเลเวลถึง"),
+            Icon = "rebirth",
+            Now = { Text = T("Rebirth Now", "รีเบิร์ธเดี๋ยวนี้"), Icon = "rebirth", Callback = Action(xDTaraZ.Level.Rebirth) },
+        })
+
+        local upgrade = tab:AddLeftGroupbox(T("Upgrades", "อัปเกรด"), "upgrade")
+        Feature(upgrade, "AutoUpgrade", {
+            Text = T("Auto Buy Upgrades", "ซื้ออัปเกรดอัตโนมัติ"),
+            Icon = "buy",
+            Now = { Text = T("Buy Now", "ซื้อเดี๋ยวนี้"), Icon = "money", Callback = Action(xDTaraZ.Upgrade.BuySelected) },
+        })
+        local upgradeNames = xDTaraZ.Upgrade.Names()
+        opt.Upgrades = xDTaraZ.Util.AllSet(upgradeNames)
+        upgrade:AddDropdown("Upgrades", {
+            Text = T("Upgrades to buy", "อัปเกรดที่จะซื้อ"),
+            Icon = "list",
+            Values = upgradeNames,
+            Multi = true,
+            Default = upgradeNames,
+            Searchable = #upgradeNames > 8,
+            Callback = Store("Upgrades"),
+        })
+        Refresh(upgrade, "Upgrades", xDTaraZ.Upgrade.Names)
+
+        local spawn = tab:AddRightGroupbox(T("Spawn Ore", "เสกแร่"), "gem")
+        local oreLabels = xDTaraZ.Ore.Choices()
+        opt.SpawnOre = oreLabels[1]
+        spawn:AddDropdown("SpawnOre", {
+            Text = T("Ore", "แร่"),
+            Description = T("Any ore, even ones you never had", "แร่ทุกชนิด แม้ยังไม่เคยได้"),
+            Icon = "gem",
+            Values = oreLabels,
+            Default = oreLabels[1],
+            Searchable = true,
+            NoSave = true,
+            Callback = Store("SpawnOre"),
+        })
+        Refresh(spawn, "SpawnOre", xDTaraZ.Ore.Choices)
+        spawn:AddInput("SpawnAmount", {
+            Text = T("Amount", "จำนวน"),
+            Icon = "plus",
+            Default = tostring(opt.SpawnAmount),
+            Numeric = true,
+            Finished = true,
+            Callback = function(value)
+                opt.SpawnAmount = math.max(0, tonumber(value) or opt.SpawnAmount)
+            end,
+        })
+        spawn:AddButton({ Text = T("Spawn", "เสก"), Icon = "gem", Style = "Primary", Risky = true, Callback = function()
             local oreId = State.OreLabels[opt.SpawnOre]
-            if not oreId then
-                return Notify("Pick an ore first")
-            end
+            if not oreId then return Notify("Pick an ore first", "Warn") end
             local label, amount = opt.SpawnOre, opt.SpawnAmount
             Notify(xDTaraZ.Ore.Spawn(oreId, amount) and ("Added %s %s"):format(xDTaraZ.Util.Abbreviate(amount), label) or "Could not find this ore, try again")
         end })
+    end
 
-        local raceBox = PlayerTab:AddLeftGroupbox(T("Race", "เผ่า"))
+    local function BuildPlayer(window)
+        window:AddTabSection(T("Misc", "อื่นๆ"))
+        local tab = window:AddTab(T("Player", "ผู้เล่น"), "player", T("Race, movement and session", "เผ่า การเคลื่อนที่ และเซสชัน"))
+
+        local race = tab:AddLeftGroupbox(T("Race", "เผ่า"), "egg")
         local raceLabels, raceIds = xDTaraZ.Race.Choices()
         opt.TargetRace = raceIds[raceLabels[1]]
-        raceBox:AddDropdown("TargetRace", {
-            Text = T("Target Race", "เผ่าที่ต้องการ"),
+        race:AddDropdown("TargetRace", {
+            Text = T("Target race", "เผ่าที่ต้องการ"),
+            Icon = "favorite",
             Values = raceLabels,
-            Default = 1,
+            Default = raceLabels[1],
             Callback = function(value)
                 opt.TargetRace = raceIds[value]
             end,
         })
-        Toggle(raceBox, "AutoRace", T("Auto Roll Race", "สุ่มเผ่าอัตโนมัติ"), T("Uses your race rolls until you get the chosen race", "สุ่มเผ่าจนกว่าจะได้เผ่าที่เลือก"), function(value)
-            if not value then
-                return
-            end
-            task.spawn(function()
-                local ok, outcome = pcall(xDTaraZ.Race.RollUntil, opt.TargetRace)
-                if ok and outcome == "got" then
-                    Notify("Got the race!")
-                elseif ok and outcome == "empty" then
-                    Notify("No race rolls left")
-                end
-                Options.AutoRace:SetValue(false)
-            end)
-        end)
-
-        local moveBox = PlayerTab:AddRightGroupbox(T("Movement", "การเคลื่อนที่"))
-        Toggle(moveBox, "SpeedOn", T("Speed", "ความเร็ว"), nil, xDTaraZ.Movement.Apply)
-        moveBox:AddSlider("WalkSpeed", {
-            Text = T("Walk Speed", "ความเร็วเดิน"),
-            Min = 16, Max = 200, Default = opt.WalkSpeed, Rounding = 0,
+        Feature(race, "AutoRace", {
+            Text = T("Auto Roll Race", "สุ่มเผ่าอัตโนมัติ"),
+            Description = T("Rolls until you get the chosen race", "สุ่มจนได้เผ่าที่เลือก"),
+            Icon = "refresh",
             Callback = function(value)
-                opt.WalkSpeed = value
-                xDTaraZ.Movement.Apply()
+                if not value then return end
+                task.spawn(function()
+                    local ok, outcome = pcall(xDTaraZ.Race.RollUntil, opt.TargetRace)
+                    if ok and outcome == "got" then
+                        Notify("Got the race!", "Success")
+                    elseif ok and outcome == "empty" then
+                        Notify("No race rolls left", "Warn")
+                    end
+                    Options.AutoRace:SetValue(false)
+                end)
             end,
         })
-        Toggle(moveBox, "InfJump", T("Infinite Jump", "กระโดดไม่จำกัด"))
 
-        local settingsTab = Window:AddSettingsTab()
-        local sessionBox = settingsTab:AddLeftGroupbox(T("Session", "เซสชัน"))
-        Toggle(sessionBox, "AutoRejoin", T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), T("Rejoins the game by itself after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"))
-        Toggle(sessionBox, "LowGraphics", T("FPS Boost", "เพิ่ม FPS"), T("Turns off 3D rendering to save CPU and GPU", "ปิดการแสดงผล 3D ประหยัด CPU/GPU"), xDTaraZ.Session.SetLowGraphics)
+        local move = tab:AddRightGroupbox(T("Movement", "การเคลื่อนที่"), "speed")
+        Feature(move, "SpeedOn", {
+            Text = T("Speed", "ความเร็ว"),
+            Icon = "speed",
+            Callback = xDTaraZ.Movement.Apply,
+            Options = function(sub)
+                sub:AddSlider("WalkSpeed", {
+                    Text = T("Walk speed", "ความเร็วเดิน"),
+                    Icon = "speed",
+                    Min = 16, Max = 200, Default = opt.WalkSpeed, Rounding = 0,
+                    Callback = Store("WalkSpeed", xDTaraZ.Movement.Apply),
+                })
+            end,
+        })
+        Feature(move, "InfJump", { Text = T("Infinite Jump", "กระโดดไม่จำกัด"), Icon = "infjump" })
 
-        local noteText = {
-            EnhantStone_1 = "farming enhance stones",
-            EnhantStone_2 = "farming rare enhance stones",
-            EnchStone = "farming enchant stones",
-            Coin = "farming coins",
-            Enhancing = "enhancing",
-            NoTicket = "need a tower ticket",
-            Done = "all at target",
-        }
+        local session = tab:AddRightGroupbox(T("Session", "เซสชัน"), "server")
+        Toggle(session, "AutoRejoin", { Text = T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), Description = T("Rejoins by itself after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"), Icon = "rejoin" })
+        Toggle(session, "LowGraphics", { Text = T("FPS Boost", "เพิ่ม FPS"), Description = T("Turns off 3D rendering to save CPU and GPU", "ปิดการแสดงผล 3D ประหยัด CPU/GPU"), Icon = "fpsboost", Callback = xDTaraZ.Session.SetLowGraphics })
+    end
+
+    local noteText = {
+        EnhantStone_1 = "Farming enhance stones",
+        EnhantStone_2 = "Farming rare enhance stones",
+        EnchStone = "Farming enchant stones",
+        Coin = "Farming coins",
+        Enhancing = "Enhancing",
+        NoTicket = "Need a tower ticket",
+        Done = "All at target",
+    }
+
+    local function UpdateLive()
+        local ok, profile = pcall(xDTaraZ.Data.Get)
+        if not (ok and profile) then return end
+
+        local eco = profile.Eco
+        Options.StatLevel:SetValue(eco.level)
+        Options.StatRebirth:SetValue(eco.rebirth)
+        Options.StatCoins:SetValue(eco.coin)
+        Options.StatTowerLoot:SetValue(State.TowerLoot)
+        Options.StatusGear:SetValue(xDTaraZ.Gear.EquippedNames(profile), "Idle")
+
+        local note = opt.MaxGear and noteText[State.GearNote]
+        if not opt.MaxGear then
+            Options.StatusTask:SetValue("Off", "Idle")
+        else
+            Options.StatusTask:SetValue(note or "Working", State.GearNote == "NoTicket" and "Warn" or "Running")
+        end
+    end
+
+    local function BuildTabs()
+        local window = Library.Window
+        RegisterIcons()
+        BuildMain(window)
+        BuildFarm(window)
+        BuildGear(window)
+        BuildProgress(window)
+        BuildPlayer(window)
+        window:AddSettingsTab()
 
         task.spawn(function()
             while State.Alive do
-                local ok, profile = pcall(xDTaraZ.Data.Get)
-                if ok and profile then
-                    local eco = profile.Eco
-                    local line = ("Level %d · Rebirth %d · Coins %s"):format(eco.level, eco.rebirth, xDTaraZ.Util.Abbreviate(eco.coin))
-                    if State.TowerLoot > 0 then
-                        line ..= ("\nTower loot x%d"):format(State.TowerLoot)
-                    end
-                    statusLabel:SetText(line)
-
-                    local gearLine = "Equipped: " .. xDTaraZ.Gear.EquippedNames(profile)
-                    local note = opt.MaxGear and noteText[State.GearNote]
-                    if note then
-                        gearLine ..= "\n" .. note
-                    end
-                    gearLabel:SetText(gearLine)
-                end
+                UpdateLive()
                 task.wait(Config.StatusInterval)
             end
         end)
-
     end
 
     Library:OnUnload(xDTaraZ.Scheduler.Stop)
@@ -1510,7 +1657,7 @@ local function BuildInterface()
         OnUnlocked = function()
             BuildTabs()
             xDTaraZ.Scheduler.Boot()
-            Notify("Loaded")
+            Notify("Loaded", "Success")
             Library:LoadAutoloadConfig()
         end,
     })

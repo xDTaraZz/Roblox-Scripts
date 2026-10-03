@@ -41,7 +41,7 @@ local PlayRewardUtil = require(Modules.Shared.PlayRewards.PlayRewardUtil)
 
 xDTaraZ.Config = {
     Discord = "https://discord.gg/FHVfmeSceA",
-    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
+    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui_v2.lua",
     SaveFolder = "Driving Empire",
     SpawnerCacheFile = "Driving Empire/atm_spawners.json",
     TickDelay = 0.5,
@@ -161,9 +161,9 @@ function xDTaraZ.Util.GuiRoot()
 end
 
 function xDTaraZ.Util.Stats()
-    if not State.Stats or not State.Stats.Parent then
-        State.Stats = Data.GetLoadedStatsFolder(LocalPlayer)
-    end
+    if State.Stats and State.Stats.Parent then return State.Stats end
+    local folder = LocalPlayer:FindFirstChild("PlayerGui") and LocalPlayer.PlayerGui:FindFirstChild(LocalPlayer.Name .. "'s Stats")
+    State.Stats = folder or Data.GetLoadedStatsFolder(LocalPlayer)
     return State.Stats
 end
 
@@ -940,242 +940,352 @@ function xDTaraZ.Scheduler.Stop()
     xDTaraZ.Esp.Refresh()
 end
 
-local function BuildInterface()
-    local Library = loadstring(xDTaraZ.Util.HttpGet(Config.UiSource))()
-    local T = function(en, th) return Library:T(en, th) end
-    local opt = State.Opt
+xDTaraZ.UI = {}
+local Library, T
 
-    local function Notify(text)
-        State.Messages[#State.Messages + 1] = text
+function xDTaraZ.UI.Notify(text)
+    State.Messages[#State.Messages + 1] = text
+end
+
+function xDTaraZ.UI.Spawn(action)
+    return function()
+        task.spawn(xDTaraZ.Util.Try, action)
     end
+end
 
-    local function Toggle(group, key, text, description, onChange, risky)
-        return group:AddToggle(key, {
-            Text = text,
-            Description = description,
-            Default = opt[key],
-            Risky = risky,
-            Callback = function(value)
-                opt[key] = value
-                if onChange then
-                    xDTaraZ.Util.Try(onChange, value)
-                end
-            end,
-        })
+---@param onChange function?  runs after State.Opt is updated
+function xDTaraZ.UI.Write(key, onChange)
+    return function(value)
+        State.Opt[key] = value
+        if onChange then xDTaraZ.Util.Try(onChange, value) end
     end
+end
 
-    local function Slider(group, key, text, description, min, max)
-        return group:AddSlider(key, {
-            Text = text,
-            Description = description,
-            Min = min, Max = max, Default = opt[key], Rounding = 0,
-            Callback = function(value)
-                opt[key] = tonumber(value) or opt[key]
-            end,
-        })
-    end
+function xDTaraZ.UI.RegisterIcons()
+    if Library:HasIcon("car") then return end
+    Library:AddIcon("car", {
+        ".........",
+        ".........",
+        "..RRRR...",
+        ".RWWRWR..",
+        "RRRRRRRRR",
+        "RRRRRRRRY",
+        "RKKRRRKKR",
+        ".KK...KK.",
+        ".........",
+    }, {
+        R = Color3.fromRGB(226, 60, 52),
+        W = Color3.fromRGB(170, 220, 255),
+        Y = Color3.fromRGB(255, 220, 90),
+        K = Color3.fromRGB(40, 40, 48),
+    })
+end
 
-    local function Spawn(action)
-        return function()
-            task.spawn(xDTaraZ.Util.Try, action)
+---@return string, string  status text, status kind
+function xDTaraZ.UI.AtmStatus()
+    if not State.Opt.AtmFarm then return "Off", "Idle" end
+    local crimes = xDTaraZ.Atm.Crimes()
+    if crimes >= State.Opt.CashOutCrimes then return "Cashing out", "Busy" end
+    return ("Robbing · %d stars"):format(crimes), "Running"
+end
+
+function xDTaraZ.UI.BuildMain(window)
+    window:AddTabSection(T("Main", "หลัก"))
+    local tab = window:AddTab(T("Main", "หลัก"), "mushroom", T("Status and links", "สถานะและลิงก์"))
+
+    local status = tab:AddLeftGroupbox(T("Status", "สถานะ"), "stats")
+    status:AddStatus("StatusAtm", { Text = T("ATM Farm", "ฟาร์ม ATM"), Icon = "money" })
+    status:AddStatus("StatusDrive", { Text = T("Auto Drive", "ขับรถอัตโนมัติ"), Icon = "car" })
+    status:AddStatus("StatusJob", { Text = T("Job", "อาชีพ"), Icon = "quest" })
+
+    local live = tab:AddLeftGroupbox(T("Live", "ตัวเลขสด"), "chart")
+    live:AddStat("StatCash", { Text = T("Cash", "เงิน"), Icon = "money", Format = "$%s", Token = "Coin" })
+    live:AddStat("StatRobbed", { Text = T("ATMs robbed", "ATM ที่ปล้น"), Icon = "loot", Format = "%s" })
+    live:AddStat("StatWanted", { Text = T("Cash on you", "เงินที่ถืออยู่"), Icon = "warn", Format = "$%s" })
+    live:AddStat("StatCashedOut", { Text = T("Cashed out", "ส่งเงินแล้ว"), Icon = "success", Format = "$%s", Token = "Good" })
+    live:AddStat("StatSpots", { Text = T("ATM spots known", "จุด ATM ที่รู้"), Icon = "map", Format = "%s" })
+
+    local quick = tab:AddRightGroupbox(T("Quick", "ด่วน"), "lightning")
+    quick:AddButton({ Text = T("Panic - All Off", "ฉุกเฉิน ปิดทั้งหมด"), Icon = "stop", Style = "Danger", Callback = function()
+        for _, toggle in pairs(Library.Toggles) do
+            if toggle.Value == true then toggle:SetValue(false) end
         end
-    end
+    end })
 
-    local function BuildTabs()
-        local Window = Library.Window
-        Window:AddTabSection(T("Main", "หลัก"))
-        local FarmTab = Window:AddTab(T("Farm", "ฟาร์ม"), "zap", T("Money farming", "ฟาร์มเงิน"))
-        local RewardTab = Window:AddTab(T("Rewards", "รางวัล"), "bell", T("Codes and claims", "โค้ดและรับรางวัล"))
-        local CarTab = Window:AddTab(T("Vehicle", "รถ"), "play", T("Cars and driving", "รถและการขับ"))
-        local TeleportTab = Window:AddTab(T("Teleport", "วาร์ป"), "globe", T("Go anywhere", "ไปได้ทุกที่"))
-        local PlayerTab = Window:AddTab(T("Player", "ผู้เล่น"), "user", T("Movement", "การเคลื่อนที่"))
-        local VisualTab = Window:AddTab(T("Visuals", "ภาพ"), "eye", T("ESP", "ESP"))
+    Library.Kit.Discord.Build(tab, Config.Discord)
+end
 
-        local statusBox = FarmTab:AddLeftGroupbox(T("Status", "สถานะ"))
-        local statusLabel = statusBox:AddLabel("Loading...", true)
-
-        local atmBox = FarmTab:AddLeftGroupbox(T("ATM Farm", "ฟาร์ม ATM"))
-        Toggle(atmBox, "AtmFarm", T("Auto ATM Farm", "ฟาร์ม ATM อัตโนมัติ"), T("Robs every ATM on the map with the full crime bonus, then cashes out", "ปล้น ATM ทุกตู้ในแมพพร้อมโบนัสอาชญากรรมเต็ม แล้วส่งเงิน"), nil, true)
-        Toggle(atmBox, "HopWhenEmpty", T("Server Hop When Empty", "ย้ายเซิร์ฟเมื่อ ATM หมด"), T("Moves to a new server once every ATM is taken", "ย้ายไปเซิร์ฟใหม่เมื่อ ATM ถูกปล้นหมดแล้ว"))
-        Toggle(atmBox, "AvoidCops", T("Avoid Police", "หลบตำรวจ"), T("Skips ATMs with police standing close", "ข้าม ATM ที่มีตำรวจอยู่ใกล้"))
-        Slider(atmBox, "CashOutCrimes", T("Cash Out At Robberies", "ส่งเงินเมื่อปล้นครบ"), T("Banks the loot after this many robberies (higher = more risk)", "ส่งเงินหลังปล้นครบจำนวนนี้ (ยิ่งมากยิ่งเสี่ยง)"), 5, 30)
-        atmBox:AddButton({ Text = T("Rob Nearest ATM", "ปล้น ATM ที่ใกล้ที่สุด"), Style = "Primary", Func = Spawn(function()
+function xDTaraZ.UI.BuildAtm(tab)
+    local opt = State.Opt
+    local atm = tab:AddLeftGroupbox(T("ATM Farm", "ฟาร์ม ATM"), "money")
+    atm:AddFeature("AtmFarm", {
+        Text = T("Auto ATM Farm", "ฟาร์ม ATM อัตโนมัติ"),
+        Description = T("Robs every ATM on the map, then cashes out", "ปล้น ATM ทุกตู้ในแมพ แล้วส่งเงิน"),
+        Icon = "money",
+        Risky = true,
+        Badge = T("Risky", "เสี่ยง"),
+        Keybind = { Default = "None", Mode = "Toggle" },
+        Callback = xDTaraZ.UI.Write("AtmFarm"),
+        Now = { Text = T("Rob Nearest", "ปล้นตู้ใกล้สุด"), Icon = "loot", Callback = xDTaraZ.UI.Spawn(function()
             xDTaraZ.Jobs.Start("Criminal")
-            local atm = xDTaraZ.Atm.NearestAvailable()
-            if not atm then
-                Notify("No ATM nearby")
+            local target = xDTaraZ.Atm.NearestAvailable()
+            if not target then
+                xDTaraZ.UI.Notify("No ATM nearby")
                 return
             end
-            local ok, reason = xDTaraZ.Atm.Bust(atm)
-            Notify(ok and "ATM robbed" or ("Failed: " .. tostring(reason)))
-        end) }):AddButton({ Text = T("Cash Out Now", "ส่งเงินเดี๋ยวนี้"), Func = Spawn(function()
-            local ok, gained = xDTaraZ.Atm.CashOut()
-            Notify(ok and ("Cashed out $" .. xDTaraZ.Util.Commas(gained)) or "Need 5 stars first")
-        end) })
-        atmBox:AddButton({ Text = T("Scan Map For ATMs", "สแกนหา ATM ทั้งแมพ"), Func = Spawn(function()
-            Notify(("Found %d ATM spots"):format(xDTaraZ.Atm.Sweep()))
-        end) })
+            local ok, reason = xDTaraZ.Atm.Bust(target)
+            xDTaraZ.UI.Notify(ok and "ATM robbed" or ("Failed: " .. tostring(reason)))
+        end) },
+        Options = function(options)
+            options:AddToggle("HopWhenEmpty", { Text = T("Hop when empty", "ย้ายเซิร์ฟเมื่อ ATM หมด"), Icon = "hop", Callback = xDTaraZ.UI.Write("HopWhenEmpty") })
+            options:AddToggle("AvoidCops", { Text = T("Avoid police", "หลบตำรวจ"), Icon = "shield", Callback = xDTaraZ.UI.Write("AvoidCops") })
+        end,
+    })
+    atm:AddStepper("CashOutCrimes", {
+        Text = T("Cash out at robberies", "ส่งเงินเมื่อปล้นครบ"),
+        Description = T("Higher = more cash per trip, more risk", "ยิ่งมากยิ่งได้ต่อรอบ แต่เสี่ยงขึ้น"),
+        Icon = "trophy",
+        Min = 5, Max = 30, Step = 1, Default = opt.CashOutCrimes,
+        Callback = function(value) opt.CashOutCrimes = tonumber(value) or opt.CashOutCrimes end,
+    })
+    atm:AddButton({ Text = T("Cash Out Now", "ส่งเงินเดี๋ยวนี้"), Icon = "money", Style = "Success", Callback = xDTaraZ.UI.Spawn(function()
+        local ok, gained = xDTaraZ.Atm.CashOut()
+        xDTaraZ.UI.Notify(ok and ("Cashed out $" .. xDTaraZ.Util.Commas(gained)) or "Need 5 stars first")
+    end) }):AddButton({ Text = T("Scan Map", "สแกนแมพ"), Icon = "radar", Style = "Ghost", Callback = xDTaraZ.UI.Spawn(function()
+        xDTaraZ.UI.Notify(("Found %d ATM spots"):format(xDTaraZ.Atm.Sweep()))
+    end) })
+end
 
-        local discordBox = FarmTab:AddRightGroupbox("Discord", "link")
-        discordBox:AddLabel(Config.Discord)
-        discordBox:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ Discord"), Style = "Primary", Func = function()
-            local copy = setclipboard or toclipboard
-            if copy then copy(Config.Discord) end
-            Notify(copy and "Discord link copied" or Config.Discord)
-        end })
+function xDTaraZ.UI.BuildFarm(window)
+    window:AddTabSection(T("Farming", "ฟาร์ม"))
+    local tab = window:AddTab(T("Farm", "ฟาร์ม"), "autofarm", T("ATMs, jobs and driving", "ATM อาชีพ และขับรถ"))
+    xDTaraZ.UI.BuildAtm(tab)
 
-        local jobBox = FarmTab:AddRightGroupbox(T("Jobs", "อาชีพ"))
-        jobBox:AddDropdown("JobPick", {
-            Text = T("Switch Job", "เปลี่ยนอาชีพ"),
-            Values = { "Criminal", "Security", "Delivery" },
-            Default = 1,
-            Callback = function(value)
-                opt.JobPick = value
-            end,
-        })
-        jobBox:AddButton({ Text = T("Start Job", "เริ่มงาน"), Style = "Primary", Func = Spawn(function()
-            Notify(xDTaraZ.Jobs.Start(opt.JobPick or "Criminal") and "Job started" or "Could not start job")
-        end) }):AddButton({ Text = T("Quit Job", "ออกจากงาน"), Func = Spawn(xDTaraZ.Jobs.Leave) })
+    local drive = tab:AddRightGroupbox(T("Drive Farm", "ฟาร์มขับรถ"), "car")
+    drive:AddFeature("DriveFarm", {
+        Text = T("Auto Drive", "ขับรถอัตโนมัติ"),
+        Description = T("Drives laps on its own for cash", "ขับวนเองเพื่อรับเงิน"),
+        Icon = "car",
+        Keybind = { Default = "None", Mode = "Toggle" },
+        Callback = xDTaraZ.UI.Write("DriveFarm", function(on)
+            if not on then return xDTaraZ.Drive.Stop() end
+            if not xDTaraZ.Drive.Start() then xDTaraZ.UI.Notify("No car to drive") end
+        end),
+    })
 
-        local driveBox = FarmTab:AddRightGroupbox(T("Drive Farm", "ฟาร์มขับรถ"))
-        Toggle(driveBox, "DriveFarm", T("Auto Drive", "ขับรถอัตโนมัติ"), T("Drives laps on its own for passive cash", "ขับวนเองเพื่อรับเงินจากการขับ"), function(value)
-            if value then
-                if not xDTaraZ.Drive.Start() then
-                    Notify("No car to drive")
-                end
-            else
-                xDTaraZ.Drive.Stop()
-            end
-        end)
+    local jobs = tab:AddRightGroupbox(T("Jobs", "อาชีพ"), "quest")
+    jobs:AddSegmented("JobPick", {
+        Text = T("Job", "อาชีพ"),
+        Icon = "players",
+        Values = { "Criminal", "Security", "Delivery" },
+        Default = "Criminal",
+        Callback = xDTaraZ.UI.Write("JobPick"),
+    })
+    jobs:AddButton({ Text = T("Start Job", "เริ่มงาน"), Icon = "play", Style = "Primary", Callback = xDTaraZ.UI.Spawn(function()
+        xDTaraZ.UI.Notify(xDTaraZ.Jobs.Start(State.Opt.JobPick or "Criminal") and "Job started" or "Could not start job")
+    end) }):AddButton({ Text = T("Quit Job", "ออกจากงาน"), Icon = "close", Callback = xDTaraZ.UI.Spawn(xDTaraZ.Jobs.Leave) })
+end
 
-        local codeBox = RewardTab:AddLeftGroupbox(T("Codes", "โค้ด"))
-        codeBox:AddButton({ Text = T("Redeem All Codes", "ใช้โค้ดทั้งหมด"), Style = "Primary", Func = Spawn(function()
-            local count, cash = xDTaraZ.Rewards.RedeemCodes(Config.Codes)
-            Notify(("Redeemed %d new codes (+$%s)"):format(count, xDTaraZ.Util.Commas(cash)))
-        end) })
-        codeBox:AddInput("Code", {
-            Text = T("Custom Code", "ใส่โค้ดเอง"),
-            Default = "",
-            Finished = true,
-            NoSave = true,
-            Callback = function(value)
-                opt.Code = value
-            end,
-        })
-        codeBox:AddButton({ Text = T("Redeem", "ใช้โค้ด"), Func = Spawn(function()
-            local count = xDTaraZ.Rewards.RedeemCodes({ opt.Code })
-            Notify(count > 0 and "Code redeemed" or "Code invalid or already used")
-        end) })
+function xDTaraZ.UI.BuildRewards(window)
+    local tab = window:AddTab(T("Rewards", "รางวัล"), "loot", T("Codes and claims", "โค้ดและรับรางวัล"))
 
-        local claimBox = RewardTab:AddRightGroupbox(T("Claims", "รับรางวัล"))
-        Toggle(claimBox, "AutoPlaytime", T("Auto Playtime Rewards", "รับรางวัลเวลาเล่นอัตโนมัติ"), T("Claims cash, cars and packs as soon as they unlock", "รับเงิน รถ และแพ็กทันทีที่ปลดล็อก"))
-        Toggle(claimBox, "AutoClaimMisc", T("Auto Claim Pending", "รับรางวัลค้างอัตโนมัติ"), T("Claims pending race and event rewards", "รับรางวัลแข่งและอีเวนต์ที่ค้างอยู่"))
-        claimBox:AddButton({ Text = T("Claim All Now", "รับทั้งหมดเดี๋ยวนี้"), Style = "Primary", Func = Spawn(function()
+    local claims = tab:AddLeftGroupbox(T("Claims", "รับรางวัล"), "loot")
+    claims:AddFeature("AutoPlaytime", {
+        Text = T("Auto Playtime Rewards", "รับรางวัลเวลาเล่นอัตโนมัติ"),
+        Description = T("Cash, cars and packs as soon as they unlock", "เงิน รถ และแพ็กทันทีที่ปลดล็อก"),
+        Icon = "clock",
+        Callback = xDTaraZ.UI.Write("AutoPlaytime"),
+        Now = { Text = T("Claim All Now", "รับทั้งหมดเดี๋ยวนี้"), Icon = "loot", Callback = xDTaraZ.UI.Spawn(function()
             local count = xDTaraZ.Rewards.ClaimPlaytime()
             xDTaraZ.Rewards.ClaimMisc()
-            Notify(("Claimed %d playtime rewards"):format(count))
-        end) })
+            xDTaraZ.UI.Notify(("Claimed %d playtime rewards"):format(count))
+        end) },
+    })
+    claims:AddToggle("AutoClaimMisc", {
+        Text = T("Auto Claim Pending", "รับรางวัลค้างอัตโนมัติ"),
+        Description = T("Race and event rewards", "รางวัลแข่งและอีเวนต์"),
+        Icon = "trophy",
+        Callback = xDTaraZ.UI.Write("AutoClaimMisc"),
+    })
 
-        local owned = xDTaraZ.Vehicle.Owned()
-        opt.DriveCar = owned[1]
-        local carBox = CarTab:AddLeftGroupbox(T("Garage", "โรงรถ"))
-        local carDropdown = carBox:AddDropdown("DriveCar", {
-            Text = T("Car", "รถ"),
-            Values = owned,
-            Default = 1,
-            Searchable = true,
-            Callback = function(value)
-                opt.DriveCar = value
-            end,
-        })
-        carBox:AddButton({ Text = T("Spawn Car", "เรียกรถ"), Style = "Primary", Func = Spawn(function()
-            Notify(xDTaraZ.Vehicle.Spawn(opt.DriveCar) and "Car spawned" or "Spawn failed")
-        end) }):AddButton({ Text = T("Despawn", "เก็บรถ"), Func = Spawn(xDTaraZ.Vehicle.Despawn) })
-        carBox:AddButton({ Text = T("Refresh Garage", "รีเฟรชโรงรถ"), Func = function()
-            carDropdown:SetValues(xDTaraZ.Vehicle.Owned())
-        end })
+    local codes = tab:AddRightGroupbox(T("Codes", "โค้ด"), "code")
+    codes:AddButton({ Text = T("Redeem All Codes", "ใช้โค้ดทั้งหมด"), Icon = "code", Style = "Primary", Callback = xDTaraZ.UI.Spawn(function()
+        local count, cash = xDTaraZ.Rewards.RedeemCodes(Config.Codes)
+        xDTaraZ.UI.Notify(("Redeemed %d new codes (+$%s)"):format(count, xDTaraZ.Util.Commas(cash)))
+    end) })
+    codes:AddInput("Code", {
+        Text = T("Custom code", "ใส่โค้ดเอง"),
+        Icon = "edit",
+        Default = "",
+        Finished = true,
+        Save = false,
+        Callback = xDTaraZ.UI.Write("Code"),
+    })
+    codes:AddButton({ Text = T("Redeem", "ใช้โค้ด"), Icon = "check", Callback = xDTaraZ.UI.Spawn(function()
+        local count = xDTaraZ.Rewards.RedeemCodes({ State.Opt.Code })
+        xDTaraZ.UI.Notify(count > 0 and "Code redeemed" or "Code invalid or already used")
+    end) })
+end
 
-        local tuneBox = CarTab:AddRightGroupbox(T("Performance", "สมรรถนะ"))
-        Slider(tuneBox, "CarSpeed", T("Car Speed Boost", "เร่งความเร็วรถ"), T("Holds this speed while pressing W (0 = off)", "คงความเร็วนี้ขณะกด W (0 = ปิด)"), 0, 600)
+function xDTaraZ.UI.BuildVehicle(window)
+    local tab = window:AddTab(T("Vehicle", "รถ"), "car", T("Garage and speed", "โรงรถและความเร็ว"))
+    local owned = xDTaraZ.Vehicle.Owned()
+    State.Opt.DriveCar = owned[1]
 
-        local destNames, destinations = xDTaraZ.Teleport.Destinations()
-        local placeBox = TeleportTab:AddLeftGroupbox(T("Places", "สถานที่"))
-        local placeDropdown = placeBox:AddDropdown("Place", {
-            Text = T("Destination", "จุดหมาย"),
-            Values = destNames,
-            Default = 1,
-            Searchable = true,
-            Callback = function(value)
-                opt.Place = value
-            end,
-        })
-        placeBox:AddButton({ Text = T("Teleport", "วาร์ป"), Style = "Primary", Func = Spawn(function()
-            xDTaraZ.Teleport.Go(destinations[opt.Place or destNames[1]])
-        end) }):AddButton({ Text = T("Refresh", "รีเฟรช"), Func = function()
-            destNames, destinations = xDTaraZ.Teleport.Destinations()
-            placeDropdown:SetValues(destNames)
-        end })
+    local garage = tab:AddLeftGroupbox(T("Garage", "โรงรถ"), "car")
+    local picker = garage:AddDropdown("DriveCar", {
+        Text = T("Car", "รถ"),
+        Icon = "car",
+        Values = owned,
+        Default = owned[1],
+        Searchable = true,
+        Callback = xDTaraZ.UI.Write("DriveCar"),
+    })
+    garage:AddButton({ Text = T("Spawn", "เรียกรถ"), Icon = "play", Style = "Primary", Callback = xDTaraZ.UI.Spawn(function()
+        xDTaraZ.UI.Notify(xDTaraZ.Vehicle.Spawn(State.Opt.DriveCar) and "Car spawned" or "Spawn failed")
+    end) }):AddButton({ Text = T("Despawn", "เก็บรถ"), Icon = "trash", Callback = xDTaraZ.UI.Spawn(xDTaraZ.Vehicle.Despawn) })
+    garage:AddButton({ Text = T("Refresh Garage", "รีเฟรชโรงรถ"), Icon = "refresh", Style = "Ghost", Callback = function()
+        picker:SetValues(xDTaraZ.Vehicle.Owned())
+    end })
 
-        local function PlayerNames()
-            local names = {}
-            for _, other in ipairs(Players:GetPlayers()) do
-                if other ~= LocalPlayer then
-                    table.insert(names, other.Name)
-                end
-            end
-            return names
-        end
-        local playerBox = TeleportTab:AddRightGroupbox(T("Players", "ผู้เล่น"))
-        local playerDropdown = playerBox:AddDropdown("TargetPlayer", {
-            Text = T("Player", "ผู้เล่น"),
-            Values = PlayerNames(),
-            Searchable = true,
-            Callback = function(value)
-                opt.TargetPlayer = value
-            end,
-        })
-        playerBox:AddButton({ Text = T("Teleport To Player", "วาร์ปไปหาผู้เล่น"), Style = "Primary", Func = Spawn(function()
-            xDTaraZ.Teleport.ToPlayer(opt.TargetPlayer)
-        end) }):AddButton({ Text = T("Refresh", "รีเฟรช"), Func = function()
-            playerDropdown:SetValues(PlayerNames())
-        end })
+    local tune = tab:AddRightGroupbox(T("Performance", "สมรรถนะ"), "speed")
+    tune:AddSlider("CarSpeed", {
+        Text = T("Car speed boost", "เร่งความเร็วรถ"),
+        Description = T("Holds this speed while pressing W (0 = off)", "คงความเร็วนี้ขณะกด W (0 = ปิด)"),
+        Icon = "speed",
+        Min = 0, Max = 600, Default = State.Opt.CarSpeed, Rounding = 0,
+        Callback = function(value) State.Opt.CarSpeed = tonumber(value) or 0 end,
+    })
+end
 
-        local moveBox = PlayerTab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"))
-        Toggle(moveBox, "SpeedEnabled", T("Custom Speed", "ปรับความเร็วเอง"), T("Uses the speed and jump below while on foot", "ใช้ความเร็วและแรงกระโดดด้านล่างตอนเดิน"), function(value)
-            if not value then
-                xDTaraZ.Movement.ResetSpeed()
-            end
-        end)
-        Slider(moveBox, "WalkSpeed", T("Walk Speed", "ความเร็วเดิน"), nil, 16, 200)
-        Slider(moveBox, "JumpPower", T("Jump Power", "แรงกระโดด"), nil, 50, 300)
-        Toggle(moveBox, "Noclip", T("Noclip", "ทะลุวัตถุ"), T("Walk through walls", "เดินทะลุกำแพง"))
-        Toggle(moveBox, "InfiniteJump", T("Infinite Jump", "กระโดดไม่จำกัด"), T("Jump again in mid air", "กระโดดซ้ำกลางอากาศได้"))
-
-        local worldBox = PlayerTab:AddRightGroupbox(T("World", "โลก"))
-        Toggle(worldBox, "Fullbright", T("Fullbright", "สว่างเต็มจอ"), T("Always daylight", "กลางวันตลอด"), xDTaraZ.Movement.SetFullbright)
-
-        local espBox = VisualTab:AddLeftGroupbox(T("ESP", "ESP"))
-        Toggle(espBox, "EspAtm", T("ATMs", "ATM"), T("Shows every ATM you can rob with its rarity", "โชว์ ATM ที่ปล้นได้ทุกตู้พร้อมระดับ"))
-        Toggle(espBox, "EspCops", T("Players By Job", "ผู้เล่นตามอาชีพ"), T("Blue = police, red = outlaw, orange = delivery", "น้ำเงิน = ตำรวจ, แดง = โจร, ส้ม = ส่งของ"))
-        Toggle(espBox, "EspDropOff", T("Drop-off Points", "จุดส่งเงิน"), T("Where outlaws cash out", "จุดที่โจรไปส่งเงิน"))
-
-        local settingsTab = Window:AddSettingsTab()
-        local sessionBox = settingsTab:AddLeftGroupbox(T("Session", "เซสชัน"))
-        Toggle(sessionBox, "AntiAfk", T("Anti AFK", "กันหลุด AFK"), T("Never get kicked for idling", "ไม่โดนเตะเพราะยืนนิ่ง"))
-        Toggle(sessionBox, "AutoRejoin", T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), T("Rejoins after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"))
-        sessionBox:AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), Func = Spawn(xDTaraZ.Session.Hop) })
-
-        Library:Every(1, function()
-            while #State.Messages > 0 do
-                Library:Notify("Driving Empire", table.remove(State.Messages, 1), 5)
-            end
-            local session = State.AtmSession
-            statusLabel:SetText(("Cash $%s · Job %s · Stars %d\nATMs robbed %d · Wanted cash $%s · Cashed out $%s\nATM spots known %d"):format(
-                xDTaraZ.Util.Commas(xDTaraZ.Util.Cash()), tostring(xDTaraZ.Jobs.Current() or "Citizen"), xDTaraZ.Atm.Crimes(),
-                session.Busted, xDTaraZ.Util.Commas((xDTaraZ.Player.Character() and xDTaraZ.Player.Character():GetAttribute("CurrencyEarned")) or 0),
-                xDTaraZ.Util.Commas(session.CashedOut), xDTaraZ.Atm.SpawnerCount()))
-        end)
+local function PlayerNames()
+    local names = {}
+    for _, other in ipairs(Players:GetPlayers()) do
+        if other ~= LocalPlayer then table.insert(names, other.Name) end
     end
+    return names
+end
+
+function xDTaraZ.UI.BuildTeleport(window)
+    local tab = window:AddTab(T("Teleport", "วาร์ป"), "teleport", T("Go anywhere", "ไปได้ทุกที่"))
+    local destNames, destinations = xDTaraZ.Teleport.Destinations()
+
+    local places = tab:AddLeftGroupbox(T("Places", "สถานที่"), "waypoint")
+    local placePicker = places:AddDropdown("Place", {
+        Text = T("Destination", "จุดหมาย"),
+        Icon = "map",
+        Values = destNames,
+        Default = destNames[1],
+        Searchable = true,
+        Callback = xDTaraZ.UI.Write("Place"),
+    })
+    places:AddButton({ Text = T("Teleport", "วาร์ป"), Icon = "teleport", Style = "Primary", Callback = xDTaraZ.UI.Spawn(function()
+        xDTaraZ.Teleport.Go(destinations[State.Opt.Place or destNames[1]])
+    end) }):AddButton({ Text = T("Refresh", "รีเฟรช"), Icon = "refresh", Style = "Ghost", Callback = function()
+        destNames, destinations = xDTaraZ.Teleport.Destinations()
+        placePicker:SetValues(destNames)
+    end })
+
+    local people = tab:AddRightGroupbox(T("Players", "ผู้เล่น"), "players")
+    local playerPicker = people:AddDropdown("TargetPlayer", {
+        Text = T("Player", "ผู้เล่น"),
+        Icon = "player",
+        Values = PlayerNames(),
+        Searchable = true,
+        AllowNull = true,
+        Save = false,
+        Callback = xDTaraZ.UI.Write("TargetPlayer"),
+    })
+    people:AddButton({ Text = T("Teleport To Player", "วาร์ปไปหาผู้เล่น"), Icon = "follow", Style = "Primary", Callback = xDTaraZ.UI.Spawn(function()
+        xDTaraZ.Teleport.ToPlayer(State.Opt.TargetPlayer)
+    end) }):AddButton({ Text = T("Refresh", "รีเฟรช"), Icon = "refresh", Style = "Ghost", Callback = function()
+        playerPicker:SetValues(PlayerNames())
+    end })
+end
+
+function xDTaraZ.UI.BuildPlayer(window)
+    local opt = State.Opt
+    local tab = window:AddTab(T("Player", "ผู้เล่น"), "player", T("Movement, world and server", "การเคลื่อนที่ โลก และเซิร์ฟ"))
+
+    local move = tab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "speed")
+    move:AddFeature("SpeedEnabled", {
+        Text = T("Custom Speed", "ปรับความเร็วเอง"),
+        Description = T("Walk speed and jump while on foot", "ความเร็วเดินและแรงกระโดดตอนเดิน"),
+        Icon = "speed",
+        Keybind = { Default = "None", Mode = "Toggle" },
+        Callback = xDTaraZ.UI.Write("SpeedEnabled", function(on)
+            if not on then xDTaraZ.Movement.ResetSpeed() end
+        end),
+        Options = function(options)
+            options:AddSlider("WalkSpeed", { Text = T("Walk speed", "ความเร็วเดิน"), Icon = "speed", Min = 16, Max = 200, Default = opt.WalkSpeed, Rounding = 0, Callback = function(value) opt.WalkSpeed = tonumber(value) or opt.WalkSpeed end })
+            options:AddSlider("JumpPower", { Text = T("Jump power", "แรงกระโดด"), Icon = "jump", Min = 50, Max = 300, Default = opt.JumpPower, Rounding = 0, Callback = function(value) opt.JumpPower = tonumber(value) or opt.JumpPower end })
+        end,
+    })
+    move:AddToggle("Noclip", { Text = T("Noclip", "ทะลุวัตถุ"), Icon = "noclip", Callback = xDTaraZ.UI.Write("Noclip") })
+    move:AddToggle("InfiniteJump", { Text = T("Infinite Jump", "กระโดดไม่จำกัด"), Icon = "infjump", Callback = xDTaraZ.UI.Write("InfiniteJump") })
+
+    local world = tab:AddRightGroupbox(T("World", "โลก"), "sun")
+    world:AddToggle("Fullbright", { Text = T("Fullbright", "สว่างเต็มจอ"), Icon = "fullbright", Callback = xDTaraZ.UI.Write("Fullbright", xDTaraZ.Movement.SetFullbright) })
+
+    local server = tab:AddRightGroupbox(T("Server", "เซิร์ฟเวอร์"), "server")
+    server:AddToggle("AntiAfk", { Text = T("Anti AFK", "กันหลุด AFK"), Icon = "antiafk", Callback = xDTaraZ.UI.Write("AntiAfk") })
+    server:AddToggle("AutoRejoin", { Text = T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), Icon = "rejoin", Callback = xDTaraZ.UI.Write("AutoRejoin") })
+    server:AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), Icon = "hop", Callback = xDTaraZ.UI.Spawn(xDTaraZ.Session.Hop) })
+end
+
+function xDTaraZ.UI.BuildVisuals(window)
+    local tab = window:AddTab(T("Visuals", "การมองเห็น"), "esp", T("ATMs, players and drop-offs", "ATM ผู้เล่น และจุดส่งเงิน"))
+    local esp = tab:AddLeftGroupbox(T("ESP", "ESP"), "esp")
+    esp:AddToggle("EspAtm", { Text = T("ATMs", "ATM"), Description = T("Every ATM you can rob with its rarity", "ATM ที่ปล้นได้ทุกตู้พร้อมระดับ"), Icon = "money", Callback = xDTaraZ.UI.Write("EspAtm") })
+    esp:AddToggle("EspCops", { Text = T("Players By Job", "ผู้เล่นตามอาชีพ"), Description = T("Blue = police, red = outlaw, orange = delivery", "น้ำเงิน = ตำรวจ, แดง = โจร, ส้ม = ส่งของ"), Icon = "players", Callback = xDTaraZ.UI.Write("EspCops") })
+    esp:AddToggle("EspDropOff", { Text = T("Drop-off Points", "จุดส่งเงิน"), Description = T("Where outlaws cash out", "จุดที่โจรไปส่งเงิน"), Icon = "waypoint", Callback = xDTaraZ.UI.Write("EspDropOff") })
+end
+
+function xDTaraZ.UI.Live()
+    local status = Library.Lib.Status
+    local session = State.AtmSession
+    status("StatusAtm", xDTaraZ.UI.AtmStatus, 1)
+    status("StatusDrive", function()
+        if not State.Opt.DriveFarm then return "Off", "Idle" end
+        return "Driving", "Running"
+    end, 1)
+    status("StatusJob", function() return tostring(xDTaraZ.Jobs.Current() or "Citizen"), "Idle" end, 1)
+
+    status("StatCash", xDTaraZ.Util.Cash, 1)
+    status("StatRobbed", function() return session.Busted end, 1)
+    status("StatWanted", function()
+        local char = xDTaraZ.Player.Character()
+        return char and char:GetAttribute("CurrencyEarned") or 0
+    end, 1)
+    status("StatCashedOut", function() return session.CashedOut end, 1)
+    status("StatSpots", xDTaraZ.Atm.SpawnerCount, 5)
+
+    Library:Every(1, function()
+        while #State.Messages > 0 do
+            Library:Notify("Driving Empire", table.remove(State.Messages, 1), 5)
+        end
+    end)
+end
+
+function xDTaraZ.UI.Build()
+    local window = Library.Window
+    xDTaraZ.UI.RegisterIcons()
+    xDTaraZ.UI.BuildMain(window)
+    xDTaraZ.UI.BuildFarm(window)
+    xDTaraZ.UI.BuildRewards(window)
+
+    window:AddTabSection(T("Misc", "อื่นๆ"))
+    xDTaraZ.UI.BuildVehicle(window)
+    xDTaraZ.UI.BuildTeleport(window)
+    xDTaraZ.UI.BuildPlayer(window)
+    xDTaraZ.UI.BuildVisuals(window)
+    window:AddSettingsTab()
+    xDTaraZ.UI.Live()
+end
+
+local function BuildInterface()
+    Library = loadstring(xDTaraZ.Util.HttpGet(Config.UiSource))()
+    T = function(en, th) return Library:T(en, th) end
 
     Library:OnUnload(xDTaraZ.Scheduler.Stop)
     getgenv().DrivingEmpireUnload = function()
@@ -1189,10 +1299,11 @@ local function BuildInterface()
         ConfigFolder = Config.SaveFolder,
         Language = "Auto",
         Theme = "Overworld",
+        Intro = true,
         OnUnlocked = function()
-            BuildTabs()
+            xDTaraZ.UI.Build()
             xDTaraZ.Scheduler.Boot()
-            Notify("Loaded")
+            xDTaraZ.UI.Notify("Loaded")
             Library:LoadAutoloadConfig()
         end,
     })

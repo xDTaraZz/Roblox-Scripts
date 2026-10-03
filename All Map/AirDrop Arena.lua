@@ -40,7 +40,7 @@ local xDTaraZ = setmetatable({}, {
 })
 
 xDTaraZ.Config = {
-    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
+    UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui_v2.lua",
     Discord = "https://discord.gg/FHVfmeSceA",
     SaveFolder = "AirDrop Arena",
     Intro = true,
@@ -1225,7 +1225,7 @@ function xDTaraZ.Scheduler.Boot()
     xDTaraZ:Connect(RunService.Heartbeat, xDTaraZ.Scheduler.Step)
 end
 
-xDTaraZ.UI = { Labels = {} }
+xDTaraZ.UI = {}
 local Library, T
 
 function xDTaraZ.UI.Detach(fn)
@@ -1244,186 +1244,326 @@ function xDTaraZ.UI.Bind(widget, key)
     widget:OnChanged(Apply)
 end
 
----@param cap string  key in xDTaraZ.Caps
-function xDTaraZ.UI.NeedCap(idx, cap)
-    if xDTaraZ.Caps[cap] then return end
-    local option = Library.Options[idx]
-    if not option then return end
-    option:OnChanged(function(on)
-        if not on then return end
-        local title = option.Row and option.Row.Title
-        Library:Notify("Mario Hub", (title and title.Text or idx) .. " is not supported on this executor", 5, "Warning")
-        task.defer(function() option:SetValue(false) end)
-    end)
+---@return string  status kind for AddStatus
+function xDTaraZ.UI.Kind(text)
+    if text == nil or text == "" or text == "-" or text == "Off" then return "Idle" end
+    if string.find(text, "unknown", 1, true) then return "Waiting" end
+    return "Running"
+end
+
+---@param got number   items taken
+---@param none string  shown when nothing was taken
+function xDTaraZ.UI.Report(title, got, done, none)
+    if got > 0 then
+        Library:Notify(title, done:format(got), 4, "Success")
+    else
+        Library:Notify(title, none, 4, "Info")
+    end
+end
+
+function xDTaraZ.UI.LootStatus()
+    local state = xDTaraZ.State
+    local wait = math.max(0, math.floor(state.AirDropAt - Workspace:GetServerTimeNow()))
+    local eta = wait > 0 and ("next in %ds"):format(wait) or "-"
+    return string.format("Gear %d | Valuables %d | Air drop %d (%s) | Last: %s", state.Looted, state.Valuables, state.AirDrops, eta, state.LastLoot)
+end
+
+function xDTaraZ.UI.RegisterIcons()
+    if Library:HasIcon("airdrop") then return end
+    Library:AddIcon("airdrop", {
+        "..WWWWW..",
+        ".WWRWRWW.",
+        "W.R.W.R.W",
+        ".R..W..R.",
+        "..R.W.R..",
+        "...RWR...",
+        "..BBBBB..",
+        "..BYBYB..",
+        "..BBBBB..",
+    }, {
+        W = Color3.fromRGB(240, 240, 232),
+        R = Color3.fromRGB(226, 60, 52),
+        B = Color3.fromRGB(120, 84, 44),
+        Y = Color3.fromRGB(238, 196, 82),
+    })
 end
 
 function xDTaraZ.UI.BuildMain(window)
     window:AddTabSection(T("Main", "หลัก"))
     local tab = window:AddTab(T("Main", "หลัก"), "mushroom", T("Status and links", "สถานะและลิงก์"))
 
-    local status = tab:AddLeftGroupbox(T("Status", "สถานะ"), "star")
-    xDTaraZ.UI.Labels.Farm = status:AddParagraph({ Title = T("Farm", "ฟาร์ม"), Content = "-" })
-    xDTaraZ.UI.Labels.Heal = status:AddParagraph({ Title = T("Health", "เลือด"), Content = "-" })
-    xDTaraZ.UI.Labels.Combat = status:AddParagraph({ Title = T("Combat", "การต่อสู้"), Content = "-" })
-    xDTaraZ.UI.Labels.Loot = status:AddParagraph({ Title = T("Loot", "ของดรอป"), Content = "-" })
-    xDTaraZ.UI.Labels.Esp = status:AddParagraph({ Title = T("ESP", "ESP"), Content = "-" })
+    local status = tab:AddLeftGroupbox(T("Status", "สถานะ"), "stats")
+    status:AddStatus("StatusCombat", { Text = T("Combat", "การต่อสู้"), Icon = "crosshair" })
+    status:AddStatus("StatusHeal", { Text = T("Health", "เลือด"), Icon = "heal" })
+    status:AddStatus("StatusLoot", { Text = T("Loot", "ของดรอป"), Icon = "airdrop" })
+    status:AddStatus("StatusEsp", { Text = T("ESP", "ESP"), Icon = "esp" })
 
-    local quick = tab:AddLeftGroupbox(T("Quick", "ด่วน"), "bomb")
-    quick:AddButton({ Text = T("Panic - all off", "ฉุกเฉิน ปิดทั้งหมด"), Style = "Danger", Func = xDTaraZ.UI.Detach(function()
-        for _, toggle in pairs(Library.Toggles) do toggle:SetValue(false) end
-    end) })
+    local live = tab:AddLeftGroupbox(T("Live", "ตัวเลขสด"), "chart")
+    live:AddStat("StatKills", { Text = T("Kills", "ฆ่า"), Icon = "skull", Format = "%s" })
+    for _, name in ipairs(xDTaraZ.Config.TrackedCurrency) do
+        live:AddStat("Stat" .. name, { Text = name, Icon = "coin", Format = "%s", Token = "Coin" })
+    end
 
-    local discord = tab:AddRightGroupbox(T("Discord", "ดิสคอร์ด"), "link")
-    discord:AddLabel(xDTaraZ.Config.Discord)
-    discord:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ดิสคอร์ด"), Func = xDTaraZ.UI.Detach(function()
-        if Util.Copy(xDTaraZ.Config.Discord) then
-            Library:Notify(T("Discord", "ดิสคอร์ด"), T("Link copied", "คัดลอกลิงก์แล้ว"), 3, "Success")
-        else
-            Library:Notify(T("Discord", "ดิสคอร์ด"), xDTaraZ.Config.Discord, 6, "Info")
+    local quick = tab:AddRightGroupbox(T("Quick", "ด่วน"), "lightning")
+    quick:AddButton({ Text = T("Panic - All Off", "ฉุกเฉิน ปิดทั้งหมด"), Icon = "stop", Style = "Danger", Callback = xDTaraZ.UI.Detach(function()
+        for _, toggle in pairs(Library.Toggles) do
+            if toggle.Value == true then toggle:SetValue(false) end
         end
     end) })
+
+    Library.Kit.Discord.Build(tab, xDTaraZ.Config.Discord)
+end
+
+function xDTaraZ.UI.BuildAim(tab)
+    local aim = tab:AddLeftGroupbox(T("Aimbot", "เล็งอัตโนมัติ"), "aimbot")
+    aim:AddFeature("Aimbot", {
+        Text = T("Aimbot", "เล็งอัตโนมัติ"),
+        Description = T("Locks your view onto the closest enemy in the FOV", "ล็อคกล้องไปที่ศัตรูในวงเล็ง"),
+        Icon = "aimbot",
+        Keybind = { Default = "X", Mode = "Hold" },
+        Options = function(options)
+            options:AddSlider("AimSmooth", { Text = T("Smoothness", "ความนุ่ม"), Icon = "sliders-horizontal", Min = 1, Max = 20, Default = 1, Rounding = 0 })
+        end,
+    })
+
+    local targeting = tab:AddLeftGroupbox(T("Targeting", "การเลือกเป้า"), "crosshair")
+    targeting:AddSegmented("AimBone", { Text = T("Hit part", "จุดที่ยิง"), Icon = "headshot", Values = { "Head", "Torso" }, Default = "Head" })
+    targeting:AddSegmented("AimPriority", { Text = T("Priority", "เลือกเป้าตาม"), Icon = "sort", Values = { "Crosshair", "Distance" }, Default = "Crosshair" })
+    targeting:AddCheckbox("TargetBots", { Text = T("Include bots", "รวมบอท"), Icon = "triggerbot", Default = true })
+    targeting:AddSlider("AimFov", { Text = T("FOV", "วงเล็ง"), Icon = "fov", Min = 20, Max = 800, Default = 200, Suffix = "px" })
+    targeting:AddToggle("ShowFov", { Text = T("Show FOV circle", "แสดงวงเล็ง"), Icon = "eye" })
+    targeting:AddSlider("AimMaxDistance", { Text = T("Max distance", "ระยะสูงสุด"), Icon = "distance", Min = 50, Max = 2000, Default = 1000, Suffix = "m" })
+
+    local rage = tab:AddRightGroupbox(T("Rage", "เรจ"), "ragebot")
+    rage:AddFeature("SilentAim", {
+        Text = T("Silent Aim", "ไซเลนต์เอม"),
+        Description = T("Every shot you fire hits the target in the FOV", "ทุกนัดที่ยิงโดนเป้าในวงเล็ง"),
+        Icon = "silentaim",
+        Risky = true,
+        Keybind = { Default = "None", Mode = "Toggle" },
+    })
+    rage:AddFeature("Ragebot", {
+        Text = T("Ragebot", "เรจบอท"),
+        Description = T("Shoots every reachable enemy on its own", "ยิงศัตรูทุกตัวที่ยิงถึงเอง"),
+        Icon = "ragebot",
+        Risky = true,
+        Badge = T("Risky", "เสี่ยง"),
+        Keybind = { Default = "None", Mode = "Toggle" },
+    })
+    rage:AddFeature("Hunt", {
+        Text = T("Hunt", "ล่าศัตรู"),
+        Description = T("Jumps behind the closest enemy when nobody is in sight", "ไปโผล่หลังศัตรูที่ใกล้สุดเมื่อไม่เห็นใคร"),
+        Icon = "target",
+        Risky = true,
+        Badge = T("Risky", "เสี่ยง"),
+        Keybind = { Default = "None", Mode = "Toggle" },
+    })
+
+    Library.Kit.Caps.NeedCap("SilentAim", "Hook")
+    Library.Kit.Caps.NeedCap("Ragebot", "Hook")
+    Library.Kit.Caps.NeedCap("ShowFov", "Drawing")
+end
+
+function xDTaraZ.UI.BuildGunMods(tab)
+    local weapon = tab:AddLeftGroupbox(T("Weapon", "อาวุธ"), "gun")
+    weapon:AddFeature("RapidFire", {
+        Text = T("Rapid Fire", "ยิงรัว"),
+        Icon = "rapidfire",
+        Risky = true,
+        Options = function(options)
+            options:AddSlider("FireRateMult", { Text = T("Fire rate", "ความเร็วยิง"), Icon = "speed", Min = 1, Max = 10, Default = 2, Rounding = 1, Suffix = "x" })
+        end,
+    })
+    weapon:AddToggle("NoSpread", { Text = T("No Spread", "ยิงไม่กระจาย"), Icon = "spread" })
+    weapon:AddToggle("NoRecoil", { Text = T("No Recoil", "ไม่มีแรงถีบ"), Icon = "recoil" })
+
+    local scope = tab:AddRightGroupbox(T("Scope", "ศูนย์เล็ง"), "scope")
+    scope:AddToggle("InstantAds", { Text = T("Instant ADS", "เล็งศูนย์ทันที"), Description = T("Sights are up the moment you aim", "ยกศูนย์เล็งทันทีที่กดเล็ง"), Icon = "scope" })
+
+    for _, idx in ipairs({ "RapidFire", "NoSpread", "NoRecoil", "InstantAds" }) do
+        Library.Kit.Caps.NeedCap(idx, "Gc")
+    end
+end
+
+function xDTaraZ.UI.BuildSurvival(tab)
+    local heal = tab:AddLeftGroupbox(T("Healing", "ฮีล"), "heal")
+    heal:AddFeature("AutoHeal", {
+        Text = T("Auto Heal", "ฮีลอัตโนมัติ"),
+        Description = T("Uses a med kit from anywhere on the map when you get hurt", "ใช้ยาจากทุกที่ในแมพทันทีที่เลือดลด"),
+        Icon = "heal",
+        Risky = true,
+        Now = { Text = T("Heal Now", "ฮีลตอนนี้"), Icon = "heart", Style = "Success", Callback = xDTaraZ.UI.Detach(function()
+            if not xDTaraZ.Heal.Now() then Library:Notify("Heal", "No med on the map or HP is full", 3, "Info") end
+        end) },
+        Options = function(options)
+            options:AddSlider("HealAt", { Text = T("Heal below", "ฮีลเมื่อเลือดต่ำกว่า"), Icon = "heart", Min = 10, Max = 99, Default = 70, Rounding = 0, Suffix = "%" })
+        end,
+    })
+    Library.Kit.Caps.NeedCap("AutoHeal", "Gc")
+
+    local life = tab:AddRightGroupbox(T("Respawn", "เกิดใหม่"), "rebirth")
+    life:AddFeature("InstantRespawn", {
+        Text = T("Auto Respawn", "เกิดใหม่อัตโนมัติ"),
+        Description = T("Back in the fight as soon as the game allows", "กลับเข้าสนามทันทีที่เกมอนุญาต"),
+        Icon = "rebirth",
+        Now = { Text = T("Respawn Now", "เกิดใหม่ตอนนี้"), Icon = "play", Callback = xDTaraZ.UI.Detach(function()
+            xDTaraZ.State.LastRespawn = 0
+            xDTaraZ.Respawn.Now()
+        end) },
+    })
+    life:AddToggle("AutoRejoin", { Text = T("Auto Rejoin Match", "เข้าแมตช์ใหม่อัตโนมัติ"), Description = T("Jumps back into a match when you sit in the lobby", "กลับเข้าแมตช์เองเมื่อค้างอยู่ในล็อบบี้"), Icon = "rejoin" })
 end
 
 function xDTaraZ.UI.BuildCombat(window)
     window:AddTabSection(T("Combat", "การต่อสู้"))
-    local tab = window:AddTab(T("Combat", "การต่อสู้"), "target", T("Aim, survival and gun mods", "เล็ง เอาตัวรอด และม็อดปืน"))
-
-    local rage = tab:AddLeftGroupbox(T("Rage", "เรจ"), "bomb")
-    rage:AddToggle("SilentAim", { Text = T("Silent aim", "ไซเลนต์เอม"), Description = T("Every shot you fire hits the target in the FOV", "ทุกนัดที่ยิงโดนเป้าในวง FOV"), Risky = true })
-    rage:AddToggle("Hunt", { Text = T("Hunt", "ล่าศัตรู"), Description = T("Warps behind the closest enemy whenever nobody is in sight", "วาร์ปไปข้างหลังศัตรูที่ใกล้สุดเมื่อไม่เห็นใคร"), Risky = true })
-    rage:AddToggle("Ragebot", { Text = T("Ragebot", "เรจบอท"), Description = T("Shoots every reachable enemy on its own", "ยิงศัตรูทุกตัวที่ยิงถึงเอง"), Risky = true })
-    xDTaraZ.UI.NeedCap("SilentAim", "Hook")
-    xDTaraZ.UI.NeedCap("Ragebot", "Hook")
-
-    local aim = tab:AddLeftGroupbox(T("Aimbot", "เล็งอัตโนมัติ"), "target")
-    aim:AddToggle("Aimbot", { Text = T("Aimbot", "เล็งอัตโนมัติ"), Description = T("Locks your view onto the closest enemy in the FOV", "ล็อคกล้องไปที่ศัตรูในวง FOV") })
-        :AddKeyPicker("AimbotKey", { Default = "X", Mode = "Hold" })
-    aim:AddDropdown("AimMode", { Text = T("Key mode", "โหมดปุ่ม"), Values = { "Hold", "Toggle", "Always" }, Default = "Hold", Callback = function(mode)
-        local picker = Library.Options.AimbotKey
-        if picker then picker:SetValue({ picker.Value, mode }) end
-    end })
-    aim:AddSlider("AimSmooth", { Text = T("Smoothness", "ความนุ่ม"), Min = 1, Max = 20, Default = 1, Rounding = 0 })
-
-    local target = tab:AddLeftGroupbox(T("Targeting", "การเลือกเป้า"), "crosshair")
-    target:AddDropdown("AimBone", { Text = T("Hit part", "จุดที่ยิง"), Values = { "Head", "Torso" }, Default = "Head" })
-    target:AddDropdown("AimPriority", { Text = T("Target priority", "เลือกเป้าตาม"), Values = { "Crosshair", "Distance" }, Default = "Crosshair" })
-    target:AddToggle("TargetBots", { Text = T("Include bots", "รวมบอท"), Default = true })
-    target:AddSlider("AimFov", { Text = T("FOV", "ระยะมอง"), Min = 20, Max = 800, Default = 200, Suffix = "px" })
-    target:AddToggle("ShowFov", { Text = T("Show FOV circle", "แสดงวงระยะมอง") })
-    xDTaraZ.UI.NeedCap("ShowFov", "Drawing")
-    target:AddSlider("AimMaxDistance", { Text = T("Max distance", "ระยะสูงสุด"), Min = 50, Max = 2000, Default = 1000, Suffix = "m" })
-
-    local life = tab:AddRightGroupbox(T("Survival", "เอาตัวรอด"), "heart")
-    life:AddToggle("AutoHeal", { Text = T("Auto heal", "ฮีลอัตโนมัติ"), Description = T("Grabs a med kit from anywhere on the map the moment you get hurt", "ดึงยาจากทุกที่ในแมพมาใช้ทันทีที่เลือดลด"), Risky = true })
-    life:AddSlider("HealAt", { Text = T("Heal below", "ฮีลเมื่อเลือดต่ำกว่า"), Min = 10, Max = 99, Default = 70, Rounding = 0, Suffix = "%" })
-    life:AddToggle("InstantRespawn", { Text = T("Auto respawn", "เกิดใหม่อัตโนมัติ"), Description = T("Respawns as soon as the game allows", "เกิดใหม่เองทันทีที่เกมอนุญาต") })
-    life:AddToggle("AutoRejoin", { Text = T("Auto rejoin match", "เข้าแมตช์ใหม่อัตโนมัติ"), Description = T("Jumps back into a match when you sit in the lobby", "กลับเข้าแมตช์เองเมื่อค้างอยู่ในล็อบบี้") })
-    life:AddButton({ Text = T("Heal Now", "ฮีลตอนนี้"), Style = "Success", Func = xDTaraZ.UI.Detach(function()
-        if not xDTaraZ.Heal.Now() then Library:Notify("Heal", "No med on the map or HP is full", 3, "Info") end
-    end) }):AddButton({ Text = T("Respawn Now", "เกิดใหม่ตอนนี้"), Func = xDTaraZ.UI.Detach(function()
-        xDTaraZ.State.LastRespawn = 0
-        xDTaraZ.Respawn.Now()
-    end) })
-    xDTaraZ.UI.NeedCap("AutoHeal", "Gc")
-
-    local gun = tab:AddRightGroupbox(T("Gun Mods", "ม็อดปืน"), "swords")
-    gun:AddToggle("RapidFire", { Text = T("Rapid fire", "ยิงรัว"), Risky = true })
-    gun:AddSlider("FireRateMult", { Text = T("Fire rate", "ความเร็วยิง"), Min = 1, Max = 10, Default = 2, Rounding = 1, Suffix = "x" })
-    gun:AddToggle("NoSpread", { Text = T("No spread", "ยิงไม่กระจาย") })
-    gun:AddToggle("NoRecoil", { Text = T("No recoil", "ไม่มีแรงถีบ") })
-    gun:AddToggle("InstantAds", { Text = T("Instant aim down sights", "เล็งศูนย์ทันที") })
-    for _, idx in ipairs({ "RapidFire", "NoSpread", "NoRecoil", "InstantAds" }) do
-        xDTaraZ.UI.NeedCap(idx, "Gc")
-    end
+    xDTaraZ.UI.BuildAim(window:AddTab(T("Aim", "เล็ง"), "aimbot", T("Aimbot, silent aim and rage", "เล็ง ไซเลนต์ และเรจ")))
+    xDTaraZ.UI.BuildGunMods(window:AddTab(T("Gun Mods", "ม็อดปืน"), "gun", T("Fire rate, spread and recoil", "ความเร็วยิง การกระจาย แรงถีบ")))
+    xDTaraZ.UI.BuildSurvival(window:AddTab(T("Survival", "เอาตัวรอด"), "heart", T("Healing and respawn", "ฮีลและเกิดใหม่")))
 end
 
 function xDTaraZ.UI.BuildLoot(window)
     window:AddTabSection(T("Farming", "ฟาร์ม"))
-    local tab = window:AddTab(T("Loot", "ของดรอป"), "coin", T("Gear, valuables and air drops from anywhere", "ของ ของมีค่า และแอร์ดรอปจากทุกที่"))
+    local tab = window:AddTab(T("Loot", "ของดรอป"), "loot", T("Gear, valuables and air drops from anywhere", "ของ ของมีค่า และแอร์ดรอปจากทุกที่"))
 
-    local gear = tab:AddLeftGroupbox(T("Best Gear", "ของดีที่สุด"), "star")
-    gear:AddToggle("AutoGear", { Text = T("Auto loot best gear", "เก็บของดีสุดอัตโนมัติ"), Description = T("Grabs better guns and armor from any crate on the map", "ดึงปืนและเกราะที่ดีกว่าจากกล่องทุกใบในแมพ"), Risky = true })
-    gear:AddDropdown("LootGear", { Text = T("Gear types", "ประเภทของ"), Values = { "Primary", "Pistol", "Helmet", "Armor" }, Default = { "Primary", "Pistol", "Helmet", "Armor" }, Multi = true, AllowNull = true })
-    gear:AddButton({ Text = T("Loot Best Now", "เก็บของดีสุดตอนนี้"), Style = "Primary", Func = xDTaraZ.UI.Detach(function()
-        local got = xDTaraZ.Loot.TakeUpgrades()
-        Library:Notify("Loot", got > 0 and ("Took %d upgrades"):format(got) or "Nothing better on the map", 4, got > 0 and "Success" or "Info")
-    end) })
+    local gear = tab:AddLeftGroupbox(T("Best Gear", "ของดีที่สุด"), "crown")
+    gear:AddFeature("AutoGear", {
+        Text = T("Auto Loot Best Gear", "เก็บของดีสุดอัตโนมัติ"),
+        Description = T("Takes better guns and armor from any crate on the map", "เก็บปืนและเกราะที่ดีกว่าจากกล่องทุกใบในแมพ"),
+        Icon = "shield",
+        Risky = true,
+        Now = { Text = T("Loot Best Now", "เก็บของดีสุดตอนนี้"), Icon = "loot", Callback = xDTaraZ.UI.Detach(function()
+            xDTaraZ.UI.Report("Loot", xDTaraZ.Loot.TakeUpgrades(), "Took %d upgrades", "Nothing better on the map")
+        end) },
+        Options = function(options)
+            options:AddMultiChips("LootGear", {
+                Text = T("Gear types", "ประเภทของ"),
+                Icon = "filter",
+                Values = { "Primary", "Pistol", "Helmet", "Armor" },
+                Default = { "Primary", "Pistol", "Helmet", "Armor" },
+            })
+        end,
+    })
 
     local money = tab:AddLeftGroupbox(T("Valuables", "ของมีค่า"), "coin")
-    money:AddToggle("AutoValuables", { Text = T("Auto loot valuables", "เก็บของมีค่าอัตโนมัติ"), Description = T("Takes ore, crystals and gold from every crate on the map", "เก็บแร่ คริสตัล และทองจากกล่องทุกใบในแมพ"), Risky = true })
-    money:AddButton({ Text = T("Loot Valuables Now", "เก็บของมีค่าตอนนี้"), Style = "Primary", Func = xDTaraZ.UI.Detach(function()
-        local got = xDTaraZ.Loot.TakeValuables()
-        Library:Notify("Loot", got > 0 and ("Took %d valuables"):format(got) or "No valuables on the map", 4, got > 0 and "Success" or "Info")
-    end) })
+    money:AddFeature("AutoValuables", {
+        Text = T("Auto Loot Valuables", "เก็บของมีค่าอัตโนมัติ"),
+        Description = T("Takes ore, crystals and gold from every crate on the map", "เก็บแร่ คริสตัล และทองจากกล่องทุกใบในแมพ"),
+        Icon = "coin",
+        Risky = true,
+        Now = { Text = T("Loot Valuables Now", "เก็บของมีค่าตอนนี้"), Icon = "money", Callback = xDTaraZ.UI.Detach(function()
+            xDTaraZ.UI.Report("Loot", xDTaraZ.Loot.TakeValuables(), "Took %d valuables", "No valuables on the map")
+        end) },
+    })
 
-    local drop = tab:AddRightGroupbox(T("Air Drop", "แอร์ดรอป"), "flag")
-    drop:AddToggle("AutoAirDrop", { Text = T("Auto air drop", "แอร์ดรอปอัตโนมัติ"), Description = T("Takes air drop loot from anywhere on the map", "เก็บของในแอร์ดรอปได้จากทุกที่ในแมพ"), Risky = true })
-    drop:AddButton({ Text = T("Loot Air Drops Now", "เก็บแอร์ดรอปตอนนี้"), Style = "Primary", Func = xDTaraZ.UI.Detach(function()
-        local got = xDTaraZ.Loot.EmptyAirDrops()
-        Library:Notify("Air Drop", got > 0 and ("Took %d items"):format(got) or "Nothing to take", 4, got > 0 and "Success" or "Info")
-    end) })
+    local drop = tab:AddRightGroupbox(T("Air Drop", "แอร์ดรอป"), "airdrop")
+    drop:AddFeature("AutoAirDrop", {
+        Text = T("Auto Air Drop", "แอร์ดรอปอัตโนมัติ"),
+        Description = T("Takes air drop loot from anywhere on the map", "เก็บของในแอร์ดรอปได้จากทุกที่ในแมพ"),
+        Icon = "airdrop",
+        Risky = true,
+        Now = { Text = T("Loot Air Drops Now", "เก็บแอร์ดรอปตอนนี้"), Icon = "chest", Callback = xDTaraZ.UI.Detach(function()
+            xDTaraZ.UI.Report("Air Drop", xDTaraZ.Loot.EmptyAirDrops(), "Took %d items", "Nothing to take")
+        end) },
+    })
+
     for _, idx in ipairs({ "AutoGear", "AutoValuables", "AutoAirDrop" }) do
-        xDTaraZ.UI.NeedCap(idx, "Gc")
+        Library.Kit.Caps.NeedCap(idx, "Gc")
     end
 end
 
 function xDTaraZ.UI.BuildVisuals(window)
     window:AddTabSection(T("Visuals", "การมองเห็น"))
-    window:AddVisualsTab({ Provider = xDTaraZ.Esp.Targets, Preview = true })
+    window:AddVisualsTab({ Icon = "esp", Provider = xDTaraZ.Esp.Targets, Preview = true })
 
-    local tab = window:AddTab(T("Loot ESP", "มองเห็นของ"), "eye", T("Air drops, crates and items", "แอร์ดรอป กล่อง และไอเทม"))
+    local tab = window:AddTab(T("Loot ESP", "มองเห็นของ"), "chest", T("Air drops, crates and items", "แอร์ดรอป กล่อง และไอเทม"))
     local esp = tab:AddLeftGroupbox(T("Loot ESP", "มองเห็นของ"), "eye")
-    esp:AddToggle("LootEspAirDrop", { Text = T("Air drops", "แอร์ดรอป") })
-    esp:AddToggle("LootEspCrate", { Text = T("Crates", "กล่อง") })
-    esp:AddToggle("LootEspItem", { Text = T("Items", "ไอเทม") })
-    esp:AddSlider("LootEspRange", { Text = T("Range", "ระยะ"), Min = 50, Max = 2000, Default = 400, Suffix = "m" })
+    esp:AddToggle("LootEspAirDrop", { Text = T("Air Drops", "แอร์ดรอป"), Icon = "airdrop" })
+    esp:AddToggle("LootEspCrate", { Text = T("Crates", "กล่อง"), Icon = "box" })
+    esp:AddToggle("LootEspItem", { Text = T("Items", "ไอเทม"), Icon = "loot" })
+    esp:AddSlider("LootEspRange", { Text = T("Range", "ระยะ"), Description = T("Air drops show at any range", "แอร์ดรอปแสดงทุกระยะ"), Icon = "distance", Min = 50, Max = 2000, Default = 400, Suffix = "m" })
+end
+
+function xDTaraZ.UI.BuildMovement(tab)
+    local move = tab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "speed")
+    move:AddFeature("SuperSlide", {
+        Text = T("Slide Boost", "สไลด์ไกล"),
+        Description = T("Faster and longer slides", "สไลด์เร็วและไกลขึ้น"),
+        Icon = "dash",
+        Options = function(options)
+            options:AddSlider("SlideSpeed", { Text = T("Slide speed", "ความเร็วสไลด์"), Icon = "speed", Min = 60, Max = 300, Default = 120, Rounding = 0 })
+        end,
+    })
+    Library.Kit.Caps.NeedCap("SuperSlide", "Gc")
+
+    move:AddFeature("Speed", {
+        Text = T("Speed", "วิ่งเร็ว"),
+        Icon = "speed",
+        Keybind = { Default = "None", Mode = "Toggle" },
+        Options = function(options)
+            options:AddSlider("SpeedValue", { Text = T("Walk speed", "ความเร็ว"), Icon = "speed", Min = 16, Max = 120, Default = 40, Rounding = 0 })
+        end,
+    })
+    move:AddFeature("Fly", {
+        Text = T("Fly", "บิน"),
+        Description = T("Space up, Ctrl down", "Space ขึ้น Ctrl ลง"),
+        Icon = "fly",
+        Keybind = { Default = "None", Mode = "Toggle" },
+        Callback = function(on)
+            if not on then xDTaraZ.Movement.StopFly() end
+        end,
+        Options = function(options)
+            options:AddSlider("FlySpeed", { Text = T("Fly speed", "ความเร็วบิน"), Icon = "speed", Min = 20, Max = 200, Default = 60, Rounding = 0 })
+        end,
+    })
+    move:AddToggle("InfiniteJump", { Text = T("Infinite Jump", "กระโดดไม่จำกัด"), Icon = "infjump" })
+    move:AddFeature("Noclip", { Text = T("Noclip", "ทะลุกำแพง"), Icon = "noclip", Keybind = { Default = "None", Mode = "Toggle" } })
 end
 
 function xDTaraZ.UI.BuildMisc(window)
     window:AddTabSection(T("Misc", "อื่นๆ"))
-    local tab = window:AddTab(T("Player", "ผู้เล่น"), "oneup", T("Movement, world, server", "การเคลื่อนที่ โลก เซิร์ฟเวอร์"))
-
-    local move = tab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "zap")
-    move:AddToggle("SuperSlide", { Text = T("Slide boost", "สไลด์ไกล"), Description = T("Faster and longer slides", "สไลด์เร็วและไกลขึ้น") })
-    move:AddSlider("SlideSpeed", { Text = T("Slide speed", "ความเร็วสไลด์"), Min = 60, Max = 300, Default = 120, Rounding = 0 })
-    move:AddToggle("Speed", { Text = T("Speed", "วิ่งเร็ว") })
-    move:AddSlider("SpeedValue", { Text = T("Speed", "ความเร็ว"), Min = 16, Max = 120, Default = 40, Rounding = 0 })
-    move:AddToggle("Fly", { Text = T("Fly", "บิน"), Description = T("Space up, Ctrl down", "Space ขึ้น Ctrl ลง"), Callback = function(on)
-        if not on then xDTaraZ.Movement.StopFly() end
-    end })
-    move:AddSlider("FlySpeed", { Text = T("Fly speed", "ความเร็วบิน"), Min = 20, Max = 200, Default = 60, Rounding = 0 })
-    move:AddToggle("InfiniteJump", { Text = T("Infinite jump", "กระโดดไม่จำกัด") })
-    move:AddToggle("Noclip", { Text = T("Noclip", "ทะลุกำแพง") })
-    xDTaraZ.UI.NeedCap("SuperSlide", "Gc")
+    local tab = window:AddTab(T("Player", "ผู้เล่น"), "player", T("Movement, world, server", "การเคลื่อนที่ โลก เซิร์ฟเวอร์"))
+    xDTaraZ.UI.BuildMovement(tab)
 
     local world = tab:AddRightGroupbox(T("World", "โลก"), "globe")
-    world:AddToggle("Fullbright", { Text = T("Fullbright", "สว่างทั้งแมพ") })
-    world:AddToggle("CameraFov", { Text = T("Camera FOV", "มุมกล้อง") })
-    world:AddSlider("CameraFovValue", { Text = T("FOV", "มุมกล้อง"), Min = 50, Max = 120, Default = 90, Rounding = 0 })
+    world:AddToggle("Fullbright", { Text = T("Fullbright", "สว่างทั้งแมพ"), Icon = "fullbright" })
+    world:AddToggle("CameraFov", { Text = T("Camera FOV", "มุมกล้อง"), Icon = "fov" })
+    world:AddSlider("CameraFovValue", { Text = T("FOV", "มุมกล้อง"), Icon = "fov", Min = 50, Max = 120, Default = 90, Rounding = 0, DependsOn = { "CameraFov", true } })
 
     local server = tab:AddRightGroupbox(T("Server", "เซิร์ฟเวอร์"), "castle")
-    server:AddToggle("AntiAfk", { Text = T("Anti AFK", "กันหลุด AFK") })
-    server:AddButton({ Text = T("Rejoin", "เข้าใหม่"), Func = xDTaraZ.UI.Detach(xDTaraZ.World.Rejoin) })
-        :AddButton({ Text = T("Server hop", "ย้ายเซิร์ฟ"), Func = xDTaraZ.UI.Detach(function()
-            if not xDTaraZ.World.Hop() then Library:Notify(T("Server", "เซิร์ฟเวอร์"), T("No other server found", "ไม่เจอเซิร์ฟอื่น"), 4, "Warning") end
-        end) })
+    server:AddToggle("AntiAfk", { Text = T("Anti AFK", "กันหลุด AFK"), Icon = "antiafk" })
+    server:AddButton({ Text = T("Rejoin", "เข้าใหม่"), Icon = "rejoin", Style = "Ghost", Callback = xDTaraZ.UI.Detach(xDTaraZ.World.Rejoin) })
+    server:AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), Icon = "globe", Style = "Ghost", Callback = xDTaraZ.UI.Detach(function()
+        if not xDTaraZ.World.Hop() then Library:Notify(T("Server", "เซิร์ฟเวอร์"), T("No other server found", "ไม่เจอเซิร์ฟอื่น"), 4, "Warning") end
+    end) })
 end
 
-function xDTaraZ.UI.RefreshStatus()
-    local labels, state = xDTaraZ.UI.Labels, xDTaraZ.State
-    if labels.Combat then labels.Combat:SetText(xDTaraZ.Combat.GetStatus()) end
-    if labels.Loot then
-        local wait = math.max(0, math.floor(state.AirDropAt - Workspace:GetServerTimeNow()))
-        local eta = wait > 0 and ("next in %ds"):format(wait) or "-"
-        labels.Loot:SetText(string.format("Gear %d | Valuables %d | Air drop items %d (%s) | Last: %s", state.Looted, state.Valuables, state.AirDrops, eta, state.LastLoot))
+function xDTaraZ.UI.Live()
+    local interval = xDTaraZ.Config.StatusInterval
+    local feeds = {
+        StatusCombat = xDTaraZ.Combat.GetStatus,
+        StatusHeal = xDTaraZ.Heal.GetStatus,
+        StatusLoot = xDTaraZ.UI.LootStatus,
+        StatusEsp = xDTaraZ.Esp.GetStatus,
+    }
+    for idx, read in pairs(feeds) do
+        Library.Lib.Status(idx, function()
+            local text = read()
+            return text, xDTaraZ.UI.Kind(text)
+        end, interval)
     end
-    if labels.Esp then labels.Esp:SetText(xDTaraZ.Esp.GetStatus()) end
-    if labels.Heal then labels.Heal:SetText(xDTaraZ.Heal.GetStatus()) end
-    if labels.Farm then labels.Farm:SetText(xDTaraZ.Farm.GetStatus()) end
+
+    Library.Lib.Status("StatKills", function() return xDTaraZ.State.Kills end, interval)
+    for _, name in ipairs(xDTaraZ.Config.TrackedCurrency) do
+        Library.Lib.Status("Stat" .. name, function()
+            local start = xDTaraZ.Farm.Start
+            return start and (xDTaraZ.Farm.Totals[name] or 0) - (start[2][name] or 0) or 0
+        end, interval)
+    end
 end
 
 function xDTaraZ.UI.Build()
     local window = Library.Window
+    xDTaraZ.UI.RegisterIcons()
     for _, build in ipairs({ xDTaraZ.UI.BuildMain, xDTaraZ.UI.BuildCombat, xDTaraZ.UI.BuildLoot, xDTaraZ.UI.BuildVisuals, xDTaraZ.UI.BuildMisc }) do
         local ok, err = pcall(build, window)
         if not ok then warn("[AirDropArena] build:", err) end
@@ -1434,6 +1574,7 @@ function xDTaraZ.UI.Build()
         local widget = Library.Options[key]
         if widget then xDTaraZ.UI.Bind(widget, key) end
     end
+    xDTaraZ.UI.Live()
 end
 
 local function BuildInterface()
@@ -1451,7 +1592,6 @@ local function BuildInterface()
         OnUnlocked = function()
             xDTaraZ.UI.Build()
             task.defer(xDTaraZ.Boot)
-            Library:Every(xDTaraZ.Config.StatusInterval, xDTaraZ.UI.RefreshStatus)
             task.defer(function() Library:LoadAutoloadConfig() end)
         end,
     })
