@@ -11301,8 +11301,8 @@ function QuickBar.Add(idx)
             QuickBar.Flip(entry, input)
         end,
     })
-    Popup.Track(entry.Frame, Float.Mover(entry.Frame, "Pin:" .. tostring(idx)))
-    Float.Place(entry.Frame, "Pin:" .. tostring(idx), QuickBar.DefaultSpot(#QuickBar.Order))
+    Popup.Track(entry.Frame, Float.Mover(entry.Frame, QuickBar.Key(idx)))
+    Float.Place(entry.Frame, QuickBar.Key(idx), QuickBar.DefaultSpot(#QuickBar.Order))
     QuickBar.Render(entry, true)
     QuickBar.SavePins()
     QuickBar.EnsureSync()
@@ -11378,7 +11378,7 @@ function QuickBar.Remove(idx)
     end
     Float.Placed[entry.Frame] = nil
     entry.Frame:Destroy()
-    Float.Remember("Pin:" .. tostring(idx), nil)
+    Float.Remember(QuickBar.Key(idx), nil)
     QuickBar.SavePins()
 end
 
@@ -11395,17 +11395,24 @@ function QuickBar.Toggle(idx)
     return QuickBar.Add(idx) ~= nil
 end
 
+---Pins belong to one game's hub: keyed by its config folder so another script never shows them.
+---@param idx any?  nil = the pin list key
+function QuickBar.Key(idx)
+    local scope = Configs.Folder or "default"
+    return idx == nil and ("Pins:" .. scope) or ("Pin:" .. scope .. ":" .. tostring(idx))
+end
+
 function QuickBar.SavePins()
     local pins = table.clone(QuickBar.Order)
     for index, idx in ipairs(pins) do
         pins[index] = tostring(idx)
     end
-    Float.Remember("Pins", pins)
+    Float.Remember(QuickBar.Key(), pins)
 end
 
 ---Re-pins what the user pinned last session; call once options exist (after OnUnlocked).
 function QuickBar.Restore()
-    local pins = Float.Recall("Pins")
+    local pins = Float.Recall(QuickBar.Key())
     if type(pins) ~= "table" then
         return
     end
@@ -11815,6 +11822,7 @@ function Window:OnState(fn)
 end
 
 function Window:EmitState()
+    self:HideTip()
     for _, listener in ipairs(self.StateListeners or {}) do
         Util.Try(listener, self)
     end
@@ -12269,6 +12277,7 @@ function Window:BuildDock()
         end,
     })
     self:BuildTip()
+    self:WatchTip()
 end
 
 function Window:BuildTip()
@@ -12286,6 +12295,19 @@ function Window:BuildTip()
 end
 
 ---Dock label sliding out to the right of anchor. Pointer only.
+---Hover-out is not reported when the window moves, hides or the pointer jumps, so the tip checks the pointer itself.
+function Window:WatchTip()
+    Util.Connect(UserInputService.InputChanged, function(input)
+        if not self.TipShown or input.UserInputType ~= Enum.UserInputType.MouseMovement then
+            return
+        end
+        local anchor = self.TipAnchor
+        if not anchor or not anchor.Parent or not Util.Inside(anchor, UserInputService:GetMouseLocation()) then
+            self:HideTip()
+        end
+    end)
+end
+
 function Window:ShowTip(anchor, spec)
     if Platform.Touch or self.Mode == "Phone" or not self.Visible then
         return
@@ -12297,7 +12319,7 @@ function Window:ShowTip(anchor, spec)
     local y = (anchor.AbsolutePosition.Y + anchor.AbsoluteSize.Y / 2 - self.Body.AbsolutePosition.Y) / State.UserScale
     local home = UDim2.fromOffset(self.DockRight + tip.Gap, math.floor(y))
     frame.Size = UDim2.fromOffset(width, tip.Height + tip.Frame)
-    self.TipShown = true
+    self.TipShown, self.TipAnchor = true, anchor
     if not frame.Visible then
         frame.Visible = true
         Motion.Set(frame, "Position", home - UDim2.fromOffset(tip.Slide, 0))
