@@ -134,6 +134,7 @@ local VirtualUser = game:GetService("VirtualUser")
 local RunService = game:GetService("RunService")
 local GuiService = game:GetService("GuiService")
 local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
 local StarterGui = game:GetService("StarterGui")
 
 local LocalPlayer = Players.LocalPlayer
@@ -148,7 +149,7 @@ xDTaraZ.Config = {
     SaveFolder = "Loot To Forge",
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
-        { "2026-10-04", "Spawn Scrolls, Tickets & Stones\nDupe Whole Inventory\nAdd Season Coins (OP)\nFaster Tower farm\nRemoved keybinds from auto features\nMax Gear picks Exclusive gear\nSpawn Gear (OP)\nPotions (OP)\nFixed Auto World Boss" },
+        { "2026-10-04", "Spawn Scrolls, Tickets & Stones\nDupe Whole Inventory\nAdd Season Coins (OP)\nFaster Tower farm\nRemoved keybinds from auto features\nMax Gear picks Exclusive gear\nSpawn Gear (OP)\nPotions (OP)\nFixed Auto World Boss\nBoss Server Hop" },
         { "2026-10-03", "Fixed World Boss, Auto Click & Codes\nImproved Auto Train\nAuto rune detection" },
     },
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
@@ -214,6 +215,11 @@ xDTaraZ.Config = {
     SellInterval = 1,
     RebirthInterval = 2,
     BossInterval = 1,
+    BossHopInterval = 5,
+    BossHopLead = 150,
+    BossHopAfter = 8,
+    BossHopFlag = "bosshop.txt",
+    BossHopResume = 180,
     TrainRejoinDelay = 0.3,
     TrainWatchdog = 3,
     TrainAcceptWait = 1.5,
@@ -281,6 +287,10 @@ xDTaraZ.State = {
     OreLabels = {},
     SpawnLabels = {},
     GearLabels = {},
+    HopServers = {},
+    BossHopping = false,
+    HopQueued = false,
+    BossDone = nil,
     MissingLabels = {},
     OreStage = {},
     Plans = {},
@@ -309,6 +319,7 @@ xDTaraZ.State = {
         KillAura = false,
         SuperLootAura = false,
         AutoWorldBoss = false,
+        BossHop = false,
         AutoForge = false,
         ForgeTarget = "Great Weapon",
         ForgeOre = nil,
@@ -1778,6 +1789,7 @@ function xDTaraZ.Boss.Bind()
         task.delay(Config.BossClaimDelay, function()
             if State.Opt.BossCards then xDTaraZ.Util.Try(xDTaraZ.Boss.ClaimCards) end
             xDTaraZ.Util.Try(xDTaraZ.Boss.Leave)
+            State.BossDone = os.clock()
         end)
     end))
     table.insert(State.Conns, xDTaraZ.Util.Remote("WorldBoss", "BossEscapeRE").OnClientEvent:Connect(function()
@@ -2076,7 +2088,68 @@ function xDTaraZ.Session.Rejoin()
     TeleportService:Teleport(game.PlaceId, LocalPlayer)
 end
 
+function xDTaraZ.Boss.HopFlag(enabled)
+    local flag = Config.SaveFolder .. "/" .. Config.BossHopFlag
+    pcall(function()
+        if enabled then
+            if not isfolder(Config.SaveFolder) then makefolder(Config.SaveFolder) end
+            writefile(flag, tostring(os.time()))
+        elseif isfile(flag) then
+            delfile(flag)
+        end
+    end)
+end
+
+---@return boolean  true only right after a hop, so a fresh launch never starts hopping by itself
+function xDTaraZ.Boss.HopWanted()
+    local ok, stamp = pcall(readfile, Config.SaveFolder .. "/" .. Config.BossHopFlag)
+    return ok and tonumber(stamp) ~= nil and os.time() - tonumber(stamp) < Config.BossHopResume
+end
+
+---@return string?  a public server with room, not this one
+function xDTaraZ.Boss.PickServer()
+    if #State.HopServers == 0 then
+        local body = xDTaraZ.Util.HttpGet(("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100"):format(game.PlaceId))
+        local ok, list = pcall(HttpService.JSONDecode, HttpService, body or "")
+        for _, server in ipairs(ok and list.data or {}) do
+            if server.id ~= game.JobId and server.playing < server.maxPlayers then
+                table.insert(State.HopServers, server.id)
+            end
+        end
+    end
+    if #State.HopServers == 0 then return nil end
+    return table.remove(State.HopServers, math.random(#State.HopServers))
+end
+
+function xDTaraZ.Boss.Hop()
+    local serverId = xDTaraZ.Boss.PickServer()
+    if not serverId then return end
+    State.BossHopping = true
+    xDTaraZ.Boss.HopFlag(true)
+    local queue = queue_on_teleport or queueonteleport
+    if queue and not State.HopQueued then
+        queue(("loadstring(game:HttpGet(%q))()"):format(Config.LoaderUrl))
+        State.HopQueued = true
+    end
+    TeleportService:TeleportToPlaceInstance(game.PlaceId, serverId, LocalPlayer)
+end
+
+function xDTaraZ.Boss.HopStep()
+    if State.BossHopping then return end
+    local boss = workspace:GetAttribute("CurrentWorldBoss")
+    if boss and not State.BossDone then return end
+    if State.BossDone and os.clock() - State.BossDone < Config.BossHopAfter then return end
+    local left = (workspace:GetAttribute("NextWorldBossTick") or 0) - (workspace:GetAttribute("ServerTime") or 0)
+    if not boss and not State.BossDone and left <= Config.BossHopLead then return end
+    xDTaraZ.Boss.Hop()
+end
+
 function xDTaraZ.Session.Bind()
+    table.insert(State.Conns, TeleportService.TeleportInitFailed:Connect(function()
+        if not State.BossHopping then return end
+        State.BossHopping = false
+        task.delay(1, xDTaraZ.Util.Try, xDTaraZ.Boss.HopStep)
+    end))
     table.insert(State.Conns, LocalPlayer.Idled:Connect(function()
         VirtualUser:CaptureController()
         VirtualUser:ClickButton2(Vector2.new())
@@ -2099,6 +2172,7 @@ xDTaraZ.Scheduler.Jobs = {
     { key = "AutoUpgrade", every = Config.UpgradeInterval, run = function() xDTaraZ.Upgrade.BuySelected() end },
     { key = "AutoTower", every = 0, run = function() xDTaraZ.Tower.FarmStep() end },
     { key = "AutoWorldBoss", every = Config.BossInterval, run = function() xDTaraZ.Boss.Step() end },
+    { key = "BossHop", every = Config.BossHopInterval, run = function() xDTaraZ.Boss.HopStep() end },
     { key = "AutoClaim", every = Config.ClaimInterval, run = function() xDTaraZ.Claim.All() end },
     { key = "AutoSeason", every = Config.SeasonInterval, run = function() xDTaraZ.Season.Step() end },
     { key = "AutoBestRace", every = 10, run = function() xDTaraZ.Race.EquipBest() end },
@@ -2505,6 +2579,10 @@ local function BuildInterface()
             if not value and LocalPlayer:GetAttribute("IntoFight") == "WorldBoss" then task.spawn(xDTaraZ.Util.Try, xDTaraZ.Boss.Leave) end
         end)
         Check(bossBox, "BossCards", T("Take every reward card", "เปิดการ์ดรางวัลทุกใบ"))
+        Feature(bossBox, "BossHop", T("Boss Server Hop", "ย้ายเซิร์ฟหาบอส"), T("Hops to servers where the boss is up or about to spawn, kills it, then moves on", "ย้ายไปเซิร์ฟที่บอสเกิดอยู่หรือใกล้เกิด ฆ่าแล้วย้ายต่อ"), function(value)
+            xDTaraZ.Boss.HopFlag(value)
+            if value and Options.AutoWorldBoss and not Options.AutoWorldBoss.Value then Options.AutoWorldBoss:SetValue(true) end
+        end, true)
 
         local indexBox = tab:AddRightGroupbox(T("Index", "สมุดสะสม"))
         MultiSelect(indexBox, "IndexTypes", T("Index Types", "ประเภทที่จะเก็บ"), nil, Config.GearTypes)
@@ -2896,6 +2974,7 @@ local function BuildInterface()
             xDTaraZ.Util.Try(xDTaraZ.Scheduler.Boot)
             Notify("Loaded", "Success")
             xDTaraZ.Util.Try(Library.LoadAutoloadConfig, Library)
+            if xDTaraZ.Boss.HopWanted() and Options.BossHop then Options.BossHop:SetValue(true) end
         end,
     })
 end

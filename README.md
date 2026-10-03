@@ -80,6 +80,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 - **Auto Farm Tower** on one ticket: rare stones and season coins
 - **Auto Season**: daily ticket, spins, pass rewards and shop
 - **Auto World Boss**: joins, kills and takes the reward card
+- **Boss Server Hop**: hops to servers where the boss is up and kills it
 - Auto sell, auto equip, auto train, click, rebirth, upgrades, best race slot, race roll
 - **Kaitun**: does all of the above at once
 
