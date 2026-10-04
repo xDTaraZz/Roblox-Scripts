@@ -351,6 +351,23 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 > Every feature starts **off**. Turn on only what you need.
 > Each script only runs in its own game.
 
+## 📖・Is Mario Hub open source?
+
+> **Yes, Mario Hub is fully open source.**  
+> ✦ You can view, study, modify, and contribute to the source code under the project's guidelines. 🍄
+
+### 📜・Open Source Rules
+
+> ✦ **No Skidding** — Do not copy the source code and claim it as your own work.  
+> ✦ **No Reskin Projects** — Changing the name, logo, colors, UI, or branding does **not** make it your own project.  
+> ✦ **Give Proper Credit** — If you use Mario Hub's source code, proper credit to **Mario Hub** and the original developers is required.  
+> ✦ **Do Not Remove Credits** — Do not intentionally remove or hide original author credits.  
+> ✦ **Make Real Changes** — Forks should contain meaningful improvements, new features, or substantial modifications—not just renamed files and UI changes.  
+> ✦ **No Reuploading as Your Own** — Do not redistribute the original or lightly modified source while presenting yourself as the original developer.  
+> ✦ **Respect the License** — Any modification or redistribution must follow the project's license and guidelines.
+
+> 🍄 **Learn from it. Improve it. Contribute to it. Don't just skid it.**
+
 ---
 
 <div align="center">
