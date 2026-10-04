@@ -158,7 +158,7 @@ xDTaraZ.Config = {
     ReloadSource = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/loader.lua"))()',
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
-        { "2026-10-04", "Updated for the new game version\nAuto Sell Pets with rarity filter\nFaster egg collecting\nRemoved keybind from Auto Collect Eggs\nFixed Auto Place Best Pets swapping pets\nAuto Feed goes to your base first" },
+        { "2026-10-04", "Updated for the new game version\nAuto Sell Pets with rarity filter\nFaster egg collecting\nRemoved keybind from Auto Collect Eggs\nFixed Auto Place Best Pets swapping pets\nAuto Feed goes to your base first\nVolcano Dip & Auto Volcano Obby" },
         { "2026-10-03", "Classic Mario Hub UI is back\nBetter executor support\nBug fixes & better UI" },
     },
     SaveFolder = "Ride A Pet",
@@ -194,6 +194,16 @@ xDTaraZ.Config = {
     EggSkipFor = 30,
     EggStock = 40,
     DeliverBackoff = 3,
+    VolcanoSpot = Vector3.new(-5103, 41406, -3489),
+    VolcanoStream = 5,
+    VolcanoWait = 3,
+    VolcanoSettle = 0.3,
+    TouchGap = 0.05,
+    VolcanoStep = 0.4,
+    DipDeliverTries = 3,
+    DipWait = 15,
+    DipMinLeft = 12,
+    ObbyRetry = 30,
     SnapshotTtl = 0.2,
     LockWait = 6,
 
@@ -244,6 +254,9 @@ xDTaraZ.State = {
     Status = "Idle",
     Lock = nil,
     EggsCollected = 0,
+    DipReply = nil,
+    MagmaEggs = 0,
+    ObbyRetryAt = 0,
     EggSkip = {},
     NestSkip = {},
     Snapshot = nil,
@@ -434,6 +447,14 @@ xDTaraZ.Net = {
     SellItems = NeedRemote(GameRemotes, "SellItems"),
     ConfirmRequest = NeedRemote(GameRemotes, "ConfirmRequest"),
 }
+
+do
+    local packages = ReplicatedStorage:FindFirstChild("packages")
+    local netPackage = packages and packages:FindFirstChild("Net")
+    xDTaraZ.Net.VolcanoDip = NeedRemote(netPackage, "RE/VolcanoDip")
+    xDTaraZ.Net.VolcanoDipResult = NeedRemote(netPackage, "RE/VolcanoDipResult")
+    xDTaraZ.Net.VolcanoDipCancelled = NeedRemote(netPackage, "RE/VolcanoDipCancelled")
+end
 
 local GameData = Need(ReplicatedStorage, "GameData")
 local dataModules = {}
@@ -762,6 +783,103 @@ function xDTaraZ.Eggs.Deliver()
     return xDTaraZ.Eggs.Answered("Deposited") or xDTaraZ:BasketCount() == 0
 end
 
+xDTaraZ.Volcano = {}
+
+---@return BasePart?  volcano part, streamed in first when it is far away
+function xDTaraZ.Volcano.Part(name)
+    local volcano = Workspace:FindFirstChild("Volcano")
+    local part = volcano and volcano:FindFirstChild(name)
+    if part then return part end
+    pcall(LocalPlayer.RequestStreamAroundAsync, LocalPlayer, Config.VolcanoSpot, Config.VolcanoStream)
+    volcano = Workspace:FindFirstChild("Volcano")
+    return volcano and volcano:FindFirstChild(name)
+end
+
+function xDTaraZ.Volcano.Done()
+    return LocalPlayer:GetAttribute("VolcanoValidated") == true
+end
+
+---@return boolean  the volcano climb counts as finished
+function xDTaraZ.Volcano.Validate()
+    if xDTaraZ.Volcano.Done() then return true end
+    for _, step in ipairs({ { "VolcanoEntrance" }, { "VolcanoValidate", "InVolcano" }, { "VolcanoTop", "VolcanoValidated" } }) do
+        local part = xDTaraZ.Volcano.Part(step[1])
+        if not part or not xDTaraZ:MoveTo(part.CFrame) then return false end
+        task.wait(Config.VolcanoSettle)
+        firetouchinterest(xDTaraZ.Player.Root, part, 0)
+        task.wait(Config.TouchGap)
+        firetouchinterest(xDTaraZ.Player.Root, part, 1)
+        if not step[2] then
+            task.wait(Config.VolcanoStep)
+            continue
+        end
+        local deadline = osClock() + Config.VolcanoWait
+        repeat task.wait() until LocalPlayer:GetAttribute(step[2]) or osClock() > deadline
+        if not LocalPlayer:GetAttribute(step[2]) then return false end
+    end
+    return xDTaraZ.Volcano.Done()
+end
+
+function xDTaraZ.Volcano.ValidateNow()
+    local origin = xDTaraZ.Player.Root and xDTaraZ.Player.Root.CFrame
+    xDTaraZ:WithLock("eggs", Config.LockWait, function()
+        local done = xDTaraZ.Volcano.Validate()
+        xDTaraZ:SetStatus(done and "Volcano climb done" or "Volcano climb failed")
+    end)
+    if origin then xDTaraZ:MoveTo(origin) end
+end
+
+---@return Instance?  basket egg that can still be dipped in time
+function xDTaraZ.Volcano.NextDip()
+    local basket = LocalPlayer:FindFirstChild("Basket")
+    local rarities = xDTaraZ.Options.DipRarities
+    local now = Workspace:GetServerTimeNow()
+    for _, egg in ipairs(basket and basket:GetChildren() or {}) do
+        if egg:GetAttribute("VolcanoDipped") then continue end
+        local info = xDTaraZ.EggInfo[egg:GetAttribute("Egg") or ""]
+        if rarities and next(rarities) and not (info and rarities[info.Rarity]) then continue end
+        if (tonumber(egg:GetAttribute("BreakAt")) or math.huge) - now < Config.DipMinLeft then continue end
+        return egg
+    end
+    return nil
+end
+
+---@return number  eggs dipped
+function xDTaraZ.Volcano.DipBasket()
+    if not (xDTaraZ.Net.VolcanoDip and xDTaraZ.Volcano.NextDip()) then return 0 end
+    if not xDTaraZ.Volcano.Validate() then return 0 end
+    local top = xDTaraZ.Volcano.Part("VolcanoTop")
+    if not top then return 0 end
+
+    local dips = 0
+    for _ = 1, xDTaraZ:BasketCount() do
+        if not xDTaraZ.Volcano.NextDip() or not xDTaraZ.Player:IsAlive() then break end
+        xDTaraZ:MoveTo(top.CFrame + vector3New(0, Config.HomeHover, 0))
+        task.wait(Config.TeleportSettle)
+        xDTaraZ:SetStatus("Dipping egg in the volcano")
+        State.DipReply = nil
+        xDTaraZ.Net.VolcanoDip:FireServer()
+        local deadline = osClock() + Config.DipWait
+        repeat task.wait(0.2) until State.DipReply or osClock() > deadline
+        local reply = State.DipReply
+        if type(reply) ~= "table" or reply.Cancelled then break end
+        local back = (tonumber(reply.ArriveAt) or 0) - Workspace:GetServerTimeNow()
+        if back > 0 then task.wait(math.min(back + Config.TeleportSettle, Config.DipWait)) end
+        dips += 1
+        if reply.Success then State.MagmaEggs += 1 end
+    end
+    return dips
+end
+
+---@return boolean  basket emptied at home, eggs dipped first when Volcano Dip is on
+function xDTaraZ.Eggs.Bank()
+    local dipped = xDTaraZ.Options.VolcanoDip and xDTaraZ.Volcano.DipBasket() or 0
+    for _ = 1, dipped > 0 and Config.DipDeliverTries or 1 do
+        if xDTaraZ.Eggs.Deliver() then return true end
+    end
+    return false
+end
+
 ---@param manual boolean  Collect Now press, ignores the farm toggles
 ---@return number         eggs picked up this run
 function xDTaraZ.Eggs.Run(manual)
@@ -774,15 +892,17 @@ function xDTaraZ.Eggs.Run(manual)
         if not State.Alive or not xDTaraZ.Player:IsAlive() or xDTaraZ:TrollActive() then break end
         if not manual and not (opts.AutoEggs or opts.EggHunter) then break end
         if not egg.Parent then continue end
+        local info = xDTaraZ.EggInfo[egg:GetAttribute("Egg")]
+        if info and info.RequiresVolcano and not xDTaraZ.Volcano.Done() and opts.VolcanoObby then xDTaraZ.Volcano.Validate() end
         xDTaraZ:SetStatus("Grabbing " .. egg:GetAttribute("Egg"))
         if xDTaraZ.Eggs.Pickup(egg) then got += 1 end
-        if xDTaraZ:BasketCount() >= capacity and not xDTaraZ.Eggs.Deliver() then
+        if xDTaraZ:BasketCount() >= capacity and not xDTaraZ.Eggs.Bank() then
             State.DeliverFailUntil = osClock() + Config.DeliverBackoff
             xDTaraZ:SetStatus("Delivery refused, retrying soon")
             break
         end
     end
-    if xDTaraZ:BasketCount() > 0 and not xDTaraZ.Eggs.Deliver() then
+    if xDTaraZ:BasketCount() > 0 and not xDTaraZ.Eggs.Bank() then
         State.DeliverFailUntil = osClock() + Config.DeliverBackoff
     end
 
@@ -805,6 +925,10 @@ end
 
 function xDTaraZ.Eggs.Step()
     local opts = xDTaraZ.Options
+    if opts.VolcanoObby and not xDTaraZ.Volcano.Done() and osClock() > State.ObbyRetryAt and not xDTaraZ:TrollActive() then
+        State.ObbyRetryAt = osClock() + Config.ObbyRetry
+        xDTaraZ.Volcano.ValidateNow()
+    end
     if not opts.AutoEggs and not opts.EggHunter then return end
     if xDTaraZ:TrollActive() or osClock() < State.DeliverFailUntil then return end
 
@@ -1763,6 +1887,14 @@ function xDTaraZ.Scheduler.Boot()
             State.PickReply = { kind = kind, detail = detail, at = osClock() }
         end)
     end
+    if xDTaraZ.Net.VolcanoDipResult then
+        xDTaraZ:Connect(xDTaraZ.Net.VolcanoDipResult.OnClientEvent, function(reply)
+            if type(reply) == "table" and reply.Owner == LocalPlayer.UserId then State.DipReply = reply end
+        end)
+    end
+    if xDTaraZ.Net.VolcanoDipCancelled then
+        xDTaraZ:Connect(xDTaraZ.Net.VolcanoDipCancelled.OnClientEvent, function() State.DipReply = { Cancelled = true } end)
+    end
     if xDTaraZ.Net.SellItems then
         xDTaraZ:Connect(xDTaraZ.Net.SellItems.OnClientEvent, function(reply) State.SellReply = reply end)
     end
@@ -1816,6 +1948,7 @@ xDTaraZ.UI.KaitunSet = { "AutoEggs", "SmartEggs", "AutoPlaceEggs", "AutoHatch", 
 xDTaraZ.UI.Needs = {
     AutoEggs = { "Eggs", "EggBaskets", "Net.EggPickup", "Net.EggArrivalClaim" },
     EggHunter = { "Eggs", "EggBaskets", "Net.EggPickup", "Net.EggArrivalClaim" },
+    VolcanoDip = { "Eggs", "Net.VolcanoDip", "Net.VolcanoDipResult" },
     AutoPlaceEggs = { "Eggs", "Net.EggPlaced" },
     AutoHatch = { "Net.Hatch" },
     AutoNests = { "Nests", "Net.Nests" },
@@ -1967,6 +2100,17 @@ function xDTaraZ.UI.EggFarm(window)
         Library:Notify("Eggs", "Collected " .. xDTaraZ.Eggs.CollectNow(), 3, "Success")
     end) })
     farm:AddButton({ Text = T("Teleport To Best Egg", "วาร์ปไปไข่ที่ดีที่สุด"), Func = xDTaraZ.Teleport.BestEgg })
+
+    local volcano = tab:AddLeftGroupbox(T("Volcano", "ภูเขาไฟ"), "flower")
+    local dip = xDTaraZ.UI.Toggle(volcano, "VolcanoDip", "Volcano Dip", "จุ่มไข่ในภูเขาไฟ", T("Dips collected eggs in the volcano for a chance at Magma", "จุ่มไข่ที่เก็บมาในภูเขาไฟ ลุ้นได้ Magma"))
+    xDTaraZ.UI.Bind("DipRarities", volcano:AddDropdown("DipRarities", { Text = T("Dip Rarities (empty = all)", "ความหายากที่จะจุ่ม (ว่าง = ทั้งหมด)"), Values = xDTaraZ.Rarities, Multi = true, Default = {} }))
+    local obby = xDTaraZ.UI.Toggle(volcano, "VolcanoObby", "Auto Volcano Obby", "ผ่านด่านภูเขาไฟอัตโนมัติ", T("Finishes the volcano climb so Volcanic Eggs can be collected", "ผ่านด่านปีนภูเขาไฟ เพื่อเก็บไข่ Volcanic ได้"))
+    volcano:AddButton({ Text = T("Finish Volcano Obby Now", "ผ่านด่านภูเขาไฟเดี๋ยวนี้"), Func = xDTaraZ.UI.Detach(function()
+        xDTaraZ.Volcano.ValidateNow()
+        Library:Notify("Volcano", xDTaraZ.Volcano.Done() and "Volcano climb done" or "Volcano climb failed", 4, xDTaraZ.Volcano.Done() and "Success" or "Warning")
+    end) })
+    Library.Compat.NeedCap(dip, "Touch")
+    Library.Compat.NeedCap(obby, "Touch")
 
     local filters = tab:AddRightGroupbox(T("Egg Filters", "ตัวกรองไข่"), "target")
     local rarities = xDTaraZ.UI.Bind("EggRarities", filters:AddDropdown("EggRarities", { Text = T("Rarities (empty = all)", "ความหายาก (ว่าง = ทั้งหมด)"), Values = xDTaraZ.Rarities, Multi = true, Default = {} }))
