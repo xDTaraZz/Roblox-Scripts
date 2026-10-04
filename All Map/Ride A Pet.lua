@@ -158,11 +158,19 @@ xDTaraZ.Config = {
     ReloadSource = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/loader.lua"))()',
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
-        { "2026-10-04", "Updated for the new game version\nAuto Sell Pets with rarity filter\nFaster egg collecting\nRemoved keybind from Auto Collect Eggs\nFixed Auto Place Best Pets swapping pets\nAuto Feed goes to your base first\nVolcano Dip & Auto Volcano Obby\nAuto Place Eggs fills your plot up to its limit\nFixed eggs breaking before reaching base, also with Volcano Dip\nVolcano climb only runs when a Volcanic Egg spawns\nVolcano climb runs by itself for Volcanic Eggs\nRemoved Auto Buy Nests" },
+        { "2026-10-04", "Discord Webhook alerts (rare eggs, Magma, new pets, rebirth, kick, status)\nFixed Auto Volcano Obby not starting for Volcanic Eggs\nFixed Volcano Dip waiting until eggs broke\nEggs are picked up within a second of spawning\nAuto Place no longer pulls you home when your plot is full\nUpdated for the new game version\nAuto Sell Pets with rarity filter\nFaster egg collecting\nRemoved keybind from Auto Collect Eggs\nFixed Auto Place Best Pets swapping pets\nAuto Feed goes to your base first\nVolcano Dip & Auto Volcano Obby\nAuto Place Eggs fills your plot up to its limit\nFixed eggs breaking before reaching base, also with Volcano Dip\nVolcano climb only runs when a Volcanic Egg spawns\nVolcano climb runs by itself for Volcanic Eggs\nRemoved Auto Buy Nests" },
         { "2026-10-03", "Classic Mario Hub UI is back\nBetter executor support\nBug fixes & better UI" },
     },
     SaveFolder = "Ride A Pet",
     Tag = "[RideAPet]",
+    WebhookPattern = "^https://[%w%.]*discord[app]*%.com/api/webhooks/%d+/[%w_%-]+$",
+    WebhookGap = 1.2,
+    WebhookTick = 15,
+    WebhookLogo = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/main/logo.png",
+    WebhookAvatarApi = "https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=%d&size=150x150&format=Png",
+    WebhookIcons = { Egg = "🥚", Server = "📡", Magma = "🌋", Pet = "🐾", Rebirth = "♻️", Kick = "⚠️", Report = "📊", Test = "✅" },
+    WebhookQueueMax = 20,
+    WebhookColors = { Egg = 0xE8A04C, Pet = 0x7DD87D, Magma = 0xFF5A2A, Server = 0xFF82E6, Rebirth = 0x5AB4FF, Kick = 0xE04848, Report = 0x9AA4B0, Test = 0xE8A04C },
     LoadTimeout = 30,
     AlertTries = 20,
     AlertGap = 0.5,
@@ -197,12 +205,15 @@ xDTaraZ.Config = {
     DeliverBackoff = 3,
     VolcanoSpot = Vector3.new(-5103, 41406, -3489),
     VolcanoStream = 5,
-    VolcanoWait = 3,
+    VolcanoWait = 5,
     VolcanoSettle = 0.3,
     TouchGap = 0.05,
     VolcanoStep = 0.4,
     DeliverTries = 3,
     DipWait = 15,
+    DipReplyWait = 3,
+    ObbyTries = 2,
+    RunMax = 64,
     DipMinLeft = 12,
     ObbyRetry = 30,
     SnapshotTtl = 0.2,
@@ -218,7 +229,7 @@ xDTaraZ.Config = {
     PlantSpread = 0.42,
     PlantWait = 1.5,
     PlotCapGuess = 40,
-    PlotCapRecheck = 60,
+    PlotCapRecheck = 600,
     PetSpread = 0.35,
     PetLift = 0.5,
     PetFailBackoff = 20,
@@ -263,6 +274,7 @@ xDTaraZ.State = {
     MagmaEggs = 0,
     ObbyRetryAt = 0,
     EggSkip = {},
+    DipSkip = {},
     NestSkip = {},
     PlotCap = nil,
     PlotCapAt = 0,
@@ -378,6 +390,354 @@ function xDTaraZ.Util.FormatNumber(n)
         i += 1
     end
     return i == 1 and tostring(math.floor(n)) or string.format("%.2f%s", n, suffixes[i])
+end
+
+xDTaraZ.Webhook = {
+    Queue = {},
+    Sending = false,
+    SeenPets = {},
+    SeenEggs = {},
+    LastReport = 0,
+    StartedAt = os.clock(),
+    Avatar = nil,
+    Counts = { Eggs = 0, Rare = 0, Dips = 0, Magma = 0, Pets = 0 },
+    Baseline = nil,
+}
+
+---@return boolean  the url looks like a Discord webhook
+function xDTaraZ.Webhook.Valid(url)
+    return type(url) == "string" and url:match(Config.WebhookPattern) ~= nil
+end
+
+function xDTaraZ.Webhook.Wants(event)
+    local opts = xDTaraZ.Options
+    local events = opts.WebhookEvents
+    return opts.Webhook == true and xDTaraZ.Webhook.Valid(opts.WebhookUrl) and type(events) == "table" and events[event] == true
+end
+
+---@return number  embed colour for a rarity, falling back to the event colour
+function xDTaraZ.Webhook.Color(rarity, kind)
+    local color = rarity and Config.RarityColors[rarity]
+    if not color then return Config.WebhookColors[kind] or Config.WebhookColors.Report end
+    return math.floor(color.R * 255) * 65536 + math.floor(color.G * 255) * 256 + math.floor(color.B * 255)
+end
+
+function xDTaraZ.Webhook.Duration(seconds)
+    seconds = math.max(0, math.floor(seconds))
+    local hours, minutes = math.floor(seconds / 3600), math.floor(seconds % 3600 / 60)
+    if hours > 0 then return string.format("%dh %02dm", hours, minutes) end
+    return string.format("%dm %02ds", minutes, seconds % 60)
+end
+
+---@return string?  direct headshot url, fetched once
+function xDTaraZ.Webhook.AvatarUrl()
+    local hook = xDTaraZ.Webhook
+    if hook.Avatar ~= nil then return hook.Avatar or nil end
+    hook.Avatar = false
+    local body = xDTaraZ.Util.HttpGet(Config.WebhookAvatarApi:format(LocalPlayer.UserId))
+    local ok, decoded = pcall(HttpService.JSONDecode, HttpService, body or "")
+    local entry = ok and type(decoded) == "table" and decoded.data and decoded.data[1]
+    if entry and type(entry.imageUrl) == "string" then hook.Avatar = entry.imageUrl end
+    return hook.Avatar or nil
+end
+
+function xDTaraZ.Webhook.Income()
+    local stats = LocalPlayer:FindFirstChild("leaderstats")
+    local income = stats and stats:FindFirstChild("Income/s")
+    return income and tonumber(income.Value) or 0
+end
+
+---@return table  account and session lines shared by every alert
+function xDTaraZ.Webhook.AccountFields()
+    local hook = xDTaraZ.Webhook
+    local counts = hook.Counts
+    local players = #Players:GetPlayers()
+    return {
+        { "💵 Cash", xDTaraZ.Util.FormatNumber(xDTaraZ:Cash()) },
+        { "📈 Income", xDTaraZ.Util.FormatNumber(hook.Income()) .. "/s" },
+        { "♻️ Rebirths", xDTaraZ:Rebirths() },
+        { "🥚 Eggs (session)", counts.Eggs .. " (" .. counts.Rare .. " rare)" },
+        { "🌋 Magma (session)", counts.Magma .. " / " .. counts.Dips .. " dips" },
+        { "⏱️ Session", hook.Duration(osClock() - hook.StartedAt) .. " | " .. players .. "/" .. Players.MaxPlayers .. " players" },
+    }
+end
+
+---@param event table  { Kind, Title, Lines?, Fields?, Rarity?, Ping?, Account? }
+---@return string      embed json
+function xDTaraZ.Webhook.Build(event)
+    local fields = {}
+    for _, field in ipairs(event.Fields or {}) do
+        fields[#fields + 1] = { name = field[1], value = tostring(field[2]), inline = field[3] ~= false }
+    end
+    if event.Account ~= false then
+        fields[#fields + 1] = { name = "\u{200B}", value = "**Account**", inline = false }
+        for _, field in ipairs(xDTaraZ.Webhook.AccountFields()) do
+            fields[#fields + 1] = { name = field[1], value = tostring(field[2]), inline = true }
+        end
+    end
+
+    local avatar = xDTaraZ.Webhook.AvatarUrl()
+    return HttpService:JSONEncode({
+        username = "Mario Hub",
+        avatar_url = Config.WebhookLogo,
+        content = event.Ping and xDTaraZ.Options.WebhookPing and "@everyone" or nil,
+        embeds = { {
+            author = { name = LocalPlayer.DisplayName .. " (@" .. LocalPlayer.Name .. ")", icon_url = avatar },
+            title = (Config.WebhookIcons[event.Kind] or "") .. " " .. event.Title,
+            description = event.Lines and table.concat(event.Lines, "\n") or nil,
+            color = xDTaraZ.Webhook.Color(event.Rarity, event.Kind),
+            fields = fields,
+            thumbnail = event.Thumbnail and { url = event.Thumbnail } or nil,
+            footer = { text = "Mario Hub • Ride A Pet", icon_url = Config.WebhookLogo },
+            timestamp = DateTime.now():ToIsoDate(),
+        } },
+    })
+end
+
+function xDTaraZ.Webhook.Push(event)
+    local queue = xDTaraZ.Webhook.Queue
+    if #queue >= Config.WebhookQueueMax then table.remove(queue, 1) end
+    queue[#queue + 1] = event
+    xDTaraZ.Webhook.Flush()
+end
+
+---@return boolean, string?  sent, or false and why
+function xDTaraZ.Webhook.Post(url, json)
+    local requester = (syn and syn.request) or (http and http.request) or http_request or request
+    if not requester then return false, "no http function" end
+    local ok, response = pcall(requester, { Url = url, Method = "POST", Headers = { ["Content-Type"] = "application/json" }, Body = json })
+    if not ok or type(response) ~= "table" then return false, tostring(response) end
+    local code = tonumber(response.StatusCode) or 0
+    if code < 200 or code >= 300 then return false, "HTTP " .. code .. " " .. tostring(response.Body):sub(1, 120) end
+    return true
+end
+
+function xDTaraZ.Webhook.Flush()
+    if xDTaraZ.Webhook.Sending then return end
+    xDTaraZ.Webhook.Sending = true
+    task.spawn(function()
+        local queue = xDTaraZ.Webhook.Queue
+        while #queue > 0 and State.Alive do
+            local url = xDTaraZ.Options.WebhookUrl
+            if not xDTaraZ.Webhook.Valid(url) then
+                table.clear(queue)
+                break
+            end
+            local built, json = pcall(xDTaraZ.Webhook.Build, table.remove(queue, 1))
+            local sent, why = false, json
+            if built then sent, why = xDTaraZ.Webhook.Post(url, json) end
+            if not sent then warn(Config.Tag, "webhook:", why) end
+            task.wait(Config.WebhookGap)
+        end
+        xDTaraZ.Webhook.Sending = false
+    end)
+end
+
+---@return boolean  rarity rank reaches the floor picked in the menu
+function xDTaraZ.Webhook.EggRareEnough(info)
+    return info ~= nil and (xDTaraZ.RarityRank[info.Rarity] or 0) >= (xDTaraZ.RarityRank[xDTaraZ.Options.WebhookEggRarity] or 1)
+end
+
+---@return table  egg detail fields from the game data and the egg's own attributes
+function xDTaraZ.Webhook.EggFields(eggName, egg)
+    local info = xDTaraZ.EggInfo[eggName] or {}
+    local fields = {
+        { "✨ Rarity", tostring(info.Rarity or "?") },
+        { "🍀 Luck", "1 in " .. xDTaraZ.Util.FormatNumber(info.Luck or 0) },
+    }
+    local weight = egg and tonumber(egg:GetAttribute("Weight"))
+    if weight then fields[#fields + 1] = { "⚖️ Weight", string.format("%.2f", weight) } end
+    local mutation = egg and (egg:GetAttribute("Mutation") or egg:GetAttribute("SpawnMutation"))
+    if mutation and mutation ~= "" then fields[#fields + 1] = { "🧬 Mutation", mutation } end
+    if (info.Growth or 0) > 0 then fields[#fields + 1] = { "⏳ Grow time", xDTaraZ.Webhook.Duration(info.Growth) } end
+    if info.RequiresVolcano then fields[#fields + 1] = { "🌋 Spawn", "Inside the volcano" } end
+    return fields
+end
+
+---@param eggName string  egg the server says was picked up
+function xDTaraZ.Webhook.EggPicked(eggName)
+    local counts = xDTaraZ.Webhook.Counts
+    local info = xDTaraZ.EggInfo[eggName or ""]
+    counts.Eggs += 1
+    if not xDTaraZ.Webhook.EggRareEnough(info) then return end
+    counts.Rare += 1
+    if not xDTaraZ.Webhook.Wants("Rare Egg Picked") then return end
+
+    local carried
+    for _, egg in ipairs(LocalPlayer:FindFirstChild("Basket") and LocalPlayer.Basket:GetChildren() or {}) do
+        if egg:GetAttribute("Egg") == eggName then carried = egg end
+    end
+    xDTaraZ.Webhook.Push({
+        Kind = "Egg",
+        Title = "Picked up " .. eggName,
+        Lines = { "On the way home." },
+        Fields = xDTaraZ.Webhook.EggFields(eggName, carried),
+        Rarity = info.Rarity,
+        Ping = xDTaraZ.RarityRank[info.Rarity] == #xDTaraZ.Rarities,
+    })
+end
+
+function xDTaraZ.Webhook.EggSpawned(egg)
+    if xDTaraZ.Webhook.SeenEggs[egg.Name] or not xDTaraZ.Webhook.Wants("Rare Egg In Server") then return end
+    local eggName = egg:GetAttribute("Egg")
+    local info = xDTaraZ.EggInfo[eggName or ""]
+    if not xDTaraZ.Webhook.EggRareEnough(info) then return end
+    xDTaraZ.Webhook.SeenEggs[egg.Name] = true
+
+    local fields = xDTaraZ.Webhook.EggFields(eggName, egg)
+    fields[#fields + 1] = { "🆔 Server", "`" .. game.JobId .. "`", false }
+    xDTaraZ.Webhook.Push({
+        Kind = "Server",
+        Title = eggName .. " spawned",
+        Lines = { "A " .. info.Rarity .. " egg is on the map in your server." },
+        Fields = fields,
+        Rarity = info.Rarity,
+        Ping = true,
+    })
+end
+
+function xDTaraZ.Webhook.Dipped(reply)
+    local counts = xDTaraZ.Webhook.Counts
+    counts.Dips += 1
+    if reply.Success then counts.Magma += 1 end
+    if not reply.Success or not xDTaraZ.Webhook.Wants("Magma Dip") then return end
+
+    local eggName = tostring(reply.Egg)
+    local info = xDTaraZ.EggInfo[eggName] or {}
+    xDTaraZ.Webhook.Push({
+        Kind = "Magma",
+        Title = eggName .. " became " .. tostring(reply.Mutation),
+        Lines = { "The volcano dip worked." },
+        Fields = {
+            { "✨ Rarity", tostring(info.Rarity or "?") },
+            { "⚖️ Weight", string.format("%.2f", tonumber(reply.Weight) or 0) },
+            { "🎲 Hit rate", string.format("%d / %d (%.0f%%)", counts.Magma, counts.Dips, counts.Magma / counts.Dips * 100) },
+        },
+        Rarity = info.Rarity,
+    })
+end
+
+function xDTaraZ.Webhook.PetAdded(tool)
+    local key = tool:IsA("Tool") and tool:GetAttribute("PetKey")
+    if not key or xDTaraZ.Webhook.SeenPets[key] then return end
+    xDTaraZ.Webhook.SeenPets[key] = true
+    xDTaraZ.Webhook.Counts.Pets += 1
+    if not xDTaraZ.Webhook.Wants("Pet Hatched") then return end
+
+    local petName = tool:GetAttribute("PetName") or tool.Name
+    local info = xDTaraZ.GameLib.Pets[petName]
+    local rarity = type(info) == "table" and info.Rarity or "?"
+    if (xDTaraZ.PetRarityRank[rarity] or 0) < (xDTaraZ.PetRarityRank[xDTaraZ.Options.WebhookPetRarity] or 1) then return end
+
+    local fields = {
+        { "✨ Rarity", rarity },
+        { "💰 Income", xDTaraZ.Util.FormatNumber(type(info) == "table" and tonumber(info.Income) or 0) .. "/s" },
+    }
+    local weight = tonumber(tool:GetAttribute("Weight") or tool:GetAttribute("BaseWeight"))
+    if weight then fields[#fields + 1] = { "⚖️ Weight", string.format("%.2f", weight) } end
+    for _, attr in ipairs({ "Mutation", "SpawnMutation" }) do
+        local mutation = tool:GetAttribute(attr)
+        if mutation and mutation ~= "" then fields[#fields + 1] = { "🧬 " .. attr:gsub("Spawn", "Spawn "), mutation } end
+    end
+    fields[#fields + 1] = { "🐾 New pets (session)", xDTaraZ.Webhook.Counts.Pets }
+    xDTaraZ.Webhook.Push({
+        Kind = "Pet",
+        Title = "New pet: " .. petName,
+        Fields = fields,
+        Rarity = rarity,
+        Ping = xDTaraZ.PetRarityRank[rarity] == #xDTaraZ.PetRarities,
+    })
+end
+
+function xDTaraZ.Webhook.Snapshot()
+    return { Cash = xDTaraZ:Cash(), Eggs = xDTaraZ.Webhook.Counts.Eggs, Magma = xDTaraZ.Webhook.Counts.Magma, Pets = xDTaraZ.Webhook.Counts.Pets, At = osClock() }
+end
+
+function xDTaraZ.Webhook.Report()
+    local hook = xDTaraZ.Webhook
+    local minutes = tonumber(xDTaraZ.Options.WebhookReportMins) or 0
+    if minutes <= 0 or not hook.Wants("Status Report") then return end
+    if osClock() - hook.LastReport < minutes * 60 then return end
+    hook.LastReport = osClock()
+
+    local now = hook.Snapshot()
+    local before = hook.Baseline or now
+    hook.Baseline = now
+    local span = math.max(now.At - before.At, 1)
+    local gained = now.Cash - before.Cash
+    hook.Push({
+        Kind = "Report",
+        Title = "Status report",
+        Lines = { "**Doing:** " .. tostring(State.Status) },
+        Fields = {
+            { "💵 Cash gained", (gained >= 0 and "+" or "") .. xDTaraZ.Util.FormatNumber(gained) },
+            { "⚡ Cash / hour", xDTaraZ.Util.FormatNumber(gained / span * 3600) },
+            { "🥚 Eggs", "+" .. (now.Eggs - before.Eggs) },
+            { "🌋 Magma", "+" .. (now.Magma - before.Magma) },
+            { "🐾 New pets", "+" .. (now.Pets - before.Pets) },
+            { "🕒 Window", hook.Duration(span) },
+        },
+    })
+end
+
+---@param message string  disconnect text; sent straight away since the queue will not outlive the session
+function xDTaraZ.Webhook.Kicked(message)
+    if not xDTaraZ.Webhook.Wants("Kicked") then return end
+    local built, json = pcall(xDTaraZ.Webhook.Build, {
+        Kind = "Kick",
+        Title = "Disconnected",
+        Lines = { "```" .. tostring(message):sub(1, 500) .. "```" },
+        Ping = true,
+    })
+    if built then xDTaraZ.Webhook.Post(xDTaraZ.Options.WebhookUrl, json) end
+end
+
+function xDTaraZ.Webhook.Test()
+    if not xDTaraZ.Webhook.Valid(xDTaraZ.Options.WebhookUrl) then return false end
+    xDTaraZ.Webhook.Push({ Kind = "Test", Title = "Webhook connected", Lines = { "Alerts from Mario Hub will show up here." } })
+    return true
+end
+
+function xDTaraZ.Webhook.WatchBackpack(backpack)
+    for _, tool in ipairs(backpack:GetChildren()) do
+        local key = tool:GetAttribute("PetKey")
+        if key then xDTaraZ.Webhook.SeenPets[key] = true end
+    end
+    xDTaraZ:Connect(backpack.ChildAdded, xDTaraZ.Webhook.PetAdded)
+end
+
+function xDTaraZ.Webhook.Boot()
+    local hook = xDTaraZ.Webhook
+    for _, pet in ipairs(xDTaraZ.Pets.Placed()) do
+        local key = pet:GetAttribute("PetKey")
+        if key then hook.SeenPets[key] = true end
+    end
+    local character = xDTaraZ.Player.Character
+    for _, tool in ipairs(character and character:GetChildren() or {}) do
+        local key = tool:GetAttribute("PetKey")
+        if key then hook.SeenPets[key] = true end
+    end
+    local backpack = LocalPlayer:FindFirstChildOfClass("Backpack")
+    if backpack then hook.WatchBackpack(backpack) end
+    xDTaraZ:Connect(LocalPlayer.ChildAdded, function(child)
+        if child:IsA("Backpack") then hook.WatchBackpack(child) end
+    end)
+    hook.Baseline = hook.Snapshot()
+    task.spawn(hook.AvatarUrl)
+
+    local saved = xDTaraZ:Saved()
+    local rebirths = saved and saved:FindFirstChild("Rebirths")
+    if rebirths then
+        xDTaraZ:Connect(rebirths.Changed, function(value)
+            if not hook.Wants("Rebirth") then return end
+            hook.Push({ Kind = "Rebirth", Title = "Rebirth " .. tostring(value) .. " done", Lines = { "Cash and luck reset, +1 pet slot." } })
+        end)
+    end
+    local guiService = game:GetService("GuiService")
+    xDTaraZ:Connect(guiService.ErrorMessageChanged, function()
+        local message = guiService:GetErrorMessage()
+        if message ~= "" then task.spawn(hook.Kicked, message) end
+    end)
 end
 
 xDTaraZ.GameLib = { Missing = {} }
@@ -512,6 +872,7 @@ xDTaraZ.EggNames = {}
 xDTaraZ.Rarities = {}
 xDTaraZ.RarityRank = {}
 xDTaraZ.PetRarities = {}
+xDTaraZ.PetRarityRank = {}
 xDTaraZ.FoodNames = {}
 
 function xDTaraZ.BuildLists()
@@ -525,7 +886,7 @@ function xDTaraZ.BuildLists()
     for name, info in pairs(GameLib.Eggs) do
         local rarity = info.Rarity or "Common"
         local luck = tonumber(info.Luck) or math.huge
-        xDTaraZ.EggInfo[name] = { Rarity = rarity, Luck = luck, Growth = tonumber(info.GrowthTime) or 0 }
+        xDTaraZ.EggInfo[name] = { Rarity = rarity, Luck = luck, Growth = tonumber(info.GrowthTime) or 0, RequiresVolcano = info.RequiresVolcano == true }
         xDTaraZ.EggNames[#xDTaraZ.EggNames + 1] = name
         rarityFloor[rarity] = math.min(rarityFloor[rarity] or math.huge, luck)
     end
@@ -550,6 +911,10 @@ function xDTaraZ.BuildLists()
         xDTaraZ.PetRarities[#xDTaraZ.PetRarities + 1] = rarity
     end
     table.sort(xDTaraZ.PetRarities, function(a, b) return petFloor[a] < petFloor[b] end)
+    table.clear(xDTaraZ.PetRarityRank)
+    for index, rarity in ipairs(xDTaraZ.PetRarities) do
+        xDTaraZ.PetRarityRank[rarity] = index
+    end
 
     for name in pairs(GameLib.Foods) do
         xDTaraZ.FoodNames[#xDTaraZ.FoodNames + 1] = name
@@ -817,7 +1182,13 @@ end
 
 ---@return boolean  the volcano climb counts as finished
 function xDTaraZ.Volcano.Validate()
-    if xDTaraZ.Volcano.Done() then return true end
+    for _ = 1, Config.ObbyTries do
+        if xDTaraZ.Volcano.Done() or xDTaraZ.Volcano.Climb() then return true end
+    end
+    return false
+end
+
+function xDTaraZ.Volcano.Climb()
     for _, step in ipairs({ { "VolcanoEntrance" }, { "VolcanoValidate", "InVolcano" }, { "VolcanoTop", "VolcanoValidated" } }) do
         local part = xDTaraZ.Volcano.Part(step[1])
         if not part or not xDTaraZ:MoveTo(part.CFrame) then return false end
@@ -854,7 +1225,7 @@ function xDTaraZ.Volcano.NextDip()
         if (tonumber(egg:GetAttribute("BreakAt")) or math.huge) - now < Config.DipMinLeft then return nil end
     end
     for _, egg in ipairs(basket and basket:GetChildren() or {}) do
-        if egg:GetAttribute("VolcanoDipped") then continue end
+        if egg:GetAttribute("VolcanoDipped") or State.DipSkip[egg.Name] then continue end
         local info = xDTaraZ.EggInfo[egg:GetAttribute("Egg") or ""]
         if rarities and next(rarities) and not (info and rarities[info.Rarity]) then continue end
         if (tonumber(egg:GetAttribute("BreakAt")) or math.huge) - now < Config.DipMinLeft then continue end
@@ -871,16 +1242,20 @@ function xDTaraZ.Volcano.DipBasket()
 
     local dips = 0
     for _ = 1, xDTaraZ:BasketCount() do
-        if not xDTaraZ.Volcano.NextDip() or not xDTaraZ.Player:IsAlive() then break end
+        local egg = xDTaraZ.Volcano.NextDip()
+        if not egg or not xDTaraZ.Player:IsAlive() then break end
         xDTaraZ:MoveTo(top.CFrame + vector3New(0, Config.HomeHover, 0))
         task.wait(Config.TeleportSettle)
         xDTaraZ:SetStatus("Dipping egg in the volcano")
         State.DipReply = nil
         xDTaraZ.Net.VolcanoDip:FireServer()
-        local deadline = osClock() + Config.DipWait
-        repeat task.wait(0.2) until State.DipReply or osClock() > deadline
+        local deadline = osClock() + Config.DipReplyWait
+        repeat task.wait() until State.DipReply or osClock() > deadline
         local reply = State.DipReply
-        if type(reply) ~= "table" or reply.Cancelled then break end
+        if type(reply) ~= "table" or reply.Cancelled then
+            State.DipSkip[egg.Name] = true
+            break
+        end
         local back = (tonumber(reply.ArriveAt) or 0) - Workspace:GetServerTimeNow()
         if back > 0 then task.wait(math.min(back + Config.TeleportSettle, Config.DipWait)) end
         dips += 1
@@ -924,12 +1299,17 @@ function xDTaraZ.Eggs.Run(manual)
     local capacity = opts.VolcanoDip and 1 or xDTaraZ:BasketCapacity()
     local got = 0
 
-    for _, egg in ipairs(xDTaraZ.Eggs.Available()) do
+    for _ = 1, Config.RunMax do
         if not State.Alive or not xDTaraZ.Player:IsAlive() or xDTaraZ:TrollActive() then break end
         if not manual and not (opts.AutoEggs or opts.EggHunter) then break end
-        if not egg.Parent then continue end
+        State.Snapshot = nil
+        local egg = xDTaraZ.Eggs.Available()[1]
+        if not egg then break end
         local info = xDTaraZ.EggInfo[egg:GetAttribute("Egg")]
-        if info and info.RequiresVolcano and not xDTaraZ.Volcano.Ready() then continue end
+        if info and info.RequiresVolcano and not xDTaraZ.Volcano.Ready() then
+            State.EggSkip[egg.Name] = osClock() + Config.ObbyRetry
+            continue
+        end
         xDTaraZ:SetStatus("Grabbing " .. egg:GetAttribute("Egg"))
         if xDTaraZ.Eggs.Pickup(egg) then got += 1 end
         local goHome = xDTaraZ:BasketCount() >= capacity or (xDTaraZ:BasketCount() > 0 and xDTaraZ.Eggs.Urgent())
@@ -1976,14 +2356,25 @@ function xDTaraZ.Scheduler.Loop(tick, names)
 end
 
 function xDTaraZ.Scheduler.Boot()
+    local serverData = ReplicatedStorage:FindFirstChild("ServerData")
+    local activeEggs = serverData and serverData:FindFirstChild("ActiveEggs")
+    if activeEggs then
+        xDTaraZ:Connect(activeEggs.ChildAdded, function(egg)
+            State.Snapshot = nil
+            task.defer(xDTaraZ.Webhook.EggSpawned, egg)
+        end)
+    end
     if xDTaraZ.Net.EggPickup then
         xDTaraZ:Connect(xDTaraZ.Net.EggPickup.OnClientEvent, function(kind, detail)
             State.PickReply = { kind = kind, detail = detail, at = osClock() }
+            if kind == "PickedUp" then xDTaraZ.Webhook.EggPicked(detail) end
         end)
     end
     if xDTaraZ.Net.VolcanoDipResult then
         xDTaraZ:Connect(xDTaraZ.Net.VolcanoDipResult.OnClientEvent, function(reply)
-            if type(reply) == "table" and reply.Owner == LocalPlayer.UserId then State.DipReply = reply end
+            if type(reply) ~= "table" or reply.Owner ~= LocalPlayer.UserId then return end
+            State.DipReply = reply
+            xDTaraZ.Webhook.Dipped(reply)
         end)
     end
     if xDTaraZ.Net.VolcanoDipCancelled then
@@ -2004,6 +2395,7 @@ function xDTaraZ.Scheduler.Boot()
             end
         end)
     end
+    xDTaraZ.Util.Try("webhook", xDTaraZ.Webhook.Boot)
     xDTaraZ.Scheduler.Loop(Config.EggTick, { "Eggs" })
     xDTaraZ.Scheduler.Loop(Config.StepTick, { "Hatch", "Pets", "Progress", "Fusion", "Shop" })
     xDTaraZ:Connect(RunService.Heartbeat, function(dt)
@@ -2149,6 +2541,27 @@ function xDTaraZ.UI.Home(window)
     quick:AddButton({ Text = T("Panic - All Off", "ฉุกเฉิน ปิดทั้งหมด"), Style = "Danger", Func = function()
         for idx, toggle in pairs(Library.Toggles) do
             if toggle.Value == true and not tostring(idx):find("^Mario") then toggle:SetValue(false) end
+        end
+    end })
+
+    local hook = tab:AddLeftGroupbox(T("Discord Webhook", "แจ้งเตือนดิสคอร์ด"), "bell")
+    xDTaraZ.UI.Toggle(hook, "Webhook", "Webhook Alerts", "แจ้งเตือนผ่าน Webhook", T("Sends what you got to your Discord channel", "ส่งของที่ได้เข้าห้องดิสคอร์ดของคุณ"))
+    xDTaraZ.UI.Bind("WebhookUrl", hook:AddInput("WebhookUrl", { Text = T("Webhook URL", "ลิงก์ Webhook"), Default = "", Placeholder = T("Paste your webhook link", "วางลิงก์ webhook"), Finished = true }))
+    xDTaraZ.UI.Bind("WebhookEvents", hook:AddDropdown("WebhookEvents", {
+        Text = T("Alerts", "แจ้งเตือนเรื่อง"),
+        Values = { "Rare Egg Picked", "Rare Egg In Server", "Magma Dip", "Pet Hatched", "Rebirth", "Kicked", "Status Report" },
+        Multi = true,
+        Default = {},
+    }))
+    xDTaraZ.UI.Bind("WebhookEggRarity", hook:AddDropdown("WebhookEggRarity", { Text = T("Egg Rarity At Least", "ไข่ความหายากตั้งแต่"), Values = xDTaraZ.Rarities, Default = xDTaraZ.HuntDefault }))
+    xDTaraZ.UI.Bind("WebhookPetRarity", hook:AddDropdown("WebhookPetRarity", { Text = T("Pet Rarity At Least", "สัตว์ความหายากตั้งแต่"), Values = xDTaraZ.PetRarities, Default = xDTaraZ.PetRarities[math.max(#xDTaraZ.PetRarities - 2, 1)] }))
+    xDTaraZ.UI.Bind("WebhookReportMins", hook:AddSlider("WebhookReportMins", { Text = T("Status Report Every", "รายงานสถานะทุก"), Min = 5, Max = 120, Default = 30, Rounding = 0, Suffix = " min" }))
+    xDTaraZ.UI.Bind("WebhookPing", hook:AddCheckbox("WebhookPing", { Text = T("Ping @everyone On Top Finds", "แท็ก @everyone เมื่อได้ของสุดยอด"), Default = false }))
+    hook:AddButton({ Text = T("Send Test", "ส่งทดสอบ"), Func = function()
+        if xDTaraZ.Webhook.Test() then
+            Library:Notify("Webhook", "Test sent", 3, "Success")
+        else
+            Library:Notify("Webhook", "Paste a Discord webhook URL first", 5, "Warning")
         end
     end })
 
@@ -2411,6 +2824,7 @@ local function BuildInterface()
             Library:Every(Config.EspRefresh, xDTaraZ.Esp.Refresh)
             Library:Every(Config.EspRefresh, xDTaraZ.UI.Refresh)
             Library:Every(Config.EspRefresh, xDTaraZ.UI.DrainHalted)
+            Library:Every(Config.WebhookTick, xDTaraZ.Webhook.Report)
             xDTaraZ.Util.Try("boot", xDTaraZ.Scheduler.Boot)
             xDTaraZ.Util.Try("autoload config", Library.LoadAutoloadConfig, Library)
             xDTaraZ.Util.Try("hunt resume", xDTaraZ.UI.ResumeHunt)
