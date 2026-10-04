@@ -213,7 +213,9 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 
 - **Smart Kaitun**: collects eggs, fills nests, hatches, places your best pets, feeds them and rebirths on its own
 - Smart spending: saves for the next rebirth before buying luck upgrades
-- **Instant Eggs**: grabs every wanted wild egg on the map and brings it home in seconds
+- **Instant Eggs**: grabs the best eggs on the map and every one reaches your base, no returned eggs
+- **Minimum Egg Rarity**: skip cheap eggs and farm rare ones only
+- **Clear Junk Eggs**: hatches your cheap eggs and sells the pets that come out
 - **Rare Egg Hunter**: only takes top rarity eggs and hops servers until it finds them
 - Smart egg stock: once your bag is full, only picks eggs better than the ones you hold
 - Egg filters by rarity, egg and minimum luck
@@ -221,13 +223,14 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 - Auto place eggs (best luck or fastest first), auto hatch from anywhere
 - Auto place best pets (weight and mutations counted), auto collect cash, auto feed
 - Auto upgrade hatch luck, auto rebirth, auto claim index, offline and group rewards
-- **Auto Sell Pets** by rarity, keeping your best, favorites and mutated pets
+- **Auto Sell Pets** by rarity, keeping your best, favorites, mutated pets and the pets you need for rebirth
 - **Auto Fusion** for the new fusion machine: places four pets, fuses and claims the result
 - **Auto Buy Stock**: buys the food and radars you pick the moment they are in stock
 - **Discord Webhook**: alerts for rare eggs, Magma, new pets, rebirths, kicks and timed status reports
 - Egg ESP with rarity, odds and distance
 - Teleport to plot, shops, volcano and players
 - Speed, jump, fly, noclip, infinite jump, anti AFK, rejoin, server hop
+- Less lag while farming, even with thousands of eggs in your bag
 - Troll: fling, stick to player, spectate
 
 </details>
