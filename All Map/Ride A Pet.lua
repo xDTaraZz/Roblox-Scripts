@@ -158,7 +158,7 @@ xDTaraZ.Config = {
     ReloadSource = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/loader.lua"))()',
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
-        { "2026-10-04", "Updated for the new game version\nAuto Sell Pets with rarity filter\nFaster egg collecting\nRemoved keybind from Auto Collect Eggs\nFixed Auto Place Best Pets swapping pets\nAuto Feed goes to your base first\nVolcano Dip & Auto Volcano Obby\nAuto Place Eggs fills your plot up to its limit\nFixed eggs breaking before reaching base, also with Volcano Dip\nVolcano climb runs by itself for Volcanic Eggs\nRemoved Auto Buy Nests" },
+        { "2026-10-04", "Updated for the new game version\nAuto Sell Pets with rarity filter\nFaster egg collecting\nRemoved keybind from Auto Collect Eggs\nFixed Auto Place Best Pets swapping pets\nAuto Feed goes to your base first\nVolcano Dip & Auto Volcano Obby\nAuto Place Eggs fills your plot up to its limit\nFixed eggs breaking before reaching base, also with Volcano Dip\nVolcano climb only runs when a Volcanic Egg spawns\nVolcano climb runs by itself for Volcanic Eggs\nRemoved Auto Buy Nests" },
         { "2026-10-03", "Classic Mario Hub UI is back\nBetter executor support\nBug fixes & better UI" },
     },
     SaveFolder = "Ride A Pet",
@@ -800,6 +800,17 @@ function xDTaraZ.Volcano.Part(name)
     return volcano and volcano:FindFirstChild(name)
 end
 
+---@return boolean  a Volcanic Egg (needs the volcano climb) is on the map right now
+function xDTaraZ.Volcano.EggOnMap()
+    local folder = ReplicatedStorage:FindFirstChild("ServerData")
+    folder = folder and folder:FindFirstChild("ActiveEggs")
+    for _, egg in ipairs(folder and folder:GetChildren() or {}) do
+        local info = xDTaraZ.EggInfo[egg:GetAttribute("Egg") or ""]
+        if info and info.RequiresVolcano then return true end
+    end
+    return false
+end
+
 function xDTaraZ.Volcano.Done()
     return LocalPlayer:GetAttribute("VolcanoValidated") == true
 end
@@ -855,7 +866,6 @@ end
 ---@return number  eggs dipped
 function xDTaraZ.Volcano.DipBasket()
     if not (xDTaraZ.Net.VolcanoDip and xDTaraZ.Volcano.NextDip()) then return 0 end
-    if not xDTaraZ.Volcano.Validate() then return 0 end
     local top = xDTaraZ.Volcano.Part("VolcanoTop")
     if not top then return 0 end
 
@@ -952,7 +962,7 @@ end
 
 function xDTaraZ.Eggs.Step()
     local opts = xDTaraZ.Options
-    if opts.VolcanoObby and not xDTaraZ.Volcano.Done() and osClock() > State.ObbyRetryAt and not xDTaraZ:TrollActive() then
+    if opts.VolcanoObby and not xDTaraZ.Volcano.Done() and osClock() > State.ObbyRetryAt and not xDTaraZ:TrollActive() and xDTaraZ.Volcano.EggOnMap() then
         State.ObbyRetryAt = osClock() + Config.ObbyRetry
         xDTaraZ.Volcano.ValidateNow()
     end
@@ -2187,7 +2197,7 @@ function xDTaraZ.UI.EggFarm(window)
     local volcano = tab:AddLeftGroupbox(T("Volcano", "ภูเขาไฟ"), "flower")
     local dip = xDTaraZ.UI.Toggle(volcano, "VolcanoDip", "Volcano Dip", "จุ่มไข่ในภูเขาไฟ", T("Dips collected eggs in the volcano for a chance at Magma", "จุ่มไข่ที่เก็บมาในภูเขาไฟ ลุ้นได้ Magma"))
     xDTaraZ.UI.Bind("DipRarities", volcano:AddDropdown("DipRarities", { Text = T("Dip Rarities (empty = all)", "ความหายากที่จะจุ่ม (ว่าง = ทั้งหมด)"), Values = xDTaraZ.Rarities, Multi = true, Default = {} }))
-    local obby = xDTaraZ.UI.Toggle(volcano, "VolcanoObby", "Auto Volcano Obby", "ผ่านด่านภูเขาไฟอัตโนมัติ", T("Finishes the volcano climb so Volcanic Eggs can be collected", "ผ่านด่านปีนภูเขาไฟ เพื่อเก็บไข่ Volcanic ได้"))
+    local obby = xDTaraZ.UI.Toggle(volcano, "VolcanoObby", "Auto Volcano Obby", "ผ่านด่านภูเขาไฟอัตโนมัติ", T("Finishes the volcano climb when a Volcanic Egg spawns", "ผ่านด่านภูเขาไฟเองเมื่อไข่ Volcanic เกิด"))
     volcano:AddButton({ Text = T("Finish Volcano Obby Now", "ผ่านด่านภูเขาไฟเดี๋ยวนี้"), Func = xDTaraZ.UI.Detach(function()
         xDTaraZ.Volcano.ValidateNow()
         Library:Notify("Volcano", xDTaraZ.Volcano.Done() and "Volcano climb done" or "Volcano climb failed", 4, xDTaraZ.Volcano.Done() and "Success" or "Warning")
