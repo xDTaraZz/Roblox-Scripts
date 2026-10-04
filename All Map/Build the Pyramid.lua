@@ -149,6 +149,7 @@ local xDTaraZ = setmetatable({}, {
 xDTaraZ.Config = {
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
+        { "2026-10-04", "Auto Farm twice as fast\nPlace Distance option\nBalanced mode trains Strength only when it pays back\nAuto Upgrade buys the best upgrade first\nPick your Bench and Treadmill gym\nSpend Banked Blocks & Claim Free Gift\nRemoved keybinds from auto features" },
         { "2026-10-03", "Classic Mario Hub UI is back\nBetter executor support\nBug fixes & better UI" },
     },
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
@@ -173,14 +174,20 @@ if type(body) == "string" then loadstring(body)() end]],
     StreamDistance = 200,
     CameraShieldJump = 100,
     PickupRetries = 3,
+    PickupTimeout = 2,
+    BenchBase = 3.75,
+    LevelProbe = 1000,
+    SmartRefresh = 2,
+    RateSample = 15,
+    SaveSeconds = 600,
+    UpgradePriority = { "bulkPlace", "placementRange", "bulkPickup" },
     QuarryJitter = 0.35,
     RetryDelay = 1,
     RetryMax = 8,
     StallLimit = 120,
     PlaceTimeout = 3,
     PlaceRetries = 3,
-    PlaceReach = 28,
-    SlotSpacing = 4,
+    SlotSpacing = 2,
     SlotSearchCells = 150,
     EngineRadiusLimit = 15000,
     HoverHeight = 6,
@@ -196,7 +203,7 @@ if type(body) == "string" then loadstring(body)() end]],
     ActivityInterval = 60,
     RateWindow = 60,
     RejoinDelay = 5,
-    SlowRequests = { UpgradeNow = true, CodesNow = true },
+    SlowRequests = { UpgradeNow = true, CodesNow = true, BankNow = true, GiftNow = true },
     ExtraCodes = { "SUNGOD", "SORRYFORUPDATEBUG", "FREECODE", "WELCOME", "DEADBYMELOL", "UPDATE15", "PYRAMID1500" },
 }
 
@@ -221,13 +228,17 @@ xDTaraZ.State = {
     Opt = {
         AutoFarm = false,
         ReturnOnStop = false,
+        PlaceReach = 30,
+        BenchStation = "Best Unlocked",
+        TreadmillStation = "Best Unlocked",
         AutoUpgrade = false,
         Upgrades = {},
-        UpgradeOrder = "Cheapest First",
+        UpgradeOrder = "Best Value",
         KeepCoins = 0,
         AutoStrength = false,
         AutoSpeed = false,
-        Priority = "Farm",
+        Priority = "Balanced",
+        SmartMinutes = 30,
         AlternateMinutes = 5,
         AutoPool = false,
         SpeedOn = false,
@@ -399,6 +410,7 @@ do
         CarryState = Wait(Wait(Shared, "Books"), "CarryState"),
         Regions = Wait(Shared, "RegionRegistry"),
         Knit = Wait(Wait(ReplicatedStorage, "Packages"), "Knit"),
+        Progression = Wait(Wait(Shared, "Stats"), "StatProgression"),
     }
     for key, module in pairs(modules) do
         GameLib[key] = GameLib.Require(module)
@@ -412,6 +424,10 @@ GameLib.StartBench = Remote("GymService", "RF", "StartBench")
 GameLib.StopBench = Remote("GymService", "RF", "StopBench")
 GameLib.Redeem = Remote("CodesService", "RF", "Redeem")
 GameLib.Activity = Remote("AFKService", "RE", "Activity")
+GameLib.SpendBlocks = Remote("PyramidService", "RF", "SpendBankedBlocks")
+GameLib.SpendSeconds = Remote("PyramidService", "RF", "SpendBankedSeconds")
+GameLib.GiftClaim = Remote("FreeGiftService", "RF", "Claim")
+GameLib.GiftStep = Remote("FreeGiftService", "RF", "MarkStep")
 
 xDTaraZ.UpgradeByName = {}
 xDTaraZ.UpgradeNames = {}
@@ -715,6 +731,29 @@ function xDTaraZ.Farm.Park()
     xDTaraZ.Move.To(xDTaraZ.Move.QuarrySpot())
 end
 
+---@param calls number  pickups fired in the same frame; the server stops granting at capacity
+---@return number       blocks carried after the batch
+function xDTaraZ.Farm.GrabAll(region, calls)
+    local pending, carried, granted = calls, xDTaraZ.Game.Carried(), false
+    for _ = 1, calls do
+        task.spawn(function()
+            local ok, carryState = xDTaraZ:Invoke(GameLib.Pickup, region)
+            if ok == true then
+                granted = true
+                carried = math.max(carried, xDTaraZ.Game.ReadCarry(carryState) or 0)
+            end
+            pending -= 1
+        end)
+    end
+    local deadline = osClock() + Config.PickupTimeout
+    while pending > 0 and osClock() < deadline do task.wait() end
+    if granted then
+        State.Carry = carried
+        xDTaraZ.Farm.Progress()
+    end
+    return carried
+end
+
 ---@return boolean, string?  holding at least one block, else why not
 function xDTaraZ.Farm.Gather()
     if xDTaraZ.Game.Benching() then xDTaraZ:Invoke(GameLib.StopBench) end
@@ -727,22 +766,7 @@ function xDTaraZ.Farm.Gather()
 
     local region = GameLib.Regions.getPart("Quarry")
     local grant = 1 + xDTaraZ.Game.UpgradeLevel(GameLib.Upgrades.ById.bulkPickup)
-    local carried, misses = xDTaraZ.Game.Carried(), 0
-    local calls = math.ceil(cap / grant) + Config.PickupRetries
-    for _ = 1, calls do
-        if carried >= cap or not State.Opt.AutoFarm then break end
-        local ok, carryState = xDTaraZ:Invoke(GameLib.Pickup, region)
-        if ok == true then
-            carried = xDTaraZ.Game.ReadCarry(carryState) or carried
-            State.Carry = carried
-            misses = 0
-            xDTaraZ.Farm.Progress()
-        else
-            misses += 1
-            if carried > 0 or misses >= Config.PickupRetries then break end
-            task.wait(Config.SettleDelay)
-        end
-    end
+    local carried = xDTaraZ.Farm.GrabAll(region, math.ceil((cap - xDTaraZ.Game.Carried()) / grant) + Config.PickupRetries)
     if carried > 0 then return true end
 
     State.Carry = nil
@@ -801,7 +825,7 @@ function xDTaraZ.Farm.Slots(origin, count, radius)
         if not slot then break end
         local flat = vector3New(slot.position.X - origin.X, 0, slot.position.Z - origin.Z)
         local col, row = geometry.fromSlotIndex(slot.layer, slot.slotIndex)
-        if col and row and flat.Magnitude <= Config.PlaceReach then
+        if col and row and flat.Magnitude <= State.Opt.PlaceReach then
             table.insert(cells, { layer = slot.layer, col = col, row = row })
             table.insert(picked, slot)
         else
@@ -850,11 +874,14 @@ function xDTaraZ.Farm.Deliver()
         end
 
         State.Status = ("Placing on layer %d"):format(first.layer)
-        xDTaraZ.Move.To(first.position + vector3New(0, Config.HoverHeight, 0))
-        task.wait(Config.SettleDelay)
+        local stand = first.position + vector3New(0, Config.HoverHeight, 0)
+        xDTaraZ.Move.To(stand)
+        local arrived = osClock()
 
-        local reach = math.ceil(Config.PlaceReach / GameLib.Pyramid.BlockSize)
-        local slots = xDTaraZ.Farm.Slots(hrp.Position, math.ceil(carried / perPlace), reach)
+        local reach = math.ceil(State.Opt.PlaceReach / GameLib.Pyramid.BlockSize)
+        local slots = xDTaraZ.Farm.Slots(stand, math.ceil(carried / perPlace), reach)
+        local remaining = Config.SettleDelay - (osClock() - arrived)
+        if remaining > 0 then task.wait(remaining) end
         if #slots == 0 then
             why = "No free slot on the pyramid"
             break
@@ -922,8 +949,68 @@ function xDTaraZ.Train.Best(stations, key)
     return best, bestMult
 end
 
+---@param chosen string  dropdown value, "Best Unlocked" or a gym folder
+---@return string?       the chosen gym when you can use it, else the best one you can
+function xDTaraZ.Train.Pick(stations, key, chosen)
+    for _, station in ipairs(stations) do
+        if station.GymFolder == chosen and xDTaraZ.Train.HasAccess(station.GymFolder) then
+            return station.GymFolder, station[key]
+        end
+    end
+    return xDTaraZ.Train.Best(stations, key)
+end
+
+---@param value number  current Strength value
+---@return number       value that reaches the next Strength level
+function xDTaraZ.Train.NextLevelValue(value)
+    local progression = GameLib.Progression
+    local base = progression.levelForValue(value)
+    local low, high = value, math.max(value * 2, value + Config.LevelProbe)
+    while high - low > 1 do
+        local mid = math.floor((low + high) / 2)
+        if progression.levelForValue(mid) > base then high = mid else low = mid end
+    end
+    return high
+end
+
+---@return number?  Strength per second gained on the bench so far, nil until it has run long enough
+function xDTaraZ.Train.MeasuredRate(value, now)
+    if not xDTaraZ.Game.Benching() then
+        State.BenchRef = nil
+        return State.BenchRate
+    end
+    local ref = State.BenchRef
+    if not ref then
+        State.BenchRef = { at = now, value = value }
+        return State.BenchRate
+    end
+    if now - ref.at >= Config.RateSample and value > ref.value then
+        State.BenchRate = (value - ref.value) / (now - ref.at)
+        State.BenchRef = { at = now, value = value }
+    end
+    return State.BenchRate
+end
+
+---@return boolean  the next Strength level pays back its training time inside the payback time
+function xDTaraZ.Train.Worth()
+    local now = osClock()
+    local cached = State.SmartCache
+    if cached and now - cached.at < Config.SmartRefresh then return cached.worth end
+
+    local worth = false
+    local value = tonumber(State.Stats.Strength)
+    local _, mult = xDTaraZ.Train.Pick(GameLib.Gym.BenchpressStations, "StrengthMultiplier", State.Opt.BenchStation)
+    if GameLib.Progression and value and mult then
+        local rate = xDTaraZ.Train.MeasuredRate(value, now) or Config.BenchBase * mult
+        local seconds = (xDTaraZ.Train.NextLevelValue(value) - value) / rate
+        worth = seconds * xDTaraZ.Game.Capacity() < State.Opt.SmartMinutes * 60
+    end
+    State.SmartCache = { at = now, worth = worth }
+    return worth
+end
+
 function xDTaraZ.Train.Strength()
-    local folder, mult = xDTaraZ.Train.Best(GameLib.Gym.BenchpressStations, "StrengthMultiplier")
+    local folder, mult = xDTaraZ.Train.Pick(GameLib.Gym.BenchpressStations, "StrengthMultiplier", State.Opt.BenchStation)
     if not folder then return false end
     State.Status = ("Bench press x%d"):format(mult)
     local current = xDTaraZ.Game.Benching()
@@ -945,7 +1032,7 @@ function xDTaraZ.Train.Strength()
 end
 
 function xDTaraZ.Train.Speed()
-    local folder, mult = xDTaraZ.Train.Best(GameLib.Gym.TreadmillStations, "SpeedMultiplier")
+    local folder, mult = xDTaraZ.Train.Pick(GameLib.Gym.TreadmillStations, "SpeedMultiplier", State.Opt.TreadmillStation)
     local hitbox = folder and xDTaraZ.Move.GymPart(folder, GameLib.Gym.TreadmillModelName, GameLib.Gym.HitboxName)
     if not hitbox then return false end
     if xDTaraZ.Game.Benching() then xDTaraZ:Invoke(GameLib.StopBench) end
@@ -956,6 +1043,7 @@ end
 
 function xDTaraZ.Train.Step()
     local opt = State.Opt
+    if opt.Priority == "Balanced" and opt.AutoStrength then return xDTaraZ.Train.Strength() end
     if opt.AutoStrength and opt.AutoSpeed then
         local str = tonumber(xDTaraZ.Game.Attr("StrengthLevel")) or 0
         local spd = tonumber(xDTaraZ.Game.Attr("SpeedLevel")) or 0
@@ -988,6 +1076,7 @@ function xDTaraZ.Tasks.Order()
     local order = {}
     if opt.AutoPool then table.insert(order, "Pool") end
     local trainFirst = opt.Priority == "Train"
+    if opt.Priority == "Balanced" then trainFirst = opt.AutoStrength and xDTaraZ.Train.Worth() end
     if opt.Priority == "Alternate" then
         local slice = math.floor(osClock() / (opt.AlternateMinutes * 60))
         trainFirst = slice % 2 == 1
@@ -1029,9 +1118,29 @@ end
 
 xDTaraZ.Upgrade = {}
 
----@return table?, number?  cheapest wanted upgrade you can afford above the floor, and its cost
+---@param budget number  coins free to spend
+---@return table?, number?, boolean?  best upgrade you can afford, its cost, true when waiting for a better one is faster
+function xDTaraZ.Upgrade.PickByValue(budget)
+    local income = State.CoinRate or 0
+    for _, id in ipairs(Config.UpgradePriority) do
+        for _, upgrade in pairs(xDTaraZ.UpgradeByName) do
+            if upgrade.Id ~= id or not State.Opt.Upgrades[upgrade.DisplayName] then continue end
+            local cost = upgrade.Costs[xDTaraZ.Game.UpgradeLevel(upgrade) + 1]
+            if not cost then continue end
+            if cost <= budget then return upgrade, cost end
+            if income > 0 and (cost - budget) / income <= Config.SaveSeconds then return nil, nil, true end
+        end
+    end
+    return nil
+end
+
+---@return table?, number?  wanted upgrade to buy next by the chosen order, and its cost
 function xDTaraZ.Upgrade.Pick()
     local budget = xDTaraZ.Game.Coins() - State.Opt.KeepCoins
+    if State.Opt.UpgradeOrder == "Best Value" then
+        local upgrade, cost, saving = xDTaraZ.Upgrade.PickByValue(budget)
+        if upgrade or saving then return upgrade, cost end
+    end
     local pick, pickCost
     for _, name in ipairs(xDTaraZ.UpgradeNames) do
         local upgrade = xDTaraZ.UpgradeByName[name]
@@ -1085,6 +1194,35 @@ function xDTaraZ.Codes.RedeemAll()
         task.wait(Config.CodeGap)
     end
     xDTaraZ:Notify(("Codes done, %d new"):format(got))
+end
+
+xDTaraZ.Bank = {}
+
+function xDTaraZ.Bank.Spend()
+    local spent = 0
+    for _, entry in ipairs({ { GameLib.SpendBlocks, "banked blocks" }, { GameLib.SpendSeconds, "banked time" } }) do
+        local ok, reason = xDTaraZ:Invoke(entry[1])
+        if ok == true then
+            spent += 1
+            xDTaraZ:Notify(entry[2] .. " spent")
+        elseif reason == "NothingBanked" or reason == "PyramidComplete" then
+            xDTaraZ:Notify(("%s: %s"):format(entry[2], reason == "NothingBanked" and "none to spend" or "wait for the next pyramid"))
+        end
+    end
+    return spent
+end
+
+function xDTaraZ.Bank.FreeGift()
+    for _, step in ipairs({ "liked", "favorited" }) do
+        xDTaraZ:Invoke(GameLib.GiftStep, step)
+    end
+    local reply, reason = xDTaraZ:Invoke(GameLib.GiftClaim)
+    if reply == true or (type(reply) == "table" and reply.ok) then
+        xDTaraZ:Notify("Free gift claimed")
+    else
+        local text = type(reply) == "table" and tostring(reply.reason) or tostring(reason)
+        xDTaraZ:Notify(text == "GroupRequired" and "Join the Janitors Studios group to claim the free gift" or ("Free gift: " .. text))
+    end
 end
 
 xDTaraZ.Teleport = {}
@@ -1236,6 +1374,8 @@ xDTaraZ.Scheduler.RequestHandlers = {
     TrainStop = xDTaraZ.Train.Leave,
     UpgradeNow = xDTaraZ.Upgrade.Now,
     CodesNow = xDTaraZ.Codes.RedeemAll,
+    BankNow = xDTaraZ.Bank.Spend,
+    GiftNow = xDTaraZ.Bank.FreeGift,
     TpQuarry = xDTaraZ.Teleport.Quarry,
     TpPyramid = xDTaraZ.Teleport.Pyramid,
     TpPool = xDTaraZ.Teleport.Pool,
@@ -1321,6 +1461,7 @@ function xDTaraZ.Scheduler.Summarize()
         local entry = State.CoinLog[i]
         if entry[1] < cutoff then table.remove(State.CoinLog, i) else recent += entry[2] end
     end
+    State.CoinRate = recent / Config.RateWindow
     local carried, cap = xDTaraZ.Game.Carried(), xDTaraZ.Game.Capacity()
     State.Summary = ("Coins %s · %s/min\nStrength Lv %s · Speed Lv %s · Carry %d/%d\nPyramids %s · Placed %d"):format(
         xDTaraZ.Format(State.Stats.Coins), xDTaraZ.Format(recent * 60 / Config.RateWindow),
@@ -1494,19 +1635,34 @@ local function BuildInterface()
                 opt.AutoFarm = value
                 if value then xDTaraZ.Scheduler.Resume("AutoFarm") else State.Requests.FarmStop = true end
             end,
-        }):AddKeyPicker("AutoFarmKey", { Default = "None", Mode = "Toggle" })
+        })
         Toggle(farmBox, "ReturnOnStop", T("Return On Stop", "กลับที่เดิมเมื่อหยุด"), T("Goes back to where you started", "กลับไปจุดที่เริ่มฟาร์ม"))
+        farmBox:AddSlider("PlaceReach", {
+            Text = T("Place Distance", "ระยะวางบล็อก"),
+            Description = T("Lower it if blocks get refused, raise it for fewer repositions", "ลดถ้าวางไม่ติด เพิ่มเพื่อขยับน้อยลง"),
+            Min = 16, Max = 36, Default = opt.PlaceReach, Rounding = 0, Suffix = " studs",
+            Callback = function(value) opt.PlaceReach = tonumber(value) or opt.PlaceReach end,
+        })
+        farmBox:AddButton({ Text = T("Spend Banked Blocks", "ใช้บล็อกที่เก็บไว้"), Func = Request("BankNow") })
 
         local orderBox = FarmTab:AddRightGroupbox(T("Farm vs Training", "ฟาร์มกับฝึก"), "sliders-horizontal")
-        local altSlider
+        local altSlider, smartSlider
         orderBox:AddDropdown("Priority", {
             Text = T("When Both Are On", "เมื่อเปิดทั้งคู่"),
-            Values = { "Farm", "Train", "Alternate" },
+            Description = T("Balanced trains Strength only while the extra blocks pay it back", "Balanced ฝึกพลังเฉพาะตอนที่คุ้มกับบล็อกที่ได้เพิ่ม"),
+            Values = { "Balanced", "Farm", "Train", "Alternate" },
             Default = 1,
             Callback = function(value)
-                opt.Priority = value or "Farm"
+                opt.Priority = value or "Balanced"
                 if altSlider then altSlider:SetVisible(opt.Priority == "Alternate") end
+                if smartSlider then smartSlider:SetVisible(opt.Priority == "Balanced") end
             end,
+        })
+        smartSlider = orderBox:AddSlider("SmartMinutes", {
+            Text = T("Payback Time (min)", "คืนทุนภายใน (นาที)"),
+            Description = T("Train while one more Strength level repays itself within this time", "ฝึกเมื่อเลเวลพลังที่เพิ่มคืนทุนภายในเวลานี้"),
+            Min = 5, Max = 240, Default = opt.SmartMinutes, Rounding = 0,
+            Callback = function(value) opt.SmartMinutes = tonumber(value) or 30 end,
         })
         altSlider = orderBox:AddSlider("AlternateMinutes", {
             Text = T("Alternate Every (min)", "สลับทุก (นาที)"),
@@ -1522,13 +1678,37 @@ local function BuildInterface()
         local gymBox = GymTab:AddLeftGroupbox(T("Gym", "ยิม"), "heart")
         Toggle(gymBox, "AutoStrength", T("Auto Train Strength", "ฝึกพลังอัตโนมัติ"), T("Bench press at your strongest gym", "ยกน้ำหนักที่ยิมแรงสุดที่ใช้ได้"), function(on)
             if not on then State.Requests.TrainStop = true end
-        end):AddKeyPicker("AutoStrengthKey", { Default = "None", Mode = "Toggle" })
+        end)
         Toggle(gymBox, "AutoSpeed", T("Auto Train Speed", "ฝึกความเร็วอัตโนมัติ"), T("Runs on your strongest treadmill", "วิ่งบนลู่ที่แรงสุดที่ใช้ได้"))
-            :AddKeyPicker("AutoSpeedKey", { Default = "None", Mode = "Toggle" })
+
+        local function StationLabels(stations, key)
+            local labels = { "Best Unlocked" }
+            for _, station in ipairs(stations) do
+                table.insert(labels, ("Gym %s (x%d)"):format(station.GymFolder, station[key]))
+            end
+            return labels
+        end
+        local function StationPick(optionKey)
+            return function(value)
+                opt[optionKey] = value and value:match("^Gym (%S+)") or "Best Unlocked"
+            end
+        end
+        gymBox:AddDropdown("BenchStationPick", {
+            Text = T("Bench Gym", "ยิมยกน้ำหนัก"),
+            Values = StationLabels(GameLib.Gym.BenchpressStations, "StrengthMultiplier"),
+            Default = 1,
+            Callback = StationPick("BenchStation"),
+        })
+        gymBox:AddDropdown("TreadmillStationPick", {
+            Text = T("Treadmill Gym", "ยิมลู่วิ่ง"),
+            Values = StationLabels(GameLib.Gym.TreadmillStations, "SpeedMultiplier"),
+            Default = 1,
+            Callback = StationPick("TreadmillStation"),
+        })
 
         local poolBox = GymTab:AddRightGroupbox(T("Waters of Nu", "สระ Waters of Nu"), "pipe")
         Toggle(poolBox, "AutoPool", T("Auto Join Pool", "ลงสระอัตโนมัติ"), T("Trains in the pool when a pyramid is finished", "ฝึกในสระเมื่อพีระมิดสร้างเสร็จ"))
-            :AddKeyPicker("AutoPoolKey", { Default = "None", Mode = "Toggle" })
+        poolBox:AddButton({ Text = T("Go To Pool", "ไปสระ"), Func = Request("TpPool") })
     end
 
     local function BuildShop(window)
@@ -1537,12 +1717,13 @@ local function BuildInterface()
 
         local upgradeBox = ShopTab:AddLeftGroupbox(T("Upgrades", "อัปเกรด"), "coin")
         Toggle(upgradeBox, "AutoUpgrade", T("Auto Upgrade", "อัปเกรดอัตโนมัติ"), T("Buys the selected upgrades with coins", "ซื้ออัปเกรดที่เลือกด้วยเหรียญ"))
-            :AddKeyPicker("AutoUpgradeKey", { Default = "None", Mode = "Toggle" })
+        opt.Upgrades = {}
+        for _, name in ipairs(xDTaraZ.UpgradeNames) do opt.Upgrades[name] = true end
         upgradeBox:AddDropdown("Upgrades", {
             Text = T("Upgrades", "อัปเกรด"),
             Values = xDTaraZ.UpgradeNames,
             Multi = true,
-            Default = {},
+            Default = xDTaraZ.UpgradeNames,
             Callback = function(selected) opt.Upgrades = selected or {} end,
         })
         upgradeBox:AddButton({ Text = T("Buy Now", "ซื้อเดี๋ยวนี้"), Func = Request("UpgradeNow") })
@@ -1550,9 +1731,10 @@ local function BuildInterface()
         local rulesBox = ShopTab:AddRightGroupbox(T("Spending", "การใช้เหรียญ"), "coin")
         rulesBox:AddDropdown("UpgradeOrder", {
             Text = T("Order", "ลำดับ"),
-            Values = { "Cheapest First", "In Order" },
+            Description = T("Best Value buys what speeds up farming most and saves up when it is close", "Best Value ซื้อตัวที่ช่วยฟาร์มเร็วสุด และเก็บเงินรอถ้าใกล้พอซื้อ"),
+            Values = { "Best Value", "Cheapest First", "In Order" },
             Default = 1,
-            Callback = function(value) opt.UpgradeOrder = value or "Cheapest First" end,
+            Callback = function(value) opt.UpgradeOrder = value or "Best Value" end,
         })
         rulesBox:AddSlider("KeepCoins", {
             Text = T("Keep Coins", "กันเหรียญไว้"),
@@ -1562,6 +1744,7 @@ local function BuildInterface()
 
         local codeBox = ShopTab:AddRightGroupbox(T("Codes", "โค้ด"), "code")
         codeBox:AddButton({ Text = T("Redeem All Codes", "ใช้โค้ดทั้งหมด"), Style = "Primary", Func = Request("CodesNow") })
+        codeBox:AddButton({ Text = T("Claim Free Gift", "รับของขวัญฟรี"), Func = Request("GiftNow") })
     end
 
     local function BuildPlayer(window)

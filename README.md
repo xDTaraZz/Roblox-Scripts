@@ -316,11 +316,13 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 <details>
 <summary><b>Features</b></summary>
 
-- **Auto Farm**: grabs a full load at the quarry and places it on the pyramid without walking, several slots at once
+- **Auto Farm**: grabs a full load at the quarry and places it on the pyramid without walking, several slots at once, around four times faster than before
 - Return to your spot when the farm stops
 - **Auto Train Strength and Speed** at the best gym you have unlocked
-- Farm or train first, or switch between them every few minutes
-- Auto upgrade Bulk Pickup, Bulk Place and Placement Range, cheapest first or in order, with a coin reserve, plus Buy Now
+- **Balanced mode**: trains Strength only while the extra blocks per trip pay it back, then goes back to farming
+- Pick your own Bench and Treadmill gym, or let it use the best you have unlocked
+- **Auto Upgrade** buys the best upgrade first and saves up when it is close, or cheapest first or in order, with a coin reserve, plus Buy Now
+- Place Distance option, Spend Banked Blocks and Claim Free Gift
 - Redeem all codes, with the result for each one
 - Auto join the pool when a pyramid is completed *(beta)*
 - Teleport to the quarry, the pyramid, the pool, every gym and players
