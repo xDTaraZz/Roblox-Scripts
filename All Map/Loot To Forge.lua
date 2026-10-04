@@ -153,7 +153,17 @@ xDTaraZ.Config = {
         { "2026-10-03", "Fixed World Boss, Auto Click & Codes\nImproved Auto Train\nAuto rune detection" },
     },
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
-    LoaderUrl = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/loader.lua",
+    ReloadSource = [[
+if not game:IsLoaded() then game.Loaded:Wait() end
+task.wait(2)
+local url = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/loader.lua"
+local ok, body = pcall(game.HttpGet, game, url)
+if not (ok and type(body) == "string") then
+    local requester = request or http_request or (syn and syn.request) or (http and http.request)
+    local sent, reply = pcall(requester, { Url = url, Method = "GET" })
+    body = sent and type(reply) == "table" and reply.Body
+end
+if type(body) == "string" then loadstring(body)() end]],
     LoadTimeout = 30,
     RemoteTimeout = 10,
     RequireTimeout = 3,
@@ -2118,9 +2128,7 @@ end
 
 function xDTaraZ.Session.Rejoin()
     local queue = queue_on_teleport or queueonteleport
-    if queue then
-        queue(("loadstring(game:HttpGet(%q))()"):format(Config.LoaderUrl))
-    end
+    if queue then queue(Config.ReloadSource) end
     TeleportService:Teleport(game.PlaceId, LocalPlayer)
 end
 
@@ -2164,7 +2172,7 @@ function xDTaraZ.Boss.Hop()
     xDTaraZ.Boss.HopFlag(true)
     local queue = queue_on_teleport or queueonteleport
     if queue and not State.HopQueued then
-        queue(("loadstring(game:HttpGet(%q))()"):format(Config.LoaderUrl))
+        queue(Config.ReloadSource)
         State.HopQueued = true
     end
     TeleportService:TeleportToPlaceInstance(game.PlaceId, serverId, LocalPlayer)
