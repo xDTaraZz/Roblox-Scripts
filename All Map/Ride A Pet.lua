@@ -158,7 +158,7 @@ xDTaraZ.Config = {
     ReloadSource = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/loader.lua"))()',
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
-        { "2026-10-04", "Updated for the new game version\nAuto Sell Pets with rarity filter\nFaster egg collecting\nRemoved keybind from Auto Collect Eggs\nFixed Auto Place Best Pets swapping pets\nAuto Feed goes to your base first\nVolcano Dip & Auto Volcano Obby\nAuto Place Eggs fills your plot up to its limit\nFixed eggs breaking before reaching base\nVolcano climb runs by itself for Volcanic Eggs\nRemoved Auto Buy Nests" },
+        { "2026-10-04", "Updated for the new game version\nAuto Sell Pets with rarity filter\nFaster egg collecting\nRemoved keybind from Auto Collect Eggs\nFixed Auto Place Best Pets swapping pets\nAuto Feed goes to your base first\nVolcano Dip & Auto Volcano Obby\nAuto Place Eggs fills your plot up to its limit\nFixed eggs breaking before reaching base, also with Volcano Dip\nVolcano climb runs by itself for Volcanic Eggs\nRemoved Auto Buy Nests" },
         { "2026-10-03", "Classic Mario Hub UI is back\nBetter executor support\nBug fixes & better UI" },
     },
     SaveFolder = "Ride A Pet",
@@ -834,11 +834,14 @@ function xDTaraZ.Volcano.ValidateNow()
     if origin then xDTaraZ:MoveTo(origin) end
 end
 
----@return Instance?  basket egg that can still be dipped in time
+---@return Instance?  basket egg worth dipping; nil when a dip would let any carried egg break
 function xDTaraZ.Volcano.NextDip()
     local basket = LocalPlayer:FindFirstChild("Basket")
     local rarities = xDTaraZ.Options.DipRarities
     local now = Workspace:GetServerTimeNow()
+    for _, egg in ipairs(basket and basket:GetChildren() or {}) do
+        if (tonumber(egg:GetAttribute("BreakAt")) or math.huge) - now < Config.DipMinLeft then return nil end
+    end
     for _, egg in ipairs(basket and basket:GetChildren() or {}) do
         if egg:GetAttribute("VolcanoDipped") then continue end
         local info = xDTaraZ.EggInfo[egg:GetAttribute("Egg") or ""]
@@ -908,7 +911,7 @@ end
 function xDTaraZ.Eggs.Run(manual)
     local opts = xDTaraZ.Options
     local origin = xDTaraZ.Player.Root.CFrame
-    local capacity = xDTaraZ:BasketCapacity()
+    local capacity = opts.VolcanoDip and 1 or xDTaraZ:BasketCapacity()
     local got = 0
 
     for _, egg in ipairs(xDTaraZ.Eggs.Available()) do
