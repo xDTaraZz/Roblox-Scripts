@@ -58,6 +58,7 @@ xDTaraZ.Config = {
     RunBudget = 4.0,
     DirectFactor = 2.5,
     DirectFactorAfterFail = 2.0,
+    ReturnBackoff = { 2.0, 1.5 }, ReturnStopCount = 3, ReturnWindow = 300, ReturnDedupe = 3,
     UnmountedDirect = 90, WeightPenalty = 0.01, CherubWeightPenalty = 0.0125, WeightPenaltyMax = 0.8,
     ContainsSlack = 2, EdgeInset = 1, StandLift = 3,
     TripCost = { Plot = 0.35, Direct = 0.62, Drop = 1.25 },
@@ -196,7 +197,7 @@ xDTaraZ.Config = {
     KaitunSteerEvery = 60,
 
     UpdateLog = {
-        { "2026-10-05", "Script rebuilt from scratch for the new game update\nEggs reach your base every time, no more returned eggs\nMuch less lag while farming with a big inventory\nClear Junk Eggs: hatch cheap eggs and sell the pets\nMinimum Egg Rarity to farm rare eggs only\nFixed Auto Place Best Pets swapping out good pets\nPerformance: Boost FPS, hide other pets and eggs, FPS cap, disable 3D\nFixed the inventory bar not coming back after farming\nRemoved the Stop All button" },
+        { "2026-10-05", "Fixed Volcano Dip and Auto Volcano Egg doing nothing unless Auto Eggs was on\nA returned egg no longer stops the whole farm, it slows delivery and keeps going\nAuto Reconnect after a disconnect\nWeather alerts now name the storm type\nScript rebuilt from scratch for the new game update\nEggs reach your base every time, no more returned eggs\nMuch less lag while farming with a big inventory\nClear Junk Eggs: hatch cheap eggs and sell the pets\nMinimum Egg Rarity to farm rare eggs only\nFixed Auto Place Best Pets swapping out good pets\nPerformance: Boost FPS, hide other pets and eggs, FPS cap, disable 3D\nFixed the inventory bar not coming back after farming\nRemoved the Stop All button" },
         { "2026-10-04", "Rebuilt egg collecting: faster trips and no more returned eggs\nRide pet picker, rare egg hunter and plant order\nPet protect list, safer selling and smarter spending\nClear Junk Eggs now sells what it hatches, and Minimum Egg Rarity skips cheap eggs" },
     },
 }
@@ -1848,7 +1849,8 @@ function xDTaraZ.Delivery.Run(token, entry)
     token.flags0 = xDTaraZ.Player:Flags()
     token.budget = t0 + xDTaraZ.Config.RunBudget
 
-    local mode = xDTaraZ.Delivery.Mode(entry)
+    local mode, trip = xDTaraZ.Delivery.Mode(entry)
+    xDTaraZ.Delivery.LastPlan = { mode = mode, trip = math.floor(trip), speed = xDTaraZ.Mount.Speed(), settle = xDTaraZ.State.Tune.DirectFactor }
     local stand = mode == "Plot" and xDTaraZ.Geo.EdgeInside(bp, entry.pos) or xDTaraZ.Geo.StandPoint(bp, entry.pos)
 
     local got, why = xDTaraZ.Delivery.Pickup(token, entry.guid, stand)
@@ -2646,12 +2648,35 @@ function xDTaraZ.Guard.Snapshot(why)
     }
 end
 
+---@return boolean  true when the farm keeps going on a slower delivery pace
+function xDTaraZ.Guard.Soften()
+    local guard = xDTaraZ.Guard
+    local now = os.clock()
+    guard.Recent = guard.Recent or {}
+    while guard.Recent[1] and now - guard.Recent[1] > Config.ReturnWindow do
+        table.remove(guard.Recent, 1)
+    end
+    guard.Recent[#guard.Recent + 1] = now
+    if #guard.Recent >= Config.ReturnStopCount then return false end
+
+    local pace = Config.ReturnBackoff[#guard.Recent] or Config.ReturnBackoff[#Config.ReturnBackoff]
+    State.Tune.DirectFactor = math.min(State.Tune.DirectFactor, pace)
+    table.insert(State.PendingNotify, { "Egg Farm", "An egg was returned. Delivering slower and carrying on." })
+    return true
+end
+
 function xDTaraZ.Guard.Trip(why)
     local guard = xDTaraZ.Guard
-    if guard.Tripped then return end
-    guard.Tripped = true
+    if guard.Tripped or os.clock() - (guard.LastTrip or -math.huge) < Config.ReturnDedupe then return end
+    guard.LastTrip = os.clock()
     State.Stats.returned += 1
 
+    State.LastFail = guard.Snapshot(why)
+    local webhook = xDTaraZ.Webhook
+    if webhook and webhook.DeliveryFailed then task.defer(webhook.DeliveryFailed, State.LastFail) end
+    if guard.Soften() then return end
+
+    guard.Tripped = true
     xDTaraZ.Eggs.Enabled = false
     xDTaraZ.Hunter.Enabled = false
     local volcano = xDTaraZ.Volcano
@@ -2659,11 +2684,7 @@ function xDTaraZ.Guard.Trip(why)
     for _, idx in ipairs(guard.Toggles) do
         table.insert(State.PendingToggleOff, idx)
     end
-
-    State.LastFail = guard.Snapshot(why)
-    table.insert(State.PendingNotify, { "Egg Farm", "An egg was returned. Egg farming stopped, turn it back on to continue." })
-    local webhook = xDTaraZ.Webhook
-    if webhook and webhook.DeliveryFailed then task.defer(webhook.DeliveryFailed, State.LastFail) end
+    table.insert(State.PendingNotify, { "Egg Farm", "Eggs keep getting returned. Egg farming stopped, switch Delivery to Safe and turn it back on." })
 end
 
 xDTaraZ.Volcano = {
@@ -2989,7 +3010,7 @@ function xDTaraZ.Volcano.Step()
 end
 
 function xDTaraZ.Volcano.Start()
-    xDTaraZ.Guard.Arm()
+    xDTaraZ.Eggs.Prepare()
     xDTaraZ.Volcano.Bind()
     xDTaraZ.Volcano.ObbyAfter = 0
 end
@@ -5765,6 +5786,8 @@ function xDTaraZ.Boosts.WeatherNames(raw)
     local names = {}
     for _, entry in pairs(list) do
         local kind = type(entry) == "table" and entry.Type or entry
+        local variant = type(entry) == "table" and entry.Variant
+        if type(variant) == "string" and variant ~= "" then kind = tostring(kind) .. " (" .. variant .. ")" end
         if type(kind) == "string" and not table.find(names, kind) then names[#names + 1] = kind end
     end
     return #names > 0 and table.concat(names, ", ") or nil
@@ -5806,6 +5829,8 @@ do
         StandLift = 3, StreamTimeout = 5,
         EspLift = 4, EspPool = 48,
         FloatSize = 52, FloatGap = 8,
+        ReconnectDelay = 5, ReconnectRetry = 10, ReconnectTries = 6, ReconnectMax = 3, ReconnectWindow = 600,
+        ReconnectFile = "MarioHub_RideAPet_reconnect.txt",
         HopPick = 15, ServerListUrl = "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100",
         ReloadSource = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/loader.lua"))()',
         RarityColors = {
@@ -6357,7 +6382,48 @@ end
 
 xDTaraZ.Server.IdleKeepers = { "AntiAfk", "AutoEggs", "EggHunter", "Kaitun" }
 
+---@return boolean  under the cap, so a kick loop cannot rejoin forever
+function xDTaraZ.Server.ReconnectBudget()
+    if not (Library and Library.Compat and Library.Compat.Caps.FileSystem) then return true end
+    local now, recent = os.time(), {}
+    local ok, raw = pcall(readfile, Config.ReconnectFile)
+    for stamp in (ok and tostring(raw) or ""):gmatch("%d+") do
+        if now - tonumber(stamp) < Config.ReconnectWindow then recent[#recent + 1] = stamp end
+    end
+    if #recent >= Config.ReconnectMax then return false end
+    recent[#recent + 1] = tostring(now)
+    local wrote, err = pcall(writefile, Config.ReconnectFile, table.concat(recent, ","))
+    if not wrote then warn(Config.Tag, "reconnect log:", err) end
+    return true
+end
+
+function xDTaraZ.Server.OnError()
+    local server = xDTaraZ.Server
+    local message = GuiService:GetErrorMessage()
+    if server.Reconnecting or message == "" or not xDTaraZ.Util.Opt("AutoReconnect") then return end
+    if message:lower():find("ban") then return end
+    server.Reconnecting = true
+
+    task.delay(Config.ReconnectDelay, function()
+        if not server.ReconnectBudget() then
+            warn(Config.Tag, "reconnect: too many disconnects, staying out")
+            return
+        end
+        server.QueueReload()
+        for _ = 1, Config.ReconnectTries do
+            local ok, err = pcall(TeleportService.Teleport, TeleportService, game.PlaceId, LocalPlayer)
+            if not ok then warn(Config.Tag, "reconnect:", err) end
+            task.wait(Config.ReconnectRetry)
+        end
+    end)
+end
+
 function xDTaraZ.Server.Step()
+    local server = xDTaraZ.Server
+    if not server.ErrorConn and xDTaraZ.Util.Opt("AutoReconnect") then
+        server.ErrorConn = xDTaraZ:Connect(GuiService.ErrorMessageChanged, server.OnError)
+    end
+
     local want = false
     for _, idx in ipairs(xDTaraZ.Server.IdleKeepers) do
         if xDTaraZ.Util.Opt(idx) then want = true break end
@@ -7757,6 +7823,7 @@ function xDTaraZ.UI.PlayerTab(window)
 
     local misc = tab:AddRightGroupbox(T("Utility", "อรรถประโยชน์"), "gear")
     xDTaraZ.UI.Toggle(misc, "AntiAfk", { Text = T("Anti AFK", "กันหลุด AFK") })
+    xDTaraZ.UI.Toggle(misc, "AutoReconnect", { Text = T("Auto Reconnect", "เข้าเกมใหม่อัตโนมัติ"), Description = T("Joins back and reloads the hub after a disconnect", "หลุดแล้วเข้าเกมใหม่และโหลดสคริปต์ให้เอง") })
     misc:AddButton({ Text = T("Rejoin", "เข้าเซิร์ฟใหม่"), Func = xDTaraZ.UI.Detach("rejoin", xDTaraZ.Server.Rejoin) })
         :AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), Func = xDTaraZ.UI.Detach("hop", xDTaraZ.Server.Hop) })
 
