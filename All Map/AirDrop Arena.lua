@@ -157,6 +157,7 @@ xDTaraZ.Config = {
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
+        { "2026-10-04", "Updated for the new season\nAuto Gear now picks Gloves, Shoes & Melee too" },
         { "2026-10-03", "Classic Mario Hub UI is back\nBetter executor support\nImproved Farming, Combat & Movement" },
     },
     SaveFolder = "AirDrop Arena",
@@ -191,10 +192,14 @@ xDTaraZ.Config = {
     HuntDistance = 15,
     HuntLift = 10,
     GearSlots = {
-        [4] = { "Primary", 1 },
-        [5] = { "Pistol", 4 },
-        [8] = { "Helmet", 5 },
-        [9] = { "Armor", 6 },
+        [4] = { "Primary", { 1 } },
+        [5] = { "Pistol", { 4 } },
+        [8] = { "Helmet", { 5 } },
+        [9] = { "Armor", { 6 } },
+    },
+    SlotLabels = {
+        MainWeapon1 = "Primary", MainWeapon2 = "Primary", SecondaryWeapon = "Pistol", Melee = "Melee",
+        Helmet = "Helmet", BodyArmor = "Armor", Shoe = "Shoes", Gloves = "Gloves",
     },
     LootColors = {
         AirDrop = Color3.fromRGB(255, 80, 80),
@@ -257,7 +262,7 @@ xDTaraZ.Options = {
     NoRecoil = false,
     InstantAds = false,
     AutoGear = false,
-    LootGear = { Primary = true, Pistol = true, Helmet = true, Armor = true },
+    LootGear = { Primary = true, Pistol = true, Helmet = true, Armor = true, Shoes = true, Gloves = true, Melee = true },
     AutoValuables = false,
     AutoAirDrop = false,
     LootEspAirDrop = false,
@@ -435,6 +440,7 @@ do
     GameLib.Main = remotes and remotes:WaitForChild("Main", timeout) or GameLib.Find(remotes, "Main", "RemoteEvent")
     GameLib.ProtoId = GameLib.Require(GameLib.Find(scripts, "ProtoId", "ModuleScript")) or {}
     GameLib.Configs = GameLib.Require(GameLib.Find(scripts, "ConfigManager", "ModuleScript")) or {}
+    GameLib.BagEnum = GameLib.Require(scripts and scripts:FindFirstChild("BagEnum", true))
 end
 
 xDTaraZ.Proto = setmetatable({}, {
@@ -980,17 +986,56 @@ function xDTaraZ.Loot.ItemConfig(configId)
     return ok and type(cfg) == "table" and cfg or nil
 end
 
+---@return table  item type -> { label, { equip slots } }, read from the game so new gear slots show up by themselves
+function xDTaraZ.Loot.Slots()
+    if xDTaraZ.Loot.SlotMap then return xDTaraZ.Loot.SlotMap end
+    local enum = GameLib.BagEnum
+    local names, types = enum and enum.EquipMentPosMap, enum and enum.EquipMentPosToItemTypeMap
+    if type(names) ~= "table" or type(types) ~= "table" then
+        xDTaraZ.Loot.SlotMap = xDTaraZ.Config.GearSlots
+        return xDTaraZ.Loot.SlotMap
+    end
+    local map = {}
+    for name, pos in pairs(names) do
+        local itemType = type(pos) == "number" and types[pos]
+        if not itemType or name == "Min" or name == "Max" then continue end
+        local entry = map[itemType] or { xDTaraZ.Config.SlotLabels[name] or name, {} }
+        table.insert(entry[2], pos)
+        map[itemType] = entry
+    end
+    xDTaraZ.Loot.SlotMap = map
+    return map
+end
+
+---@return string[]  gear labels for the loot filter
+function xDTaraZ.Loot.SlotLabels()
+    local labels, seen = {}, {}
+    for _, entry in pairs(xDTaraZ.Loot.Slots()) do
+        if not seen[entry[1]] then
+            seen[entry[1]] = true
+            labels[#labels + 1] = entry[1]
+        end
+    end
+    table.sort(labels)
+    return labels
+end
+
 function xDTaraZ.Loot.Score(cfg)
     return (cfg.quality or 0) * 1e7 + (cfg.value or 0)
 end
 
----@return number  score of what is worn in that slot, 0 when empty
-function xDTaraZ.Loot.WornScore(slot)
+---@param slots number[]  equip slots that take this item type
+---@return number           score of the weakest item worn in them, 0 when one is empty
+function xDTaraZ.Loot.WornScore(slots)
     local char = LocalPlayer.Character
-    local worn = char and char:GetAttribute("EPos_" .. slot)
-    local id = type(worn) == "string" and tonumber(worn:match("^I_(%d+)"))
-    local cfg = id and id > 0 and xDTaraZ.Loot.ItemConfig(id)
-    return cfg and xDTaraZ.Loot.Score(cfg) or 0
+    local weakest = math.huge
+    for _, slot in ipairs(slots) do
+        local worn = char and char:GetAttribute("EPos_" .. slot)
+        local id = type(worn) == "string" and tonumber(worn:match("^I_(%d+)"))
+        local cfg = id and id > 0 and xDTaraZ.Loot.ItemConfig(id)
+        weakest = math.min(weakest, cfg and xDTaraZ.Loot.Score(cfg) or 0)
+    end
+    return weakest == math.huge and 0 or weakest
 end
 
 ---@return table[]  { bagUid, itemUid, name } for every slot that has a better item lying around
@@ -998,7 +1043,7 @@ function xDTaraZ.Loot.Upgrades()
     local manager = xDTaraZ.Loot.Manager()
     local bags = manager and manager.BagController.bagMap
     if type(bags) ~= "table" then return {} end
-    local wanted, slots = xDTaraZ.Options.LootGear, xDTaraZ.Config.GearSlots
+    local wanted, slots = xDTaraZ.Options.LootGear, xDTaraZ.Loot.Slots()
     local best = {}
     for bagUid, bag in pairs(bags) do
         for itemUid, item in pairs(type(bag.itemMap) == "table" and bag.itemMap or {}) do
@@ -1079,7 +1124,7 @@ function xDTaraZ.Loot.EmptyAirDrops()
         if not bag then continue end
         for itemUid, item in pairs(bag.itemMap) do
             local cfg = xDTaraZ.Loot.ItemConfig(item.configId)
-            local gear = cfg and xDTaraZ.Config.GearSlots[cfg.type]
+            local gear = cfg and xDTaraZ.Loot.Slots()[cfg.type]
             if gear and (taken[cfg.type] or xDTaraZ.Loot.Score(cfg) <= xDTaraZ.Loot.WornScore(gear[2])) then continue end
             if xDTaraZ.Loot.Pick(bagUid, itemUid, cfg and cfg.name) then
                 got += 1
@@ -1728,7 +1773,8 @@ function xDTaraZ.UI.BuildLoot(window)
 
     local gear = tab:AddLeftGroupbox(T("Best Gear", "ของดีที่สุด"), "star")
     gear:AddToggle("AutoGear", { Text = T("Auto loot best gear", "เก็บของดีสุดอัตโนมัติ"), Description = T("Grabs better guns and armor from any crate on the map", "ดึงปืนและเกราะที่ดีกว่าจากกล่องทุกใบในแมพ"), Risky = true })
-    gear:AddDropdown("LootGear", { Text = T("Gear types", "ประเภทของ"), Values = { "Primary", "Pistol", "Helmet", "Armor" }, Default = { "Primary", "Pistol", "Helmet", "Armor" }, Multi = true, AllowNull = true })
+    local gearLabels = xDTaraZ.Loot.SlotLabels()
+    gear:AddDropdown("LootGear", { Text = T("Gear types", "ประเภทของ"), Values = gearLabels, Default = gearLabels, Multi = true, AllowNull = true })
     gear:AddButton({ Text = T("Loot Best Now", "เก็บของดีสุดตอนนี้"), Style = "Primary", Func = xDTaraZ.UI.Detach(function()
         xDTaraZ.UI.Report("Loot", xDTaraZ.Loot.TakeUpgrades(), "Took %d upgrades", "Nothing better on the map")
     end) })
