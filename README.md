@@ -219,7 +219,10 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 - Egg filters by rarity, egg and minimum luck
 - Auto place eggs (best luck or fastest first), auto hatch from anywhere, auto buy nests
 - Auto place best pets (weight and mutations counted), auto collect cash, auto feed
-- Auto upgrade hatch luck, auto rebirth, auto claim index and offline rewards
+- Auto upgrade hatch luck, auto rebirth, auto claim index, offline and group rewards
+- **Auto Sell Pets** by rarity, keeping your best, favorites and mutated pets
+- **Auto Fusion** for the new fusion machine: places four pets, fuses and claims the result
+- **Auto Buy Stock**: buys the food and radars you pick the moment they are in stock
 - Egg ESP with rarity, odds and distance
 - Teleport to plot, shops, volcano and players
 - Speed, jump, fly, noclip, infinite jump, anti AFK, rejoin, server hop

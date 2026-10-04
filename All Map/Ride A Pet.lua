@@ -158,6 +158,7 @@ xDTaraZ.Config = {
     ReloadSource = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/loader.lua"))()',
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
+        { "2026-10-04", "Updated for the new game version\nAuto Sell Pets with rarity filter\nFaster egg collecting\nRemoved keybind from Auto Collect Eggs" },
         { "2026-10-03", "Classic Mario Hub UI is back\nBetter executor support\nBug fixes & better UI" },
     },
     SaveFolder = "Ride A Pet",
@@ -167,14 +168,27 @@ xDTaraZ.Config = {
     AlertGap = 0.5,
     FailLimit = 5,
     FailWindow = 10,
-    DataModules = { "Eggs", "Pets", "Rebirths", "Mutations", "Foods", "Nests", "EggBaskets" },
+    DataModules = { "Eggs", "Pets", "Rebirths", "Mutations", "Foods", "Nests", "EggBaskets", "Shop" },
 
     EggHover = 4,
     HomeHover = 3,
     NestHover = 5,
     TeleportSettle = 0.25,
     EquipSettle = 0.15,
-    PickupWait = 0.6,
+    PickupWait = 0.9,
+    RetryGap = 0.07,
+    SellEvery = 45,
+    SellStand = 6,
+    SellWait = 6,
+    FuseSlots = 4,
+    FuseLift = 3,
+    FuseStand = 5,
+    FuseSettle = 0.5,
+    FuseReplyWait = 1.2,
+    FuseEvery = 5,
+    ShopEvery = 20,
+    ShopWait = 3,
+    ShopGap = 0.15,
     DeliverWait = 0.6,
     ClaimBatch = 64,
     EggSkipFor = 30,
@@ -244,6 +258,10 @@ xDTaraZ.State = {
     LastRebirth = 0,
     RebirthBlockedUntil = 0,
     LastFeed = 0,
+    LastSell = 0,
+    LastFusion = 0,
+    LastShop = 0,
+    SellPending = false,
     NextRebirthCost = math.huge,
     EmptySince = nil,
     Hopping = false,
@@ -404,6 +422,15 @@ xDTaraZ.Net = {
     Nests = NeedRemote(PlotRemotes, "Nests"),
     ClaimIndexReward = NeedRemote(GameRemotes, "ClaimIndexReward"),
     OfflineEarnings = NeedRemote(GameRemotes, "OfflineEarnings"),
+    BuyWithCash = NeedRemote(GameRemotes, "BuyWithCash"),
+    SetOpenShop = NeedRemote(GameRemotes, "SetOpenShop"),
+    ShopStock = NeedRemote(GameRemotes, "ShopStock"),
+    Restock = NeedRemote(GameRemotes, "Restock"),
+    ClaimGroupReward = NeedRemote(Need(ReplicatedStorage:FindFirstChild("Remotes"), "Reusable"), "ClaimGroupReward"),
+    FusionAction = NeedRemote(GameRemotes, "FusionAction"),
+    FusionPetPlace = NeedRemote(GameRemotes, "FusionPetPlace"),
+    SellItems = NeedRemote(GameRemotes, "SellItems"),
+    ConfirmRequest = NeedRemote(GameRemotes, "ConfirmRequest"),
 }
 
 local GameData = Need(ReplicatedStorage, "GameData")
@@ -456,6 +483,7 @@ xDTaraZ.EggInfo = {}
 xDTaraZ.EggNames = {}
 xDTaraZ.Rarities = {}
 xDTaraZ.RarityRank = {}
+xDTaraZ.PetRarities = {}
 xDTaraZ.FoodNames = {}
 
 function xDTaraZ.BuildLists()
@@ -483,6 +511,17 @@ function xDTaraZ.BuildLists()
         xDTaraZ.RarityRank[rarity] = index
     end
     xDTaraZ.HuntDefault = table.find(xDTaraZ.Rarities, "Mythic") and "Mythic" or xDTaraZ.Rarities[math.max(#xDTaraZ.Rarities - 1, 1)]
+
+    local petFloor = {}
+    for _, info in pairs(GameLib.Pets) do
+        if type(info) ~= "table" or not info.Rarity then continue end
+        petFloor[info.Rarity] = math.min(petFloor[info.Rarity] or math.huge, tonumber(info.Income) or 0)
+    end
+    table.clear(xDTaraZ.PetRarities)
+    for rarity in pairs(petFloor) do
+        xDTaraZ.PetRarities[#xDTaraZ.PetRarities + 1] = rarity
+    end
+    table.sort(xDTaraZ.PetRarities, function(a, b) return petFloor[a] < petFloor[b] end)
 
     for name in pairs(GameLib.Foods) do
         xDTaraZ.FoodNames[#xDTaraZ.FoodNames + 1] = name
@@ -671,16 +710,32 @@ function xDTaraZ.Eggs.Available()
     return list
 end
 
+---@param kind string  server reply to wait for ("PickedUp" or "Deposited")
+---@return boolean     the server answered with that reply since State.PickReply was cleared
+function xDTaraZ.Eggs.Answered(kind)
+    local reply = State.PickReply
+    return reply ~= nil and reply.kind == kind
+end
+
+---@return boolean  another player took the egg first
+function xDTaraZ.Eggs.Gone()
+    local reply = State.PickReply
+    return reply ~= nil and reply.kind == "Refused" and tostring(reply.detail):find("already gone", 1, true) ~= nil
+end
+
 ---@return boolean  picked up
 function xDTaraZ.Eggs.Pickup(egg)
     local before = xDTaraZ:BasketCount()
+    State.PickReply = nil
     xDTaraZ:MoveTo(cframeNew(egg:GetAttribute("Position") + vector3New(0, Config.EggHover, 0)))
-    task.wait(Config.TeleportSettle)
-    xDTaraZ.Net.EggPickup:FireServer(egg.Name)
 
     local deadline = osClock() + Config.PickupWait
-    repeat task.wait() until xDTaraZ:BasketCount() > before or osClock() > deadline
-    local got = xDTaraZ:BasketCount() > before
+    local got = false
+    repeat
+        xDTaraZ.Net.EggPickup:FireServer(egg.Name)
+        task.wait(Config.RetryGap)
+        got = xDTaraZ.Eggs.Answered("PickedUp") or xDTaraZ:BasketCount() > before
+    until got or xDTaraZ.Eggs.Answered("BasketFull") or xDTaraZ.Eggs.Gone() or osClock() > deadline
     if not got then State.EggSkip[egg.Name] = osClock() + Config.EggSkipFor end
     return got
 end
@@ -689,18 +744,20 @@ end
 function xDTaraZ.Eggs.Deliver()
     if xDTaraZ:BasketCount() == 0 then return true end
     if not xDTaraZ:MoveTo(xDTaraZ:HomeCFrame()) then return false end
-    task.wait(Config.TeleportSettle)
-
-    local names = {}
-    for _, egg in ipairs(LocalPlayer.Basket:GetChildren()) do
-        names[#names + 1] = egg.Name
-        if #names >= Config.ClaimBatch then break end
-    end
-    xDTaraZ.Net.EggArrivalClaim:FireServer(Workspace:GetServerTimeNow(), xDTaraZ.Player.Root.Position, names)
+    State.PickReply = nil
 
     local deadline = osClock() + Config.DeliverWait
-    repeat task.wait() until xDTaraZ:BasketCount() == 0 or osClock() > deadline
-    return xDTaraZ:BasketCount() == 0
+    repeat
+        local names = {}
+        for _, egg in ipairs(LocalPlayer.Basket:GetChildren()) do
+            names[#names + 1] = egg.Name
+            if #names >= Config.ClaimBatch then break end
+        end
+        if #names == 0 then return true end
+        xDTaraZ.Net.EggArrivalClaim:FireServer(Workspace:GetServerTimeNow(), xDTaraZ.Player.Root.Position, names)
+        task.wait(Config.RetryGap)
+    until xDTaraZ.Eggs.Answered("Deposited") or xDTaraZ:BasketCount() == 0 or osClock() > deadline
+    return xDTaraZ.Eggs.Answered("Deposited") or xDTaraZ:BasketCount() == 0
 end
 
 ---@param manual boolean  Collect Now press, ignores the farm toggles
@@ -921,10 +978,37 @@ function xDTaraZ.Pets.Ranked(list, ascending)
     return ranked
 end
 
+---@return table?  the game's pet renderer, which holds every pet standing on a ranch
+function xDTaraZ.Pets.Renderer()
+    if GameLib.PetRenderer ~= nil then return GameLib.PetRenderer or nil end
+    local scripts = LocalPlayer:FindFirstChild("PlayerScripts")
+    local module = scripts and scripts:FindFirstChild("PetRenderer", true)
+    GameLib.PetRenderer = module and GameLib.Require(module) or false
+    return GameLib.PetRenderer or nil
+end
+
+---@return table[]  placed pets as objects with GetAttribute, read from the renderer (newer game) or the plot folder (older game)
 function xDTaraZ.Pets.Placed()
+    local list = {}
+    local renderer = xDTaraZ.Pets.Renderer()
+    local ok, all = pcall(function() return renderer and renderer.GetAll() end)
+    if ok and type(all) == "table" then
+        for _, entry in pairs(all) do
+            if entry.OwnerUserId == LocalPlayer.UserId and entry.PetKey then
+                list[#list + 1] = {
+                    GetAttribute = function(_, name)
+                        if name == "PetName" then return entry.Model and entry.Model.Name end
+                        if name == "Weight" then return entry.BaseWeight or entry.Weight end
+                        return entry[name]
+                    end,
+                }
+            end
+        end
+        if #list > 0 then return list end
+    end
+
     local plot = xDTaraZ:GetPlot()
     local folder = plot and plot:FindFirstChild("Pets")
-    local list = {}
     if not folder then return list end
     for _, pet in ipairs(folder:GetChildren()) do
         if pet:GetAttribute("OwnerUserId") == LocalPlayer.UserId and pet:GetAttribute("PetKey") then list[#list + 1] = pet end
@@ -1029,14 +1113,238 @@ function xDTaraZ.Pets.FeedNow()
     xDTaraZ:WithLock("feed", Config.LockWait, xDTaraZ.Pets.Feed)
 end
 
+---@return Instance[]  pet tools matching the sell options, never favorites or the strongest SellKeepBest
+function xDTaraZ.Pets.SellList()
+    local opts = xDTaraZ.Options
+    local rarities = opts.SellRarities
+    local list = {}
+    if not (rarities and next(rarities)) then return list end
+    for rank, pair in ipairs(xDTaraZ.Pets.Ranked(xDTaraZ.Pets.Owned(), false)) do
+        local tool = pair[1]
+        local info = GameLib.Pets[tool:GetAttribute("PetName") or ""]
+        if rank <= (opts.SellKeepBest or 0) then continue end
+        if tool:GetAttribute("Favorited") == true then continue end
+        if opts.SellKeepMutated and (tool:GetAttribute("Mutation") or tool:GetAttribute("SpawnMutation")) then continue end
+        if type(info) == "table" and rarities[info.Rarity] then list[#list + 1] = tool end
+    end
+    return list
+end
+
+---@return Vector3?  where the seller stands
+function xDTaraZ.Pets.SellerSpot()
+    local stalls = Workspace:FindFirstChild("Stalls")
+    local seller = stalls and stalls:FindFirstChild("Sell")
+    local root = seller and seller:FindFirstChild("HumanoidRootPart", true)
+    return root and (root.CFrame * cframeNew(0, 0, Config.SellStand)).Position
+end
+
+---@return number  pets sold, 0 when the seller refuses
+function xDTaraZ.Pets.Sell()
+    local list = xDTaraZ.Pets.SellList()
+    local spot = xDTaraZ.Pets.SellerSpot()
+    if #list == 0 or not spot or not xDTaraZ.Net.SellItems then return 0 end
+
+    local keys = table.create(#list)
+    for i, tool in ipairs(list) do keys[i] = tool:GetAttribute("PetKey") end
+    local origin = xDTaraZ.Player.Root.CFrame
+    xDTaraZ:SetStatus("Selling " .. #keys .. " pets")
+    xDTaraZ:MoveTo(cframeNew(spot))
+    task.wait(Config.TeleportSettle)
+
+    State.SellReply, State.SellPending = nil, true
+    xDTaraZ.Net.SellItems:FireServer({ Pets = keys, Eggs = {} })
+    local deadline = osClock() + Config.SellWait
+    repeat task.wait() until State.SellReply or osClock() > deadline
+    State.SellPending = false
+    xDTaraZ:MoveTo(origin)
+
+    local reply = State.SellReply
+    return type(reply) == "table" and tonumber(reply.Sold) or 0
+end
+
+function xDTaraZ.Pets.SellNow()
+    local sold = 0
+    xDTaraZ:WithLock("sell", Config.LockWait, function() sold = xDTaraZ.Pets.Sell() end)
+    return sold
+end
+
 function xDTaraZ.Pets.Step()
     local opts, now = xDTaraZ.Options, osClock()
+    if opts.AutoSell and now - State.LastSell > Config.SellEvery then
+        State.LastSell = now
+        xDTaraZ:WithLock("sell", 0, xDTaraZ.Pets.Sell)
+    end
     if opts.AutoEquipBest then xDTaraZ:WithLock("pets", 0, xDTaraZ.Pets.EquipBest) end
     if opts.AutoCollectCash then xDTaraZ.Pets.CollectNow() end
     if opts.AutoFeed and now - State.LastFeed > Config.FeedGap * Config.FeedEvery then
         State.LastFeed = now
         xDTaraZ:WithLock("feed", 0, xDTaraZ.Pets.Feed)
     end
+end
+
+xDTaraZ.Fusion = {}
+
+---@return Vector3?, table<number, Attachment>  where to stand at the console, and the four slot attachments
+function xDTaraZ.Fusion.Machine()
+    local functionals = Workspace:FindFirstChild("Functionals")
+    local machine = functionals and functionals:FindFirstChild("Fusion")
+    local slots, console = {}, nil
+    for _, node in ipairs(machine and machine:GetDescendants() or {}) do
+        local slot = node:IsA("Attachment") and node:GetAttribute("FusionSlot")
+        if slot then slots[slot] = node end
+        if node:IsA("ProximityPrompt") and node.Name == "OpenConsole" and node.Parent:IsA("Attachment") then console = node.Parent.WorldPosition end
+    end
+    return console, slots
+end
+
+---@param count number  pets needed
+---@return Instance[]   cheapest matching pets, never favorites, never the strongest FuseKeepBest
+function xDTaraZ.Fusion.Candidates(count)
+    local opts = xDTaraZ.Options
+    local rarities = opts.FuseRarities
+    local picked = {}
+    if not (rarities and next(rarities)) then return picked end
+    local ranked = xDTaraZ.Pets.Ranked(xDTaraZ.Pets.Owned(), false)
+    for rank = #ranked, 1, -1 do
+        local tool = ranked[rank][1]
+        local info = GameLib.Pets[tool:GetAttribute("PetName") or ""]
+        if rank <= (opts.FuseKeepBest or 0) or #picked >= count then continue end
+        if tool:GetAttribute("Favorited") == true then continue end
+        if opts.FuseKeepMutated and (tool:GetAttribute("Mutation") or tool:GetAttribute("SpawnMutation")) then continue end
+        if type(info) == "table" and rarities[info.Rarity] then picked[#picked + 1] = tool end
+    end
+    return picked
+end
+
+---@param fn function  runs once you are next to the console
+function xDTaraZ.Fusion.AtConsole(spot, fn)
+    local origin = xDTaraZ.Player.Root.CFrame
+    xDTaraZ:MoveTo(cframeNew(spot + vector3New(0, Config.FuseLift, Config.FuseStand)))
+    task.wait(Config.FuseSettle)
+    fn()
+    task.wait(Config.FuseReplyWait)
+    xDTaraZ:MoveTo(origin)
+end
+
+---@return boolean  placed the missing pets, false when there are not enough matching pets
+function xDTaraZ.Fusion.Fill(state, slots)
+    local missing = {}
+    for index = 1, Config.FuseSlots do
+        if not state:FindFirstChild(tostring(index)) and slots[index] then missing[#missing + 1] = index end
+    end
+    local pets = xDTaraZ.Fusion.Candidates(#missing)
+    if #pets < #missing then
+        xDTaraZ:SetStatus(("Fusion needs %d more matching pets"):format(#missing - #pets))
+        return false
+    end
+    local origin = xDTaraZ.Player.Root.CFrame
+    for i, index in ipairs(missing) do
+        xDTaraZ:MoveTo(cframeNew(slots[index].WorldPosition + vector3New(0, Config.FuseLift, Config.FuseStand)))
+        task.wait(Config.FuseSettle)
+        xDTaraZ.Player.Humanoid:EquipTool(pets[i])
+        task.wait(Config.EquipSettle)
+        xDTaraZ.Net.FusionPetPlace:FireServer(index)
+        task.wait(Config.FuseReplyWait)
+    end
+    xDTaraZ.Player.Humanoid:UnequipTools()
+    xDTaraZ:MoveTo(origin)
+    return true
+end
+
+function xDTaraZ.Fusion.Run()
+    local state = LocalPlayer:FindFirstChild("FusionSlots")
+    local console, slots = xDTaraZ.Fusion.Machine()
+    if not (state and console and xDTaraZ.Net.FusionAction and xDTaraZ.Net.FusionPetPlace) then return end
+
+    local status = state:GetAttribute("FusionStatus")
+    if status == "Waiting" then
+        if Workspace:GetServerTimeNow() < (state:GetAttribute("EndsAt") or math.huge) then
+            xDTaraZ:SetStatus(("Fusing, %ds left"):format((state:GetAttribute("EndsAt") or 0) - Workspace:GetServerTimeNow()))
+            return
+        end
+        xDTaraZ.Fusion.AtConsole(console, function() xDTaraZ.Net.FusionAction:FireServer("Fuse") end)
+    elseif status == "Result" then
+        local result = LocalPlayer:FindFirstChild("FusionResult")
+        local pet = result and result:FindFirstChild("Pet")
+        local key = state:GetAttribute("FusionFailed") == true and state:GetAttribute("FusionResultKey") or (pet and pet:GetAttribute("PetKey"))
+        if key then xDTaraZ.Fusion.AtConsole(console, function() xDTaraZ.Net.FusionAction:FireServer("Claim", key) end) end
+    elseif (state:GetAttribute("Count") or 0) < Config.FuseSlots then
+        xDTaraZ.Fusion.Fill(state, slots)
+    elseif state:GetAttribute("Ready") == true then
+        xDTaraZ.Fusion.AtConsole(console, function() xDTaraZ.Net.FusionAction:FireServer("Start") end)
+    end
+end
+
+function xDTaraZ.Fusion.RunNow()
+    xDTaraZ:WithLock("fusion", Config.LockWait, xDTaraZ.Fusion.Run)
+end
+
+function xDTaraZ.Fusion.Step()
+    if not xDTaraZ.Options.AutoFusion then return end
+    if osClock() - State.LastFusion < Config.FuseEvery then return end
+    State.LastFusion = osClock()
+    xDTaraZ:WithLock("fusion", 0, xDTaraZ.Fusion.Run)
+end
+
+xDTaraZ.Shop = {}
+
+---@return string[]  "Category/Item" for every cash item in the stock shop, cheapest first
+function xDTaraZ.Shop.Labels()
+    local list = {}
+    for category, items in pairs(GameLib.Shop.Categories or {}) do
+        for name, config in pairs(type(items) == "table" and items or {}) do
+            local price = type(config) == "table" and tonumber(config.Price) or 0
+            if price > 0 and not (config.Source == "MiscGears") then list[#list + 1] = { category .. "/" .. name, price } end
+        end
+    end
+    table.sort(list, function(a, b) return a[2] < b[2] end)
+    for i, pair in ipairs(list) do list[i] = pair[1] end
+    return list
+end
+
+---@return table?  stock table { [category] = { [item] = { InStock, Amount } } } as the server sees it now
+function xDTaraZ.Shop.ReadStock()
+    State.Stock = nil
+    xDTaraZ.Net.ShopStock:FireServer()
+    local deadline = osClock() + Config.ShopWait
+    repeat task.wait(0.05) until State.Stock or osClock() > deadline
+    return State.Stock
+end
+
+---@return number  items bought
+function xDTaraZ.Shop.Buy()
+    local wanted = xDTaraZ.Options.ShopItems
+    local stock = xDTaraZ.Shop.ReadStock()
+    if not (wanted and next(wanted) and stock) then return 0 end
+
+    local bought, cash = 0, xDTaraZ:Cash() - (xDTaraZ.Options.ShopKeepCash or 0)
+    for label in pairs(wanted) do
+        local category, name = label:match("^(.-)/(.+)$")
+        local entry = category and stock[category] and stock[category][name]
+        local price = tonumber(GameLib.Shop.Categories[category] and GameLib.Shop.Categories[category][name] and GameLib.Shop.Categories[category][name].Price) or math.huge
+        if not (entry and entry.InStock) then continue end
+        xDTaraZ.Net.SetOpenShop:FireServer(category)
+        for _ = 1, entry.Amount or 0 do
+            if cash < price then break end
+            xDTaraZ.Net.BuyWithCash:FireServer(category, name)
+            cash -= price
+            bought += 1
+            task.wait(Config.ShopGap)
+        end
+    end
+    return bought
+end
+
+function xDTaraZ.Shop.BuyNow()
+    local bought = 0
+    xDTaraZ:WithLock("shop", Config.LockWait, function() bought = xDTaraZ.Shop.Buy() end)
+    return bought
+end
+
+function xDTaraZ.Shop.Step()
+    if not xDTaraZ.Options.AutoShop or osClock() - State.LastShop < Config.ShopEvery then return end
+    State.LastShop = osClock()
+    xDTaraZ:WithLock("shop", 0, xDTaraZ.Shop.Buy)
 end
 
 xDTaraZ.Progress = {}
@@ -1087,6 +1395,11 @@ end
 function xDTaraZ.Progress.ClaimNow()
     xDTaraZ.Net.ClaimIndexReward:FireServer()
     xDTaraZ.Net.OfflineEarnings:FireServer()
+    local saved = xDTaraZ:Saved()
+    local claimed = saved and saved:FindFirstChild("ClaimedGroupReward")
+    if xDTaraZ.Net.ClaimGroupReward and not (claimed and claimed.Value ~= "" and claimed.Value ~= false) then
+        xDTaraZ.Net.ClaimGroupReward:FireServer()
+    end
 end
 
 ---@return boolean  luck upgrades should wait for rebirth cash
@@ -1377,7 +1690,9 @@ xDTaraZ.Scheduler = {}
 xDTaraZ.Scheduler.Toggles = {
     Eggs = { "AutoEggs", "EggHunter" },
     Hatch = { "AutoPlaceEggs", "AutoHatch" },
-    Pets = { "AutoEquipBest", "AutoCollectCash", "AutoFeed" },
+    Pets = { "AutoEquipBest", "AutoCollectCash", "AutoFeed", "AutoSell" },
+    Fusion = { "AutoFusion" },
+    Shop = { "AutoShop" },
     Progress = { "AutoUpgrade", "AutoRebirth", "AutoNests", "AutoClaim" },
 }
 
@@ -1428,8 +1743,28 @@ function xDTaraZ.Scheduler.Loop(tick, names)
 end
 
 function xDTaraZ.Scheduler.Boot()
+    if xDTaraZ.Net.EggPickup then
+        xDTaraZ:Connect(xDTaraZ.Net.EggPickup.OnClientEvent, function(kind, detail)
+            State.PickReply = { kind = kind, detail = detail, at = osClock() }
+        end)
+    end
+    if xDTaraZ.Net.SellItems then
+        xDTaraZ:Connect(xDTaraZ.Net.SellItems.OnClientEvent, function(reply) State.SellReply = reply end)
+    end
+    if xDTaraZ.Net.Restock then
+        xDTaraZ:Connect(xDTaraZ.Net.Restock.OnClientEvent, function(stock)
+            if type(stock) == "table" then State.Stock = stock end
+        end)
+    end
+    if xDTaraZ.Net.ConfirmRequest then
+        xDTaraZ:Connect(xDTaraZ.Net.ConfirmRequest.OnClientEvent, function(id, question)
+            if State.SellPending and type(id) == "string" and type(question) == "string" then
+                xDTaraZ.Net.ConfirmRequest:FireServer(id, true)
+            end
+        end)
+    end
     xDTaraZ.Scheduler.Loop(Config.EggTick, { "Eggs" })
-    xDTaraZ.Scheduler.Loop(Config.StepTick, { "Hatch", "Pets", "Progress" })
+    xDTaraZ.Scheduler.Loop(Config.StepTick, { "Hatch", "Pets", "Progress", "Fusion", "Shop" })
     xDTaraZ:Connect(RunService.Heartbeat, function(dt)
         xDTaraZ.Move.Frame(dt)
         xDTaraZ.Troll.Frame()
@@ -1475,6 +1810,9 @@ xDTaraZ.UI.Needs = {
     AutoUpgrade = { "Net.Upgrades" },
     AutoRebirth = { "Rebirths", "Net.Rebirth" },
     AutoClaim = { "Net.ClaimIndexReward", "Net.OfflineEarnings" },
+    AutoSell = { "Net.SellItems", "Net.ConfirmRequest" },
+    AutoFusion = { "Net.FusionAction", "Net.FusionPetPlace" },
+    AutoShop = { "Shop", "Net.BuyWithCash", "Net.SetOpenShop", "Net.ShopStock", "Net.Restock" },
     EggEsp = { "Eggs" },
 }
 
@@ -1607,7 +1945,7 @@ end
 function xDTaraZ.UI.EggFarm(window)
     local tab = window:AddTab(T("Egg Farm", "ฟาร์มไข่"), "coin", T("Wild egg collecting", "เก็บไข่ป่า"))
     local farm = tab:AddLeftGroupbox(T("Collect Eggs", "เก็บไข่"), "zap")
-    xDTaraZ.UI.KeyToggle(farm, "AutoEggs", "Auto Collect Eggs", "เก็บไข่อัตโนมัติ", T("Grabs every wanted egg on the map and brings it home", "เก็บไข่ที่เลือกทั่วแมพแล้วพากลับบ้าน"), true)
+    xDTaraZ.UI.Toggle(farm, "AutoEggs", "Auto Collect Eggs", "เก็บไข่อัตโนมัติ", T("Grabs every wanted egg on the map and brings it home", "เก็บไข่ที่เลือกทั่วแมพแล้วพากลับบ้าน"), true)
     xDTaraZ.UI.Toggle(farm, "SmartEggs", "Better Eggs Only", "เก็บเฉพาะไข่ที่ดีกว่า", T("Once your bag is stocked, only grabs eggs better than what you hold", "พอไข่ในกระเป๋าเยอะแล้ว เก็บเฉพาะไข่ที่ดีกว่าที่มี"))
     xDTaraZ.UI.Toggle(farm, "ReturnAfter", "Return To Spot", "กลับจุดเดิม", T("Go back where you stood after each run", "กลับไปจุดเดิมหลังเก็บเสร็จ"))
     farm:AddButton({ Text = T("Collect Eggs Now", "เก็บไข่เดี๋ยวนี้"), Style = "Primary", Func = xDTaraZ.UI.Detach(function()
@@ -1659,6 +1997,33 @@ function xDTaraZ.UI.PetsTab(window)
     xDTaraZ.UI.Toggle(feed, "AutoFeed", "Auto Feed", "ให้อาหารอัตโนมัติ", T("Feeds your best pets with the food you own", "ให้อาหารสัตว์ตัวดีสุดด้วยอาหารที่มี"))
     xDTaraZ.UI.Bind("FoodTypes", feed:AddDropdown("FoodTypes", { Text = T("Foods to use (empty = all)", "อาหารที่ใช้ (ว่าง = ทั้งหมด)"), Values = xDTaraZ.FoodNames, Multi = true, Default = {} }))
     feed:AddButton({ Text = T("Feed Now", "ให้อาหารเดี๋ยวนี้"), Func = xDTaraZ.UI.Detach(xDTaraZ.Pets.FeedNow) })
+
+    local sell = tab:AddLeftGroupbox(T("Sell Pets", "ขายสัตว์เลี้ยง"), "coin")
+    xDTaraZ.UI.Toggle(sell, "AutoSell", "Auto Sell Pets", "ขายสัตว์อัตโนมัติ", T("Sells the pets in your bag that match the rarities below", "ขายสัตว์ในกระเป๋าที่ตรงกับความหายากด้านล่าง"), true)
+    xDTaraZ.UI.Bind("SellRarities", sell:AddDropdown("SellRarities", { Text = T("Rarities To Sell", "ความหายากที่จะขาย"), Values = xDTaraZ.PetRarities, Multi = true, Default = {} }))
+    xDTaraZ.UI.Bind("SellKeepBest", sell:AddSlider("SellKeepBest", { Text = T("Keep Best Pets", "เก็บตัวดีสุดไว้"), Min = 0, Max = 100, Default = 10, Rounding = 0 }))
+    xDTaraZ.UI.Bind("SellKeepMutated", sell:AddCheckbox("SellKeepMutated", { Text = T("Keep Mutated Pets", "ไม่ขายตัวมิวเทชัน"), Default = true }))
+    sell:AddButton({ Text = T("Sell Now", "ขายเดี๋ยวนี้"), Style = "Primary", Func = xDTaraZ.UI.Detach(function()
+        local sold = xDTaraZ.Pets.SellNow()
+        Library:Notify("Sell", sold > 0 and ("Sold " .. sold .. " pets") or "Nothing to sell with these options", 3, sold > 0 and "Success" or "Warning")
+    end) })
+
+    local shop = tab:AddLeftGroupbox(T("Stock Shop", "ร้านสต็อก"), "shop")
+    xDTaraZ.UI.Toggle(shop, "AutoShop", "Auto Buy Stock", "ซื้อของในร้านอัตโนมัติ", T("Buys the items below the moment they are in stock", "ซื้อของที่เลือกทันทีที่มีของในร้าน"))
+    local shopLabels = xDTaraZ.UI.Values(xDTaraZ.Shop.Labels)
+    xDTaraZ.UI.Bind("ShopItems", shop:AddDropdown("ShopItems", { Text = T("Items To Buy", "ของที่จะซื้อ"), Values = shopLabels, Multi = true, Searchable = true, Default = {} }))
+    xDTaraZ.UI.Bind("ShopKeepCash", shop:AddSlider("ShopKeepCash", { Text = T("Keep Cash", "กันเงินไว้"), Min = 0, Max = 1000000000, Default = 0, Rounding = 0 }))
+    shop:AddButton({ Text = T("Buy Now", "ซื้อเดี๋ยวนี้"), Func = xDTaraZ.UI.Detach(function()
+        local bought = xDTaraZ.Shop.BuyNow()
+        Library:Notify("Shop", bought > 0 and ("Bought " .. bought .. " items") or "Nothing in stock for these items", 3, bought > 0 and "Success" or "Warning")
+    end) })
+
+    local fuse = tab:AddRightGroupbox(T("Fusion", "หลอมสัตว์"), "bomb")
+    xDTaraZ.UI.Toggle(fuse, "AutoFusion", "Auto Fusion", "หลอมสัตว์อัตโนมัติ", T("Puts four matching pets in the machine, fuses and claims the result", "ใส่สัตว์ 4 ตัวที่ตรงเงื่อนไขลงเครื่อง หลอม แล้วรับผลลัพธ์"), true)
+    xDTaraZ.UI.Bind("FuseRarities", fuse:AddDropdown("FuseRarities", { Text = T("Rarities To Fuse", "ความหายากที่จะหลอม"), Values = xDTaraZ.PetRarities, Multi = true, Default = {} }))
+    xDTaraZ.UI.Bind("FuseKeepBest", fuse:AddSlider("FuseKeepBest", { Text = T("Keep Best Pets", "เก็บตัวดีสุดไว้"), Min = 0, Max = 100, Default = 10, Rounding = 0 }))
+    xDTaraZ.UI.Bind("FuseKeepMutated", fuse:AddCheckbox("FuseKeepMutated", { Text = T("Keep Mutated Pets", "ไม่ใช้ตัวมิวเทชัน"), Default = true }))
+    fuse:AddButton({ Text = T("Fuse Now", "หลอมเดี๋ยวนี้"), Func = xDTaraZ.UI.Detach(xDTaraZ.Fusion.RunNow) })
 end
 
 function xDTaraZ.UI.Upgrades(window)
