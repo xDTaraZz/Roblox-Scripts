@@ -158,7 +158,7 @@ xDTaraZ.Config = {
     ReloadSource = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/loader.lua"))()',
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
-        { "2026-10-04", "Updated for the new game version\nAuto Sell Pets with rarity filter\nFaster egg collecting\nRemoved keybind from Auto Collect Eggs\nFixed Auto Place Best Pets swapping pets\nAuto Feed goes to your base first\nVolcano Dip & Auto Volcano Obby\nAuto Place Eggs fills your plot up to its limit" },
+        { "2026-10-04", "Updated for the new game version\nAuto Sell Pets with rarity filter\nFaster egg collecting\nRemoved keybind from Auto Collect Eggs\nFixed Auto Place Best Pets swapping pets\nAuto Feed goes to your base first\nVolcano Dip & Auto Volcano Obby\nAuto Place Eggs fills your plot up to its limit\nFixed eggs breaking before reaching base\nVolcano climb runs by itself for Volcanic Eggs\nRemoved Auto Buy Nests" },
         { "2026-10-03", "Classic Mario Hub UI is back\nBetter executor support\nBug fixes & better UI" },
     },
     SaveFolder = "Ride A Pet",
@@ -168,7 +168,7 @@ xDTaraZ.Config = {
     AlertGap = 0.5,
     FailLimit = 5,
     FailWindow = 10,
-    DataModules = { "Eggs", "Pets", "Rebirths", "Mutations", "Foods", "Nests", "EggBaskets", "Shop" },
+    DataModules = { "Eggs", "Pets", "Rebirths", "Mutations", "Foods", "EggBaskets", "Shop" },
 
     EggHover = 4,
     HomeHover = 3,
@@ -191,6 +191,7 @@ xDTaraZ.Config = {
     ShopGap = 0.15,
     DeliverWait = 0.6,
     ClaimBatch = 64,
+    DeliverMargin = 5,
     EggSkipFor = 30,
     EggStock = 40,
     DeliverBackoff = 3,
@@ -200,7 +201,7 @@ xDTaraZ.Config = {
     VolcanoSettle = 0.3,
     TouchGap = 0.05,
     VolcanoStep = 0.4,
-    DipDeliverTries = 3,
+    DeliverTries = 3,
     DipWait = 15,
     DipMinLeft = 12,
     ObbyRetry = 30,
@@ -226,7 +227,6 @@ xDTaraZ.Config = {
     FeedEvery = 5,
     ClaimGap = 30,
     UpgradeGap = 2,
-    NestsGap = 5,
     RebirthGap = 5,
     RebirthBackoff = 60,
     RebirthReserve = 2,
@@ -276,7 +276,6 @@ xDTaraZ.State = {
     LastHatchAll = 0,
     LastClaim = 0,
     LastUpgrade = 0,
-    LastNests = 0,
     LastRebirth = 0,
     RebirthBlockedUntil = 0,
     LastFeed = 0,
@@ -441,7 +440,6 @@ xDTaraZ.Net = {
     FeedPet = NeedRemote(GameRemotes, "FeedPet"),
     Rebirth = NeedRemote(GameRemotes, "Rebirth"),
     Upgrades = NeedRemote(PlotRemotes, "Upgrades"),
-    Nests = NeedRemote(PlotRemotes, "Nests"),
     ClaimIndexReward = NeedRemote(GameRemotes, "ClaimIndexReward"),
     OfflineEarnings = NeedRemote(GameRemotes, "OfflineEarnings"),
     BuyWithCash = NeedRemote(GameRemotes, "BuyWithCash"),
@@ -880,11 +878,29 @@ end
 
 ---@return boolean  basket emptied at home, eggs dipped first when Volcano Dip is on
 function xDTaraZ.Eggs.Bank()
-    local dipped = xDTaraZ.Options.VolcanoDip and xDTaraZ.Volcano.DipBasket() or 0
-    for _ = 1, dipped > 0 and Config.DipDeliverTries or 1 do
+    if xDTaraZ.Options.VolcanoDip then xDTaraZ.Volcano.DipBasket() end
+    for _ = 1, Config.DeliverTries do
         if xDTaraZ.Eggs.Deliver() then return true end
     end
     return false
+end
+
+---@return boolean  an egg in the basket breaks soon unless it goes home now
+function xDTaraZ.Eggs.Urgent()
+    local basket = LocalPlayer:FindFirstChild("Basket")
+    local now = Workspace:GetServerTimeNow()
+    for _, egg in ipairs(basket and basket:GetChildren() or {}) do
+        if (tonumber(egg:GetAttribute("BreakAt")) or math.huge) - now < Config.DeliverMargin then return true end
+    end
+    return false
+end
+
+---@return boolean  the volcano climb is done, finishing it first when a Volcanic Egg needs it
+function xDTaraZ.Volcano.Ready()
+    if xDTaraZ.Volcano.Done() then return true end
+    if not (Library and Library.Compat and Library.Compat.Caps.Touch) then return false end
+    xDTaraZ:SetStatus("Finishing volcano climb")
+    return xDTaraZ.Volcano.Validate()
 end
 
 ---@param manual boolean  Collect Now press, ignores the farm toggles
@@ -900,10 +916,11 @@ function xDTaraZ.Eggs.Run(manual)
         if not manual and not (opts.AutoEggs or opts.EggHunter) then break end
         if not egg.Parent then continue end
         local info = xDTaraZ.EggInfo[egg:GetAttribute("Egg")]
-        if info and info.RequiresVolcano and not xDTaraZ.Volcano.Done() and opts.VolcanoObby then xDTaraZ.Volcano.Validate() end
+        if info and info.RequiresVolcano and not xDTaraZ.Volcano.Ready() then continue end
         xDTaraZ:SetStatus("Grabbing " .. egg:GetAttribute("Egg"))
         if xDTaraZ.Eggs.Pickup(egg) then got += 1 end
-        if xDTaraZ:BasketCount() >= capacity and not xDTaraZ.Eggs.Bank() then
+        local goHome = xDTaraZ:BasketCount() >= capacity or (xDTaraZ:BasketCount() > 0 and xDTaraZ.Eggs.Urgent())
+        if goHome and not xDTaraZ.Eggs.Bank() then
             State.DeliverFailUntil = osClock() + Config.DeliverBackoff
             xDTaraZ:SetStatus("Delivery refused, retrying soon")
             break
@@ -1599,20 +1616,6 @@ function xDTaraZ.Progress.UpgradeNow()
     xDTaraZ.Net.Upgrades:FireServer("Max")
 end
 
-function xDTaraZ.Progress.BuyNestsNow()
-    local plot = xDTaraZ:GetPlot()
-    local nests = plot and plot:FindFirstChild("Nests")
-    if not nests then return end
-    local prices = GameLib.Nests.Prices or {}
-    for _, nest in ipairs(nests:GetChildren()) do
-        local index = tonumber(nest.Name)
-        if nest:GetAttribute("Unlocked") or not index then continue end
-        if xDTaraZ:Cash() < (prices[index] or math.huge) then continue end
-        xDTaraZ.Net.Nests:FireServer(index)
-        task.wait(Config.PlaceGap)
-    end
-end
-
 function xDTaraZ.Progress.ClaimNow()
     xDTaraZ.Net.ClaimIndexReward:FireServer()
     xDTaraZ.Net.OfflineEarnings:FireServer()
@@ -1636,10 +1639,6 @@ function xDTaraZ.Progress.Step()
     if opts.AutoRebirth and now - State.LastRebirth > Config.RebirthGap and now > State.RebirthBlockedUntil and xDTaraZ:Cash() >= State.NextRebirthCost then
         State.LastRebirth = now
         xDTaraZ.Progress.RebirthNow()
-    end
-    if opts.AutoNests and now - State.LastNests > Config.NestsGap then
-        State.LastNests = now
-        xDTaraZ.Progress.BuyNestsNow()
     end
     if opts.AutoUpgrade and now - State.LastUpgrade > Config.UpgradeGap and not xDTaraZ.Progress.SavingForRebirth() then
         State.LastUpgrade = now
@@ -1914,7 +1913,7 @@ xDTaraZ.Scheduler.Toggles = {
     Pets = { "AutoEquipBest", "AutoCollectCash", "AutoFeed", "AutoSell" },
     Fusion = { "AutoFusion" },
     Shop = { "AutoShop" },
-    Progress = { "AutoUpgrade", "AutoRebirth", "AutoNests", "AutoClaim" },
+    Progress = { "AutoUpgrade", "AutoRebirth", "AutoClaim" },
 }
 
 ---@return boolean  one of the job's toggles is on
@@ -2025,7 +2024,7 @@ xDTaraZ.UI.OffHooks = {
     Stick = function() xDTaraZ.Troll.Stop("Stick") end,
 }
 
-xDTaraZ.UI.KaitunSet = { "AutoEggs", "SmartEggs", "AutoPlaceEggs", "AutoHatch", "AutoEquipBest", "AutoCollectCash", "AutoFeed", "AutoUpgrade", "SmartSpend", "AutoRebirth", "AutoNests", "AutoClaim", "AntiAfk" }
+xDTaraZ.UI.KaitunSet = { "AutoEggs", "SmartEggs", "AutoPlaceEggs", "AutoHatch", "AutoEquipBest", "AutoCollectCash", "AutoFeed", "AutoUpgrade", "SmartSpend", "AutoRebirth", "AutoClaim", "AntiAfk" }
 
 xDTaraZ.UI.Needs = {
     AutoEggs = { "Eggs", "EggBaskets", "Net.EggPickup", "Net.EggArrivalClaim" },
@@ -2033,7 +2032,6 @@ xDTaraZ.UI.Needs = {
     VolcanoDip = { "Eggs", "Net.VolcanoDip", "Net.VolcanoDipResult" },
     AutoPlaceEggs = { "Eggs", "Net.EggPlaced" },
     AutoHatch = { "Net.Hatch" },
-    AutoNests = { "Nests", "Net.Nests" },
     AutoEquipBest = { "Pets", "Mutations", "Net.PlacePet", "Net.PickupPet" },
     AutoCollectCash = { "Net.PetCollect" },
     AutoFeed = { "Foods", "Net.FeedPet" },
@@ -2211,7 +2209,7 @@ function xDTaraZ.UI.EggFarm(window)
 end
 
 function xDTaraZ.UI.Hatching(window)
-    local tab = window:AddTab(T("Hatch", "ฟักไข่"), "flower", T("Nests and hatching", "รังและการฟัก"))
+    local tab = window:AddTab(T("Hatch", "ฟักไข่"), "flower", T("Placing and hatching", "วางและฟักไข่"))
     local place = tab:AddLeftGroupbox(T("Place Eggs", "วางไข่"), "flower")
     xDTaraZ.UI.Toggle(place, "AutoPlaceEggs", "Auto Place Eggs", "วางไข่อัตโนมัติ", T("Fills your plot with your best eggs up to the limit", "วางไข่ที่ดีที่สุดลงพล็อตจนเต็มลิมิต"))
     xDTaraZ.UI.Toggle(place, "FastestFirst", "Fastest Eggs First", "ไข่ที่ฟักเร็วก่อน", T("Off = best luck first", "ปิด = ไข่โชคดีสุดก่อน"))
@@ -2220,10 +2218,6 @@ function xDTaraZ.UI.Hatching(window)
     local hatch = tab:AddRightGroupbox(T("Hatching", "ฟักไข่"), "star")
     xDTaraZ.UI.Toggle(hatch, "AutoHatch", "Auto Hatch", "ฟักอัตโนมัติ", T("Hatches eggs from anywhere as soon as they are ready", "ฟักไข่จากที่ไหนก็ได้ทันทีที่พร้อม"))
     hatch:AddButton({ Text = T("Hatch Now", "ฟักเดี๋ยวนี้"), Style = "Primary", Func = xDTaraZ.UI.Detach(function() xDTaraZ.Hatch.HatchNow(true) end) })
-
-    local nests = tab:AddRightGroupbox(T("Nests", "รัง"), "castle")
-    xDTaraZ.UI.Toggle(nests, "AutoNests", "Auto Buy Nests", "ซื้อรังอัตโนมัติ", T("Unlocks new nests when you can afford them", "ปลดล็อกรังใหม่เมื่อเงินพอ"))
-    nests:AddButton({ Text = T("Buy Nests Now", "ซื้อรังเดี๋ยวนี้"), Func = xDTaraZ.UI.Detach(xDTaraZ.Progress.BuyNestsNow) })
 end
 
 function xDTaraZ.UI.PetsTab(window)
