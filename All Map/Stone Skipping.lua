@@ -151,6 +151,7 @@ local xDTaraZ = setmetatable({}, {
 xDTaraZ.Config = {
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
+        { "2026-10-04", "Auto Pet Index\nAuto Fuse (Golden & Diamond)\nRemoved keybinds from auto features" },
         { "2026-10-03", "Classic Mario Hub UI is back\nBetter executor support\nBug fixes & better UI" },
     },
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
@@ -174,7 +175,7 @@ xDTaraZ.Config = {
     PracticeStart = 4,
     ZoneBench = 120,
     CapNames = { Gc = "getgc", Upvalues = "getupvalue" },
-    GatedFeatures = { "AutoFarm", "AutoBuyStone", "AutoRebirth", "AutoTravel", "AutoHatch", "AutoInventoryHatch", "AutoPotions", "AutoClaim" },
+    GatedFeatures = { "AutoFarm", "AutoBuyStone", "AutoRebirth", "AutoTravel", "AutoHatch", "AutoInventoryHatch", "AutoPotions", "AutoClaim", "AutoPetIndex", "AutoFuse" },
     StandLane = 10,
     ThrowTimeout = 30,
     ThrowStart = 3,
@@ -185,6 +186,10 @@ xDTaraZ.Config = {
     HatchBurst = 25,
     RevealClickGap = 0.35,
     ClaimInterval = 20,
+    IndexInterval = 15,
+    FuseInterval = 5,
+    FuseGap = 1,
+    FuseNext = { Normal = "Golden", Golden = "Diamond" },
     BuyInterval = 3,
     PotionInterval = 10,
     RebirthInterval = 15,
@@ -197,6 +202,8 @@ xDTaraZ.Config = {
         AutoBuyStone = { "Balance.Stones", "Worlds.Definitions" },
         AutoTravel = { "Worlds.Definitions" },
         AutoClaim = { "Balance.GiftRewards", "Balance.DailyRewards.Rewards" },
+        AutoPetIndex = { "Balance.PetIndex.MilestoneStep" },
+        AutoFuse = { "Balance.PetFusion.EnabledVariants" },
     },
 }
 
@@ -231,6 +238,10 @@ xDTaraZ.State = {
         AutoPotions = false,
         Potions = {},
         AutoClaim = false,
+        AutoPetIndex = false,
+        AutoFuse = false,
+        FuseVariants = { Golden = true, Diamond = true },
+        FuseMode = "Upgrades only",
         AutoTravel = false,
         SpeedOn = false,
         WalkSpeed = 32,
@@ -1009,6 +1020,95 @@ function xDTaraZ.Pets.HatchInventory()
     end
 end
 
+---@return table?  pet id -> catalog entry (SkillMultiplier, Variant, BasePetId, FusionEligible)
+function xDTaraZ.Pets.Catalog()
+    if GameLib.PetCatalog ~= nil then return GameLib.PetCatalog or nil end
+    local util = GameLib.Require(GameLib.Module("PetCatalog"))
+    local assets = ReplicatedStorage:FindFirstChild("Assets")
+    local folder = assets and assets:FindFirstChild("Pets")
+    local ok, catalog = pcall(function() return util.Read(folder, GameLib.Balance.PetFusion) end)
+    GameLib.PetCatalog = ok and type(catalog) == "table" and catalog.ById or false
+    if not ok then warn("[StoneSkipping] pet catalog:", catalog) end
+    return GameLib.PetCatalog or nil
+end
+
+---Reveals every newly found pet in the index, then claims the luck milestone once enough are revealed.
+function xDTaraZ.Pets.ClaimIndex()
+    local data = xDTaraZ.Game.Profile()
+    if not data then return end
+    local pending, count = {}, 0
+    for petId, mark in pairs(data.PetIndex or {}) do
+        count += 1
+        if mark == 1 then pending[#pending + 1] = petId end
+    end
+    if #pending > 0 then
+        xDTaraZ:Send("RevealPets", pending)
+        task.wait(Config.FuseGap)
+    end
+
+    local claimed = tonumber(data.PetIndexClaimed) or 0
+    local earned = math.floor(count / GameLib.Balance.PetIndex.MilestoneStep)
+    if earned <= claimed or State.Last.IndexClaimAt == claimed then return end
+    State.Last.IndexClaimAt = claimed
+    xDTaraZ:Send("ClaimPetIndex")
+end
+
+---@return table?  { variant, ids, name, power } strongest three-of-a-kind worth fusing; equipped pets are never used
+function xDTaraZ.Pets.FusionPick(data, catalog)
+    local equipped, weakest = {}, math.huge
+    for _, id in ipairs(data.EquippedPets or {}) do equipped[id] = true end
+    for _, pet in ipairs(data.Pets or {}) do
+        local info = equipped[pet.Id] and catalog[pet.PetId]
+        if info then weakest = math.min(weakest, tonumber(info.SkillMultiplier) or 0) end
+    end
+    if weakest == math.huge then weakest = 0 end
+
+    local running, groups, need = data.PetFusions or {}, {}, GameLib.Balance.PetFusion.FusionPets or 3
+    for _, pet in ipairs(data.Pets or {}) do
+        local info = not equipped[pet.Id] and catalog[pet.PetId]
+        local target = info and Config.FuseNext[info.Variant or "Normal"]
+        if not target or running[target] or not State.Opt.FuseVariants[target] then continue end
+        if target == "Golden" and info.FusionEligible == false then continue end
+        local group = groups[pet.PetId]
+        if not group then
+            local result = catalog[target:lower() .. "__" .. (info.BasePetId or pet.PetId)]
+            if not result then continue end
+            group = { variant = target, ids = {}, name = result.Name, power = tonumber(result.SkillMultiplier) or 0 }
+            groups[pet.PetId] = group
+        end
+        if #group.ids < need then table.insert(group.ids, pet.Id) end
+    end
+
+    local best
+    for _, group in pairs(groups) do
+        if #group.ids < need then continue end
+        if State.Opt.FuseMode == "Upgrades only" and group.power <= weakest then continue end
+        if not best or group.power > best.power then best = group end
+    end
+    return best
+end
+
+function xDTaraZ.Pets.Fuse()
+    local data, catalog = xDTaraZ.Game.Profile(), xDTaraZ.Pets.Catalog()
+    if not (data and catalog) then return end
+    local now = workspace:GetServerTimeNow()
+    for variant, run in pairs(data.PetFusions or {}) do
+        if type(run) == "table" and (tonumber(run.EndsAt) or math.huge) <= now then
+            xDTaraZ:Send("PetEquipment", { Kind = "ClaimFusion", Variant = variant })
+            task.wait(Config.FuseGap)
+        end
+    end
+
+    for _ in pairs(Config.FuseNext) do
+        data = xDTaraZ.Game.Profile() or data
+        local pick = xDTaraZ.Pets.FusionPick(data, catalog)
+        if not pick then return end
+        xDTaraZ:Send("PetEquipment", { Kind = "Fuse", Variant = pick.variant, Ids = pick.ids })
+        table.insert(State.Messages, "Fusing " .. tostring(pick.name))
+        task.wait(Config.FuseGap)
+    end
+end
+
 xDTaraZ.Rewards = {}
 
 function xDTaraZ.Rewards.Claim()
@@ -1138,6 +1238,8 @@ xDTaraZ.Scheduler.RequestHandlers = {
     TravelNow = xDTaraZ.Shop.Travel,
     HatchNow = xDTaraZ.Pets.HatchShop,
     InventoryNow = xDTaraZ.Pets.HatchInventory,
+    IndexNow = xDTaraZ.Pets.ClaimIndex,
+    FuseNow = xDTaraZ.Pets.Fuse,
     PotionNow = xDTaraZ.Rewards.UsePotions,
     ClaimNow = xDTaraZ.Rewards.Claim,
     CodesNow = xDTaraZ.Rewards.RedeemAll,
@@ -1240,6 +1342,8 @@ function xDTaraZ.Scheduler.Step()
     end
 
     if opt.AutoClaim then xDTaraZ.Scheduler.Every("Claim", "AutoClaim", Config.ClaimInterval, xDTaraZ.Rewards.Claim) end
+    if opt.AutoPetIndex then xDTaraZ.Scheduler.Every("PetIndex", "AutoPetIndex", Config.IndexInterval, xDTaraZ.Pets.ClaimIndex) end
+    if opt.AutoFuse then xDTaraZ.Scheduler.Every("Fuse", "AutoFuse", Config.FuseInterval, xDTaraZ.Pets.Fuse) end
     if opt.AutoPotions then xDTaraZ.Scheduler.Every("Potion", "AutoPotions", Config.PotionInterval, xDTaraZ.Rewards.UsePotions) end
     if xDTaraZ.Game.Activity() == "Idle" then xDTaraZ.Scheduler.Every("Idle", "IdleTasks", Config.BuyInterval, xDTaraZ.Shop.IdleTasks) end
     if opt.AutoTravel then xDTaraZ.Scheduler.Every("Travel", "AutoTravel", Config.BuyInterval, xDTaraZ.Shop.Travel) end
@@ -1304,7 +1408,7 @@ local function BuildInterface()
     end
 
     local function Feature(group, key, text, description)
-        return Toggle(group, key, text, description):AddKeyPicker(key .. "Key", { Default = "None", Mode = "Toggle" })
+        return Toggle(group, key, text, description)
     end
 
     local function TitleOf(toggle, idx)
@@ -1336,7 +1440,7 @@ local function BuildInterface()
             NoSave = true,
             Callback = function(value)
                 State.KaitunSet = State.KaitunSet or {}
-                for _, key in ipairs({ "AutoFarm", "AutoBuyStone", "AutoRebirth", "AutoTravel", "AutoInventoryHatch", "AutoPotions", "AutoClaim", "AntiAfk" }) do
+                for _, key in ipairs({ "AutoFarm", "AutoBuyStone", "AutoRebirth", "AutoTravel", "AutoInventoryHatch", "AutoPotions", "AutoClaim", "AutoPetIndex", "AutoFuse", "AntiAfk" }) do
                     local toggle = Options[key]
                     if not toggle or toggle.Blocked or (gated[key] and xDTaraZ:Unsupported()) then continue end
                     if value and not opt[key] then
@@ -1355,7 +1459,7 @@ local function BuildInterface()
             end
         end })
 
-        local discordBox = MainTab:AddLeftGroupbox(T("Discord", "Discord"), "link")
+        local discordBox = MainTab:AddRightGroupbox(T("Discord", "Discord"), "link")
         discordBox:AddLabel(Config.Discord)
         discordBox:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ Discord"), Style = "Primary", Func = function()
             local copy = setclipboard or toclipboard
@@ -1363,7 +1467,7 @@ local function BuildInterface()
             Notify(copy and "Discord link copied" or Config.Discord)
         end })
 
-        local logBox = MainTab:AddLeftGroupbox(T("Update Log", "อัปเดตล่าสุด"), "bell")
+        local logBox = MainTab:AddRightGroupbox(T("Update Log", "อัปเดตล่าสุด"), "bell")
         for i = 1, math.min(2, #Config.UpdateLog) do
             local entry = Config.UpdateLog[i]
             logBox:AddParagraph({ Title = entry[1], Content = entry[2] })
@@ -1475,6 +1579,32 @@ local function BuildInterface()
         })
         rewardBox:AddButton({ Text = T("Use Potions Now", "ใช้ยาเดี๋ยวนี้"), Func = Request("PotionNow") })
         rewardBox:AddButton({ Text = T("Redeem All Codes", "ใช้โค้ดทั้งหมด"), Style = "Primary", Func = Request("CodesNow") })
+
+        local fuseBox = PetTab:AddRightGroupbox(T("Fusion & Index", "หลอมรวมและสมุดสัตว์"), "star")
+        Feature(fuseBox, "AutoFuse", T("Auto Fuse", "หลอมสัตว์อัตโนมัติ"), T("Fuses three of a kind into Golden or Diamond and claims them", "รวมสัตว์ซ้ำ 3 ตัวเป็นทองหรือเพชรแล้วรับให้เอง"))
+        local variants = {}
+        local fusion = GameLib.Balance and GameLib.Balance.PetFusion
+        for variant, enabled in pairs(fusion and fusion.EnabledVariants or {}) do
+            if enabled then variants[#variants + 1] = variant end
+        end
+        table.sort(variants, function(a, b) return (fusion.Durations[a] or 0) < (fusion.Durations[b] or 0) end)
+        fuseBox:AddDropdown("FuseVariants", {
+            Text = T("Fuse Into", "หลอมเป็น"),
+            Values = variants,
+            Multi = true,
+            Default = variants,
+            Callback = function(selected) opt.FuseVariants = selected end,
+        })
+        fuseBox:AddDropdown("FuseMode", {
+            Text = T("Which Pets", "สัตว์ที่จะหลอม"),
+            Description = T("Upgrades only = only when the result beats your weakest equipped pet", "เฉพาะที่อัปเกรด = หลอมเมื่อได้ตัวที่แรงกว่าตัวอ่อนสุดที่ใส่อยู่"),
+            Values = { "Upgrades only", "All duplicates" },
+            Default = 1,
+            Callback = function(value) opt.FuseMode = value or "Upgrades only" end,
+        })
+        fuseBox:AddButton({ Text = T("Fuse Now", "หลอมเดี๋ยวนี้"), Func = Request("FuseNow") })
+        Feature(fuseBox, "AutoPetIndex", T("Auto Pet Index", "สมุดสัตว์อัตโนมัติ"), T("Reveals new pets and claims the luck bonus", "เปิดสัตว์ใหม่ในสมุดและรับโบนัสโชค"))
+        fuseBox:AddButton({ Text = T("Claim Index Now", "รับโบนัสสมุดเดี๋ยวนี้"), Func = Request("IndexNow") })
     end
 
     local function BuildPlayer(window)
