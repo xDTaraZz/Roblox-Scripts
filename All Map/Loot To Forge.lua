@@ -149,7 +149,7 @@ xDTaraZ.Config = {
     SaveFolder = "Loot To Forge",
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
-        { "2026-10-04", "Spawn Scrolls, Tickets & Stones\nDupe Whole Inventory\nAdd Season Coins (OP)\nFaster Tower farm\nRemoved keybinds from auto features\nMax Gear picks Exclusive gear\nSpawn Gear (OP)\nPotions (OP)\nFixed Auto World Boss\nBoss Server Hop\nAuto Sell keeps your best base gear\nMax Gear now goes to +20, much faster\nFixed freeze when loading the script\nUpdated for the new game version\nAuto Sell keeps items you locked" },
+        { "2026-10-04", "Spawn Scrolls, Tickets & Stones\nDupe Whole Inventory\nAdd Season Coins (OP)\nFaster Tower farm\nRemoved keybinds from auto features\nMax Gear picks Exclusive gear\nSpawn Gear (OP)\nPotions (OP)\nFixed Auto World Boss\nBoss Server Hop\nAuto Sell keeps your best base gear\nMax Gear now goes to +20, much faster\nFixed freeze when loading the script\nUpdated for the new game version\nAuto Sell keeps items you locked\nSteadier Boss Server Hop" },
         { "2026-10-03", "Fixed World Boss, Auto Click & Codes\nImproved Auto Train\nAuto rune detection" },
     },
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
@@ -233,6 +233,13 @@ if type(body) == "string" then loadstring(body)() end]],
     BossHopAfter = 8,
     BossHopFlag = "bosshop.txt",
     BossHopResume = 180,
+    BossHopServers = "bossservers.json",
+    HopListTtl = 120,
+    HopBackoffStart = 5,
+    HopBackoffMax = 60,
+    HopGiveUp = 8,
+    HopStall = 30,
+    HopGap = 15,
     TrainRejoinDelay = 0.3,
     TrainWatchdog = 3,
     TrainAcceptWait = 1.5,
@@ -300,8 +307,10 @@ xDTaraZ.State = {
     OreLabels = {},
     SpawnLabels = {},
     GearLabels = {},
-    HopServers = {},
     BossHopping = false,
+    HopFails = 0,
+    HopBackoff = nil,
+    HopBlockedUntil = 0,
     HopQueued = false,
     BossDone = nil,
     MissingLabels = {},
@@ -2144,31 +2153,81 @@ function xDTaraZ.Boss.HopFlag(enabled)
     end)
 end
 
+---@return number?  seconds since the last hop, nil when no hop is pending
+function xDTaraZ.Boss.SinceLastHop()
+    local ok, stamp = pcall(readfile, Config.SaveFolder .. "/" .. Config.BossHopFlag)
+    if not ok or not tonumber(stamp) then return nil end
+    return os.time() - tonumber(stamp)
+end
+
 ---@return boolean  true only right after a hop, so a fresh launch never starts hopping by itself
 function xDTaraZ.Boss.HopWanted()
-    local ok, stamp = pcall(readfile, Config.SaveFolder .. "/" .. Config.BossHopFlag)
-    return ok and tonumber(stamp) ~= nil and os.time() - tonumber(stamp) < Config.BossHopResume
+    local since = xDTaraZ.Boss.SinceLastHop()
+    return since ~= nil and since < Config.BossHopResume
+end
+
+---@return string[], number  unvisited servers from the saved list, and when it was fetched
+function xDTaraZ.Boss.LoadServers()
+    local ok, text = pcall(readfile, Config.SaveFolder .. "/" .. Config.BossHopServers)
+    if not ok then return {}, 0 end
+    local decoded
+    ok, decoded = pcall(HttpService.JSONDecode, HttpService, text)
+    if not ok or type(decoded) ~= "table" or type(decoded.ids) ~= "table" then return {}, 0 end
+    local fetchedAt = tonumber(decoded.at) or 0
+    if os.time() - fetchedAt > Config.HopListTtl then return {}, 0 end
+    return decoded.ids, fetchedAt
+end
+
+---@param ids string[]    servers still unvisited
+---@param fetchedAt number  when the list came from the API
+function xDTaraZ.Boss.SaveServers(ids, fetchedAt)
+    pcall(function()
+        if not isfolder(Config.SaveFolder) then makefolder(Config.SaveFolder) end
+        writefile(Config.SaveFolder .. "/" .. Config.BossHopServers, HttpService:JSONEncode({ at = fetchedAt, ids = ids }))
+    end)
+end
+
+---@return string[]  public servers with room; empty while the API refuses (waits 2x longer after each refusal)
+function xDTaraZ.Boss.FetchServers()
+    if os.clock() < State.HopBlockedUntil then return {} end
+    local body = xDTaraZ.Util.HttpGet(("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100"):format(game.PlaceId))
+    local ok, list = pcall(HttpService.JSONDecode, HttpService, body or "")
+    local ids = {}
+    for _, server in ipairs(ok and type(list) == "table" and type(list.data) == "table" and list.data or {}) do
+        if server.id ~= game.JobId and server.playing < server.maxPlayers then table.insert(ids, server.id) end
+    end
+    if #ids > 0 then
+        State.HopFails, State.HopBackoff = 0, nil
+        return ids
+    end
+    State.HopFails += 1
+    State.HopBackoff = math.min((State.HopBackoff or Config.HopBackoffStart / 2) * 2, Config.HopBackoffMax)
+    State.HopBlockedUntil = os.clock() + State.HopBackoff
+    warn("[LootToForge] server list refused, retry in", State.HopBackoff, "s, fail", State.HopFails)
+    return {}
 end
 
 ---@return string?  a public server with room, not this one
 function xDTaraZ.Boss.PickServer()
-    if #State.HopServers == 0 then
-        local body = xDTaraZ.Util.HttpGet(("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100"):format(game.PlaceId))
-        local ok, list = pcall(HttpService.JSONDecode, HttpService, body or "")
-        for _, server in ipairs(ok and list.data or {}) do
-            if server.id ~= game.JobId and server.playing < server.maxPlayers then
-                table.insert(State.HopServers, server.id)
-            end
+    local ids, fetchedAt = xDTaraZ.Boss.LoadServers()
+    if #ids == 0 then
+        ids, fetchedAt = xDTaraZ.Boss.FetchServers(), os.time()
+    end
+    while #ids > 0 do
+        local serverId = table.remove(ids, math.random(#ids))
+        if serverId ~= game.JobId then
+            xDTaraZ.Boss.SaveServers(ids, fetchedAt)
+            return serverId
         end
     end
-    if #State.HopServers == 0 then return nil end
-    return table.remove(State.HopServers, math.random(#State.HopServers))
+    xDTaraZ.Boss.SaveServers(ids, fetchedAt)
+    return nil
 end
 
 function xDTaraZ.Boss.Hop()
     local serverId = xDTaraZ.Boss.PickServer()
     if not serverId then return end
-    State.BossHopping = true
+    State.BossHopping = os.clock()
     xDTaraZ.Boss.HopFlag(true)
     local queue = queue_on_teleport or queueonteleport
     if queue and not State.HopQueued then
@@ -2178,13 +2237,33 @@ function xDTaraZ.Boss.Hop()
     TeleportService:TeleportToPlaceInstance(game.PlaceId, serverId, LocalPlayer)
 end
 
-function xDTaraZ.Boss.HopStep()
-    if State.BossHopping then return end
+---@return boolean  true when this server is worth staying in: boss up, boss about to spawn, or still collecting
+function xDTaraZ.Boss.WorthStaying()
     local boss = workspace:GetAttribute("CurrentWorldBoss")
-    if boss and not State.BossDone then return end
-    if State.BossDone and os.clock() - State.BossDone < Config.BossHopAfter then return end
-    local left = (workspace:GetAttribute("NextWorldBossTick") or 0) - (workspace:GetAttribute("ServerTime") or 0)
-    if not boss and not State.BossDone and left <= Config.BossHopLead then return end
+    if boss and not State.BossDone then return true end
+    if State.BossDone then return os.clock() - State.BossDone < Config.BossHopAfter end
+    local nextTick, serverTime = workspace:GetAttribute("NextWorldBossTick"), workspace:GetAttribute("ServerTime")
+    if not nextTick or not serverTime then return true end
+    return nextTick - serverTime <= Config.BossHopLead
+end
+
+function xDTaraZ.Boss.HopGiveUp()
+    State.Opt.BossHop = false
+    xDTaraZ.Boss.HopFlag(false)
+    table.insert(State.Halted, { "BossHop", "no server list from Roblox, try again later" })
+end
+
+function xDTaraZ.Boss.HopStep()
+    if State.BossHopping then
+        if os.clock() - State.BossHopping < Config.HopStall then return end
+        State.BossHopping = false
+    end
+    if xDTaraZ.Boss.WorthStaying() then return end
+    if (xDTaraZ.Boss.SinceLastHop() or Config.HopGap) < Config.HopGap then return end
+    if State.HopFails >= Config.HopGiveUp then
+        xDTaraZ.Boss.HopGiveUp()
+        return
+    end
     xDTaraZ.Boss.Hop()
 end
 
