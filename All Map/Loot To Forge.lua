@@ -149,7 +149,7 @@ xDTaraZ.Config = {
     SaveFolder = "Loot To Forge",
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
-        { "2026-10-04", "Spawn Scrolls, Tickets & Stones\nDupe Whole Inventory\nAdd Season Coins (OP)\nFaster Tower farm\nRemoved keybinds from auto features\nMax Gear picks Exclusive gear\nSpawn Gear (OP)\nPotions (OP)\nFixed Auto World Boss\nBoss Server Hop" },
+        { "2026-10-04", "Spawn Scrolls, Tickets & Stones\nDupe Whole Inventory\nAdd Season Coins (OP)\nFaster Tower farm\nRemoved keybinds from auto features\nMax Gear picks Exclusive gear\nSpawn Gear (OP)\nPotions (OP)\nFixed Auto World Boss\nBoss Server Hop\nAuto Sell keeps your best base gear" },
         { "2026-10-03", "Fixed World Boss, Auto Click & Codes\nImproved Auto Train\nAuto rune detection" },
     },
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
@@ -174,7 +174,9 @@ xDTaraZ.Config = {
     PotionStack = 100000,
     TowerCallsPerWorker = 25,
     GearForgeTries = 15,
-    GearEnhanceTries = 20,
+    GearEnhanceTries = 2,
+    GearEnhanceWorkers = 8,
+    SlotEnhanceRounds = 200,
     ClickInterval = 0.16,
     ForgeTargets = {
         { name = "Great Weapon", forgeType = "Weapon", ores = 13 },
@@ -192,6 +194,7 @@ xDTaraZ.Config = {
     RuneMinTier = 2,
     EnchantRefill = 50,
     ForgeCountMax = 30,
+    PlanSlice = 0.004,
     HuntBatch = 40,
     HuntWorkers = 4,
     HuntMaxForges = 4000,
@@ -299,7 +302,7 @@ xDTaraZ.State = {
     Opt = {
         MaxGear = false,
         AutoEquip = false,
-        EnhanceTarget = 10,
+        EnhanceTarget = 20,
         GearForge = true,
         GearEnchant = true,
         GearEnhance = true,
@@ -1042,9 +1045,30 @@ function xDTaraZ.Sell.Rarity(entry)
     return itemConfig and itemConfig.Rarity
 end
 
+---@return table<string, boolean>  uuids of the strongest normal piece per slot, which exclusive gear takes its power from
+function xDTaraZ.Sell.Anchors(profile)
+    local anchors, bestPower = {}, {}
+    for uuid, entry in pairs(profile.Backpack.have) do
+        if not (entry.Type == "Weapon" or entry.Type == "Armor" or entry.Type == "Hat") then continue end
+        local helper = xDTaraZ.GameLib.Api(entry.Type == "Weapon" and GameConfig.Weapon.Helper or GameConfig.Armor.Helper)
+        local ok, percent = pcall(helper.CheckIsBestPercent, entry.ID)
+        if not ok or percent then continue end
+        local powerOk, power = pcall(helper.GetMainAffix, entry.ID)
+        if powerOk and type(power) == "number" and power > (bestPower[entry.Type] or 0) then
+            bestPower[entry.Type] = power
+            anchors[entry.Type] = uuid
+        end
+    end
+    local keep = {}
+    for _, uuid in pairs(anchors) do
+        keep[uuid] = true
+    end
+    return keep
+end
+
 function xDTaraZ.Sell.Run(profile)
     local opt = State.Opt
-    local equipped = {}
+    local equipped = xDTaraZ.Sell.Anchors(profile)
     for _, uuid in pairs(profile.Backpack.equiped) do
         equipped[uuid] = true
     end
@@ -1070,7 +1094,7 @@ end
 
 ---@param keep table?  { [uuid] = true } never sold
 function xDTaraZ.Sell.Fresh(fresh, keep)
-    local equipped = {}
+    local equipped = xDTaraZ.Sell.Anchors(State.Profile)
     for _, uuid in pairs(State.Profile.Backpack.equiped) do
         equipped[uuid] = true
     end
@@ -1245,11 +1269,11 @@ function xDTaraZ.Gear.Enhance(profile)
             end
             State.GearNote = "Enhancing"
             local useProtect = xDTaraZ.Data.Count(profile, "EnhantProtect") > 0 and (entry.Level or 0) >= xDTaraZ.GameLib.Api(GameConfig.Enhant.Helper).GetFailLevel()
-            for _ = 1, Config.GearEnhanceTries do
-                if not enhance:InvokeServer(uuid, { UseProtect = useProtect }) then break end
-                local current = xDTaraZ.Data.Get().Backpack.have[uuid]
-                if not current or (current.Level or 0) >= target then break end
-            end
+            xDTaraZ.Util.WaitAll(Config.GearEnhanceWorkers, function()
+                for _ = 1, Config.GearEnhanceTries do
+                    if not enhance:InvokeServer(uuid, { UseProtect = useProtect }) then return end
+                end
+            end)
             return false
         end
     end
@@ -1281,7 +1305,7 @@ function xDTaraZ.Gear.EnhanceSlot(slot, target)
     local enhance = xDTaraZ.Util.Remote("Backpack", "EnhantEquipmentRF")
     local failLevel = xDTaraZ.GameLib.Api(GameConfig.Enhant.Helper).GetFailLevel()
     local level = 0
-    for _ = 1, Config.GearEnhanceTries * 10 do
+    for _ = 1, Config.SlotEnhanceRounds do
         local profile = xDTaraZ.Data.Get()
         local uuid = profile.Backpack.equiped[slot]
         local entry = uuid and profile.Backpack.have[uuid]
@@ -1350,10 +1374,15 @@ function xDTaraZ.Index.Plan(gear)
     local forgeUtils = xDTaraZ.GameLib.Api(ReplicatedStorage.Utils.ForgeUtils)
     local helper = xDTaraZ.GameLib.Api(gear.forgeType == "Weapon" and GameConfig.Weapon.Helper or GameConfig.Armor.Helper)
     local bestChance, bestOre, bestCount = 0, nil, nil
+    local sliceStart = os.clock()
     for count = 1, Config.ForgeCountMax do
         local split = helper.GetForgePercentByNumber(count)
         if not split then continue end
         for _, oreId in ipairs(xDTaraZ.Ore.Ids()) do
+            if os.clock() - sliceStart > Config.PlanSlice then
+                task.wait()
+                sliceStart = os.clock()
+            end
             local list = { [oreId] = count }
             local ok, chance = pcall(function()
                 local low, high = forgeUtils.GetForgeOreResult(list)
