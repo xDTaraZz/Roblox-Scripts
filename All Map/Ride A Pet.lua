@@ -158,7 +158,7 @@ xDTaraZ.Config = {
     ReloadSource = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/loader.lua"))()',
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
-        { "2026-10-04", "Updated for the new game version\nAuto Sell Pets with rarity filter\nFaster egg collecting\nRemoved keybind from Auto Collect Eggs" },
+        { "2026-10-04", "Updated for the new game version\nAuto Sell Pets with rarity filter\nFaster egg collecting\nRemoved keybind from Auto Collect Eggs\nFixed Auto Place Best Pets swapping pets\nAuto Feed goes to your base first" },
         { "2026-10-03", "Classic Mario Hub UI is back\nBetter executor support\nBug fixes & better UI" },
     },
     SaveFolder = "Ride A Pet",
@@ -206,6 +206,7 @@ xDTaraZ.Config = {
     PetSpread = 0.35,
     PetLift = 0.5,
     PetFailBackoff = 20,
+    SwapMargin = 1.1,
     FeedGap = 1,
     FeedEvery = 5,
     ClaimGap = 30,
@@ -250,6 +251,7 @@ xDTaraZ.State = {
     SnapshotAt = 0,
     DeliverFailUntil = 0,
     PetFailUntil = 0,
+    PetScores = {},
     LastHatch = 0,
     LastHatchAll = 0,
     LastClaim = 0,
@@ -955,8 +957,11 @@ end
 
 xDTaraZ.Pets = {}
 
----@return number  income per second estimate (weight and mutations included)
+---@return number  income per second estimate (weight and mutations included); one value per pet whether it is held or placed
 function xDTaraZ.Pets.Score(inst)
+    local key = inst:GetAttribute("PetKey")
+    local known = key and State.PetScores[key]
+    if known then return known end
     local info = GameLib.Pets[inst:GetAttribute("PetName") or ""]
     local income = type(info) == "table" and tonumber(info.Income) or 0
     local factor = 1
@@ -964,7 +969,9 @@ function xDTaraZ.Pets.Score(inst)
         local mutation = GameLib.Mutations[inst:GetAttribute(attr) or ""]
         if type(mutation) == "table" then factor *= 1 + (tonumber(mutation.StatMultiplier) or 0) / 100 end
     end
-    return income * (inst:GetAttribute("Weight") or 1) * factor
+    local score = income * (inst:GetAttribute("Weight") or 1) * factor
+    if key and typeof(inst) == "Instance" then State.PetScores[key] = score end
+    return score
 end
 
 ---@return table[]  { inst, score } sorted
@@ -1062,7 +1069,7 @@ function xDTaraZ.Pets.EquipBest()
             continue
         end
         local worst = placed[1]
-        if not worst or score <= worst[2] then break end
+        if not worst or score <= worst[2] * Config.SwapMargin then break end
         table.remove(placed, 1)
         xDTaraZ.Net.PickupPet:FireServer(worst[1]:GetAttribute("PetKey"))
         task.wait(Config.PlaceGap)
@@ -1098,6 +1105,13 @@ function xDTaraZ.Pets.FoodTool()
 end
 
 function xDTaraZ.Pets.Feed()
+    if not xDTaraZ.Pets.FoodTool() or not xDTaraZ.Player:IsAlive() then return end
+    local origin = xDTaraZ.Player.Root.CFrame
+    local home = xDTaraZ:HomeCFrame()
+    if home then
+        xDTaraZ:MoveTo(home)
+        task.wait(Config.TeleportSettle)
+    end
     for _, pair in ipairs(xDTaraZ.Pets.Ranked(xDTaraZ.Pets.Placed(), false)) do
         local food = xDTaraZ.Pets.FoodTool()
         if not food or not xDTaraZ.Player:IsAlive() then break end
@@ -1107,6 +1121,7 @@ function xDTaraZ.Pets.Feed()
         task.wait(Config.FeedGap)
     end
     if xDTaraZ.Player.Humanoid then xDTaraZ.Player.Humanoid:UnequipTools() end
+    if home and xDTaraZ.Player:IsAlive() then xDTaraZ:MoveTo(origin) end
 end
 
 function xDTaraZ.Pets.FeedNow()
