@@ -231,6 +231,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 - Teleport to plot, shops, volcano and players
 - Speed, jump, fly, noclip, infinite jump, anti AFK, rejoin, server hop
 - Less lag while farming, even with thousands of eggs in your bag
+- **Performance**: Boost FPS, hide other players' pets and eggs, FPS cap, disable 3D rendering for AFK farming
 - Troll: fling, stick to player, spectate
 
 </details>

@@ -36,7 +36,7 @@ local xDTaraZ = setmetatable({}, {
 xDTaraZ.Config = {
     GameId = 10035204815, PlaceId = 124216119978534,
     Tag = "[RideAPet]",
-    InventoryRestoreMax = 500,
+
     Discord = "https://discord.gg/FHVfmeSceA",
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
     LoadTimeout = 10, GameLibDeadline = 8,
@@ -196,7 +196,7 @@ xDTaraZ.Config = {
     KaitunSteerEvery = 60,
 
     UpdateLog = {
-        { "2026-10-05", "Script rebuilt from scratch for the new game update\nEggs reach your base every time, no more returned eggs\nMuch less lag while farming with a big inventory\nClear Junk Eggs: hatch cheap eggs and sell the pets\nMinimum Egg Rarity to farm rare eggs only\nFixed Auto Place Best Pets swapping out good pets" },
+        { "2026-10-05", "Script rebuilt from scratch for the new game update\nEggs reach your base every time, no more returned eggs\nMuch less lag while farming with a big inventory\nClear Junk Eggs: hatch cheap eggs and sell the pets\nMinimum Egg Rarity to farm rare eggs only\nFixed Auto Place Best Pets swapping out good pets\nPerformance: Boost FPS, hide other pets and eggs, FPS cap, disable 3D\nFixed the inventory bar not coming back after farming\nRemoved the Stop All button" },
         { "2026-10-04", "Rebuilt egg collecting: faster trips and no more returned eggs\nRide pet picker, rare egg hunter and plant order\nPet protect list, safer selling and smarter spending\nClear Junk Eggs now sells what it hatches, and Minimum Egg Rarity skips cheap eggs" },
     },
 }
@@ -356,6 +356,12 @@ do
     }
 end
 
+---@return boolean  false when the executor has no working fps cap
+function xDTaraZ.Util.SetFpsCap(fps)
+    local ok = pcall(function() setfpscap(fps) end)
+    return ok
+end
+
 function xDTaraZ:Connect(signal, handler)
     local conn = signal:Connect(handler)
     table.insert(self.State.Connections, conn)
@@ -364,7 +370,7 @@ end
 
 xDTaraZ.StopOrder = {
     "Kaitun", "Guard", "Eggs", "Hunter", "Volcano", "Junk", "Hatch", "Pets", "Sell", "Fusion",
-    "Economy", "Shop", "Rewards", "Boosts", "Troll", "Server", "Webhook",
+    "Economy", "Shop", "Rewards", "Boosts", "Troll", "Server", "Webhook", "Visual",
 }
 
 function xDTaraZ:Unload()
@@ -2423,14 +2429,7 @@ function xDTaraZ.Eggs.QuietInventory(quiet, force)
     end
     if not eggs.InventoryPaused then return end
     if not force and (eggs.Enabled or xDTaraZ.Hunter.Enabled or xDTaraZ.Util.Opt("ClearJunk")) then return end
-    local bag = LocalPlayer:FindFirstChildOfClass("Backpack")
-    if not force and bag and #bag:GetChildren() > Config.InventoryRestoreMax then
-        if eggs.InventoryHeld then return end
-        eggs.InventoryHeld = true
-        table.insert(State.PendingNotify, { "Mario Hub", "Inventory bar stays hidden while your bag is this big, it comes back when the hub closes", 8 })
-        return
-    end
-    eggs.InventoryPaused, eggs.InventoryHeld = false, false
+    eggs.InventoryPaused = false
     LocalPlayer:SetAttribute("SatchelEnabled", eggs.InventoryWas)
 end
 
@@ -6487,6 +6486,218 @@ end
 
 do
     local defaults = {
+        OwnPetReach = 25, BoostBatch = 400, FpsCapDefault = 240, FpsCapRestore = 60,
+        BoostClasses = { ParticleEmitter = true, Trail = true, Beam = true, Smoke = true, Fire = true, Sparkles = true },
+    }
+    for key, value in pairs(defaults) do
+        if Config[key] == nil then Config[key] = value end
+    end
+end
+
+xDTaraZ.Visual = {
+    Holder = Instance.new("Folder"),
+    Conns = { Pets = {}, Eggs = {}, Boost = {} },
+    Hidden = { Pets = {}, Eggs = {} },
+    Disabled = {}, Props = {},
+    BoostToken = 0,
+    PetSetting = nil,
+    CapOn = false,
+}
+
+function xDTaraZ.Visual.Drop(kind)
+    local list = xDTaraZ.Visual.Conns[kind]
+    for _, conn in ipairs(list) do conn:Disconnect() end
+    table.clear(list)
+end
+
+function xDTaraZ.Visual.Watch(kind, signal, handler)
+    table.insert(xDTaraZ.Visual.Conns[kind], xDTaraZ:Connect(signal, handler))
+end
+
+---@param kind string  "Pets" or "Eggs"
+function xDTaraZ.Visual.Hide(kind, model)
+    local hidden = xDTaraZ.Visual.Hidden[kind]
+    if hidden[model] or not model.Parent then return end
+    hidden[model] = model.Parent
+    model.Parent = xDTaraZ.Visual.Holder
+end
+
+function xDTaraZ.Visual.Show(kind, model)
+    local hidden = xDTaraZ.Visual.Hidden[kind]
+    local home = hidden[model]
+    if not home then return end
+    hidden[model] = nil
+    if model.Parent ~= xDTaraZ.Visual.Holder or not home.Parent then return end
+    pcall(function() model.Parent = home end)
+end
+
+function xDTaraZ.Visual.ShowAll(kind)
+    local models = {}
+    for model in pairs(xDTaraZ.Visual.Hidden[kind]) do models[#models + 1] = model end
+    for _, model in ipairs(models) do xDTaraZ.Visual.Show(kind, model) end
+end
+
+---@return boolean  true when the ridden pet belongs to someone else
+function xDTaraZ.Visual.ForeignPet(model)
+    if not model:IsA("Model") or model:GetAttribute("Ridden") ~= true then return false end
+    local ownerId = model:GetAttribute("OwnerUserId")
+    if ownerId ~= nil then return ownerId ~= LocalPlayer.UserId end
+    local owner = model:GetAttribute("Owner")
+    if owner ~= nil then return owner ~= LocalPlayer.UserId and owner ~= LocalPlayer.Name end
+
+    local char = LocalPlayer.Character
+    if char and model:IsDescendantOf(char) then return false end
+    if LocalPlayer:GetAttribute("IsRiding") ~= true then return true end
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    return (model:GetPivot().Position - hrp.Position).Magnitude > Config.OwnPetReach
+end
+
+function xDTaraZ.Visual.TrackPet(model)
+    if not model:IsA("Model") then return end
+    xDTaraZ.Visual.Watch("Pets", model:GetAttributeChangedSignal("Ridden"), function()
+        if model:GetAttribute("Ridden") == true then
+            if xDTaraZ.Visual.ForeignPet(model) then xDTaraZ.Visual.Hide("Pets", model) end
+        else
+            xDTaraZ.Visual.Show("Pets", model)
+        end
+    end)
+    if xDTaraZ.Visual.ForeignPet(model) then xDTaraZ.Visual.Hide("Pets", model) end
+end
+
+function xDTaraZ.Visual.HidePets(on)
+    xDTaraZ.Visual.Drop("Pets")
+    local remote = xDTaraZ.GameLib.Remote("UpdateSetting")
+
+    if not on then
+        xDTaraZ.Visual.ShowAll("Pets")
+        if remote and xDTaraZ.Visual.PetSetting ~= nil then remote:FireServer("ViewOtherPets", xDTaraZ.Visual.PetSetting) end
+        xDTaraZ.Visual.PetSetting = nil
+        return
+    end
+
+    if remote and xDTaraZ.Visual.PetSetting == nil then
+        xDTaraZ.Visual.PetSetting = LocalPlayer:GetAttribute("Setting_ViewOtherPets") ~= false
+        remote:FireServer("ViewOtherPets", false)
+    end
+
+    local objects = Workspace:FindFirstChild("GameObjects")
+    if not objects then return end
+    for _, model in ipairs(objects:GetChildren()) do xDTaraZ.Visual.TrackPet(model) end
+    xDTaraZ.Visual.Watch("Pets", objects.ChildAdded, xDTaraZ.Visual.TrackPet)
+end
+
+function xDTaraZ.Visual.HideEggs(on)
+    xDTaraZ.Visual.Drop("Eggs")
+    if not on then return xDTaraZ.Visual.ShowAll("Eggs") end
+
+    local plots = Workspace:FindFirstChild("Plots")
+    if not plots then return end
+    for _, plot in ipairs(plots:GetChildren()) do
+        local owner = plot:FindFirstChild("Data") and plot.Data:FindFirstChild("Owner")
+        local eggs = plot:FindFirstChild("Eggs")
+        if not owner or not eggs or owner.Value == LocalPlayer then continue end
+
+        for _, egg in ipairs(eggs:GetChildren()) do
+            if egg:IsA("Model") then xDTaraZ.Visual.Hide("Eggs", egg) end
+        end
+        xDTaraZ.Visual.Watch("Eggs", eggs.ChildAdded, function(egg)
+            if egg:IsA("Model") and owner.Value ~= LocalPlayer then xDTaraZ.Visual.Hide("Eggs", egg) end
+        end)
+    end
+end
+
+---@param target Instance  property owner, original value saved once
+function xDTaraZ.Visual.SetProp(target, prop, value)
+    local key = target:GetFullName() .. "." .. prop
+    local props = xDTaraZ.Visual.Props
+    local ok, old = pcall(function() return target[prop] end)
+    if not ok then return end
+    if not props[key] then props[key] = { target, prop, old } end
+    pcall(function() target[prop] = value end)
+end
+
+function xDTaraZ.Visual.Mute(inst)
+    if not Config.BoostClasses[inst.ClassName] or xDTaraZ.Visual.Disabled[inst] ~= nil then return end
+    local char = LocalPlayer.Character
+    if char and inst:IsDescendantOf(char) then return end
+    if not inst.Enabled then return end
+    xDTaraZ.Visual.Disabled[inst] = true
+    inst.Enabled = false
+end
+
+function xDTaraZ.Visual.Sweep(token)
+    local list = Workspace:GetDescendants()
+    for i, inst in ipairs(list) do
+        if xDTaraZ.Visual.BoostToken ~= token then return end
+        xDTaraZ.Visual.Mute(inst)
+        if i % Config.BoostBatch == 0 then task.wait() end
+    end
+end
+
+function xDTaraZ.Visual.Boost(on)
+    xDTaraZ.Visual.Drop("Boost")
+    xDTaraZ.Visual.BoostToken += 1
+
+    if not on then
+        for inst in pairs(xDTaraZ.Visual.Disabled) do
+            if inst.Parent then pcall(function() inst.Enabled = true end) end
+        end
+        table.clear(xDTaraZ.Visual.Disabled)
+        for _, row in pairs(xDTaraZ.Visual.Props) do
+            pcall(function() row[1][row[2]] = row[3] end)
+        end
+        table.clear(xDTaraZ.Visual.Props)
+        return
+    end
+
+    local lighting = game:GetService("Lighting")
+    local terrain = Workspace:FindFirstChildOfClass("Terrain")
+    xDTaraZ.Visual.SetProp(lighting, "GlobalShadows", false)
+    for _, holder in ipairs({ lighting, Workspace.CurrentCamera }) do
+        for _, effect in ipairs(holder and holder:GetChildren() or {}) do
+            if effect:IsA("PostEffect") then xDTaraZ.Visual.SetProp(effect, "Enabled", false) end
+        end
+    end
+    if terrain then
+        xDTaraZ.Visual.SetProp(terrain, "Decoration", false)
+        xDTaraZ.Visual.SetProp(terrain, "WaterWaveSize", 0)
+        xDTaraZ.Visual.SetProp(terrain, "WaterReflectance", 0)
+    end
+    pcall(function() xDTaraZ.Visual.SetProp(settings().Rendering, "QualityLevel", Enum.QualityLevel.Level01) end)
+
+    xDTaraZ.Visual.Watch("Boost", Workspace.DescendantAdded, xDTaraZ.Visual.Mute)
+    task.spawn(xDTaraZ.Visual.Sweep, xDTaraZ.Visual.BoostToken)
+end
+
+---@return boolean  false when the executor cannot cap fps
+---@return boolean  the cap was applied; turning it off puts back the cap the player had before
+function xDTaraZ.Visual.Cap(on)
+    local visual = xDTaraZ.Visual
+    if on and not visual.CapOn then
+        local ok, before = pcall(function() return getfpscap() end)
+        visual.CapBefore = ok and tonumber(before) or nil
+    end
+    visual.CapOn = on
+    local fps = on and (tonumber(xDTaraZ.Options.FpsCap) or Config.FpsCapDefault) or (visual.CapBefore or Config.FpsCapRestore)
+    return xDTaraZ.Util.SetFpsCap(fps)
+end
+
+function xDTaraZ.Visual.Render(on)
+    RunService:Set3dRenderingEnabled(not on)
+end
+
+function xDTaraZ.Visual.Stop()
+    local try = xDTaraZ.Util.Try
+    try("visual pets", xDTaraZ.Visual.HidePets, false)
+    try("visual eggs", xDTaraZ.Visual.HideEggs, false)
+    try("visual boost", xDTaraZ.Visual.Boost, false)
+    if xDTaraZ.Visual.CapOn then try("visual cap", xDTaraZ.Visual.Cap, false) end
+    try("visual render", xDTaraZ.Visual.Render, false)
+end
+
+do
+    local defaults = {
         WebhookPattern = "^https://[%w%.]*discord[app]*%.com/api/webhooks/%d+/[%w_%-]+$",
         WebhookGap = 1.2, WebhookQueueMax = 20,
         WebhookLogo = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/main/logo.png",
@@ -7149,6 +7360,17 @@ do
         EggEsp = function(on) if not on then xDTaraZ.Esp.Clear() end end,
         Fling = ui.TrollHook("Fling"),
         Stick = ui.TrollHook("Stick"),
+        HideOtherPets = xDTaraZ.Visual.HidePets,
+        HideOtherEggs = xDTaraZ.Visual.HideEggs,
+        BoostFps = xDTaraZ.Visual.Boost,
+        Render3D = xDTaraZ.Visual.Render,
+        UnlockFps = function(on)
+            if xDTaraZ.Visual.Cap(on) or not on then return end
+            Library.Compat.Block("UnlockFps", T("Not supported on this executor", "executor นี้ไม่รองรับ"))
+        end,
+        FpsCap = function()
+            if xDTaraZ.Options.UnlockFps then xDTaraZ.Visual.Cap(true) end
+        end,
     }
     for _, idx in ipairs({ "SpeedOn", "JumpOn", "Fly", "NoClip", "InfJump", "AntiAfk" }) do
         ui.Hooks[idx] = ui.MoveHook(idx)
@@ -7241,18 +7463,6 @@ function xDTaraZ.UI.RideNames()
     return names
 end
 
-xDTaraZ.UI.StopKeeps = { AntiAfk = true, SellKeepMutated = true, FuseKeepMutated = true }
-
-function xDTaraZ.UI.StopAll()
-    table.clear(xDTaraZ.Kaitun.Saved)
-    for idx, toggle in pairs(Library.Toggles) do
-        local name = tostring(idx)
-        if toggle.Value ~= true or name:find("^Mario") or xDTaraZ.UI.StopKeeps[name] then continue end
-        toggle:SetValue(false)
-    end
-    task.defer(function() xDTaraZ.Util.Try("stop all release", xDTaraZ.Eggs.Settle) end)
-end
-
 function xDTaraZ.UI.Pump()
     local sets = State.PendingSet
     if sets and #sets > 0 then
@@ -7308,7 +7518,6 @@ function xDTaraZ.UI.Home(window)
     local quick = tab:AddLeftGroupbox(T("Quick", "ด่วน"), "bomb")
     quick:AddButton({ Text = T("Collect Eggs Now", "เก็บไข่เดี๋ยวนี้"), Style = "Primary", Func = xDTaraZ.UI.Detach("collect now", xDTaraZ.Eggs.CollectNow) })
     quick:AddButton({ Text = T("Return Home", "กลับบ้าน"), Func = xDTaraZ.UI.Detach("return home", xDTaraZ.Teleport.Home) })
-        :AddButton({ Text = T("Stop All", "หยุดทั้งหมด"), Style = "Danger", Func = xDTaraZ.UI.StopAll })
 
     local kaitun = tab:AddLeftGroupbox(T("Kaitun", "ไก่ตัน"), "star")
     xDTaraZ.UI.Toggle(kaitun, "Kaitun", {
@@ -7554,6 +7763,14 @@ function xDTaraZ.UI.PlayerTab(window)
     local esp = tab:AddRightGroupbox(T("Egg ESP", "มองเห็นไข่"), "eye")
     xDTaraZ.UI.KeyToggle(esp, "EggEsp", { Text = T("Egg ESP", "มองเห็นไข่"), Description = T("Shows eggs through walls with rarity and distance", "แสดงไข่ทะลุกำแพง พร้อมความหายากและระยะ") })
     xDTaraZ.UI.Bind("EspMinRarity", esp:AddDropdown("EspMinRarity", { Text = T("Minimum Rarity", "ความหายากขั้นต่ำ"), Values = xDTaraZ.UI.Rarities(), Default = xDTaraZ.GameLib.RarityOrder[1] }))
+
+    local perf = tab:AddRightGroupbox(T("Performance", "ประสิทธิภาพ"), "zap")
+    xDTaraZ.UI.Toggle(perf, "HideOtherPets", { Text = T("Hide Other Pets", "ซ่อนสัตว์คนอื่น"), Description = T("Only your own pets stay visible", "เห็นแค่สัตว์ของเรา") })
+    xDTaraZ.UI.Toggle(perf, "HideOtherEggs", { Text = T("Hide Other Eggs", "ซ่อนไข่คนอื่น"), Description = T("Hides eggs on other players' bases", "ซ่อนไข่ในฐานคนอื่น") })
+    xDTaraZ.UI.Toggle(perf, "BoostFps", { Text = T("Boost FPS", "เพิ่ม FPS"), Description = T("Lower graphics for smoother play", "ลดกราฟิกให้ลื่นขึ้น") })
+    xDTaraZ.UI.Toggle(perf, "UnlockFps", { Text = T("FPS Cap", "จำกัด FPS") })
+    xDTaraZ.UI.Bind("FpsCap", perf:AddSlider("FpsCap", { Text = T("Max FPS", "FPS สูงสุด"), Min = 30, Max = 240, Default = Config.FpsCapDefault, Rounding = 0 }))
+    xDTaraZ.UI.Toggle(perf, "Render3D", { Text = T("Disable 3D Rendering", "ปิดการเรนเดอร์ 3D"), Description = T("Black screen to save power while farming AFK", "จอดำ ประหยัดเครื่องตอนฟาร์ม AFK") })
 end
 
 local function BuildTabs()
