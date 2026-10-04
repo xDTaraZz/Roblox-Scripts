@@ -158,7 +158,7 @@ xDTaraZ.Config = {
     ReloadSource = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/loader.lua"))()',
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
-        { "2026-10-04", "Updated for the new game version\nAuto Sell Pets with rarity filter\nFaster egg collecting\nRemoved keybind from Auto Collect Eggs\nFixed Auto Place Best Pets swapping pets\nAuto Feed goes to your base first\nVolcano Dip & Auto Volcano Obby" },
+        { "2026-10-04", "Updated for the new game version\nAuto Sell Pets with rarity filter\nFaster egg collecting\nRemoved keybind from Auto Collect Eggs\nFixed Auto Place Best Pets swapping pets\nAuto Feed goes to your base first\nVolcano Dip & Auto Volcano Obby\nAuto Place Eggs fills your plot up to its limit" },
         { "2026-10-03", "Classic Mario Hub UI is back\nBetter executor support\nBug fixes & better UI" },
     },
     SaveFolder = "Ride A Pet",
@@ -213,6 +213,11 @@ xDTaraZ.Config = {
     HatchRetry = 30,
     PlaceGap = 0.4,
     NestSkipFor = 30,
+    PlantGap = 9,
+    PlantSpread = 0.42,
+    PlantWait = 1.5,
+    PlotCapGuess = 40,
+    PlotCapRecheck = 60,
     PetSpread = 0.35,
     PetLift = 0.5,
     PetFailBackoff = 20,
@@ -259,6 +264,8 @@ xDTaraZ.State = {
     ObbyRetryAt = 0,
     EggSkip = {},
     NestSkip = {},
+    PlotCap = nil,
+    PlotCapAt = 0,
     Snapshot = nil,
     StockFloor = 0,
     SnapshotAt = 0,
@@ -977,7 +984,7 @@ function xDTaraZ.Hatch.MyEggs()
     return eggs
 end
 
----@return boolean  timer gone or finished
+---@return boolean  timer shows finished; eggs without a loaded timer wait for the periodic sweep
 function xDTaraZ.Hatch.IsReady(egg)
     for _, label in ipairs(egg:GetDescendants()) do
         if label.Name == "Timer" and label:IsA("TextLabel") then
@@ -985,7 +992,7 @@ function xDTaraZ.Hatch.IsReady(egg)
             return not text:find("[1-9]")
         end
     end
-    return true
+    return false
 end
 
 function xDTaraZ.Hatch.FreeNests()
@@ -1001,10 +1008,83 @@ function xDTaraZ.Hatch.FreeNests()
     return free
 end
 
+---@return boolean  the game lets you plant eggs anywhere on your plot instead of nests
+function xDTaraZ.Hatch.NoNest()
+    return LocalPlayer:GetAttribute("NoNest") == true
+end
+
+---@return number  eggs that still fit; in plant mode the cap is learned from the server and rechecked every minute
+function xDTaraZ.Hatch.Room()
+    if not xDTaraZ.Hatch.NoNest() then return #xDTaraZ.Hatch.FreeNests() end
+    local cap = State.PlotCap
+    if not cap or osClock() - State.PlotCapAt > Config.PlotCapRecheck then cap = Config.PlotCapGuess end
+    return math.max(0, cap - #xDTaraZ.Hatch.MyEggs())
+end
+
+---@return Vector3[]  free planting spots on your plot, kept apart from eggs already there
+function xDTaraZ.Hatch.PlantSpots(count)
+    local plot = xDTaraZ:GetPlot()
+    local base = plot and plot:FindFirstChild("Baseplate")
+    if not base or count < 1 then return {} end
+    local top = base.Position.Y + base.Size.Y / 2
+    local taken = {}
+    for _, egg in ipairs(xDTaraZ.Hatch.MyEggs()) do
+        local pos = egg:GetPivot().Position
+        taken[#taken + 1] = vector3New(pos.X, top, pos.Z)
+    end
+
+    local spots = {}
+    local half = base.Size * Config.PlantSpread
+    for x = -half.X, half.X, Config.PlantGap do
+        for z = -half.Z, half.Z, Config.PlantGap do
+            local flat = (base.CFrame * cframeNew(x, 0, z)).Position
+            local pos = vector3New(flat.X, top, flat.Z)
+            local clear = true
+            for _, other in ipairs(taken) do
+                if (other - pos).Magnitude < Config.PlantGap then
+                    clear = false
+                    break
+                end
+            end
+            if not clear then continue end
+            spots[#spots + 1] = pos
+            taken[#taken + 1] = pos
+            if #spots >= count then return spots end
+        end
+    end
+    return spots
+end
+
+---@return number  eggs planted; stops and remembers the cap when the server refuses one
+function xDTaraZ.Hatch.Plant(tools)
+    local spots = xDTaraZ.Hatch.PlantSpots(math.min(xDTaraZ.Hatch.Room(), #tools))
+    if #spots == 0 then return 0 end
+    xDTaraZ:MoveTo(xDTaraZ:HomeCFrame())
+    task.wait(Config.TeleportSettle)
+
+    local placed = 0
+    for _, pos in ipairs(spots) do
+        local tool = table.remove(tools, 1)
+        if not tool or not xDTaraZ.Player:IsAlive() then break end
+        local before = #xDTaraZ.Hatch.MyEggs()
+        xDTaraZ:SetStatus("Placing " .. tool.Name)
+        xDTaraZ.Player.Humanoid:EquipTool(tool)
+        task.wait(Config.EquipSettle)
+        xDTaraZ.Net.EggPlaced:FireServer({ PlantPosition = pos })
+        local deadline = osClock() + Config.PlantWait
+        repeat task.wait(0.05) until #xDTaraZ.Hatch.MyEggs() > before or osClock() > deadline
+        if #xDTaraZ.Hatch.MyEggs() == before then
+            State.PlotCap, State.PlotCapAt = before, osClock()
+            break
+        end
+        placed += 1
+    end
+    return placed
+end
+
 function xDTaraZ.Hatch.Place()
     local tools = xDTaraZ.Hatch.EggTools()
-    local nests = xDTaraZ.Hatch.FreeNests()
-    if #tools == 0 or #nests == 0 then return end
+    if #tools == 0 or xDTaraZ.Hatch.Room() == 0 then return end
 
     local fastest = xDTaraZ.Options.FastestFirst
     local function Rank(tool)
@@ -1016,6 +1096,8 @@ function xDTaraZ.Hatch.Place()
 
     local origin = xDTaraZ.Player.Root.CFrame
     local placed = 0
+    local nests = xDTaraZ.Hatch.NoNest() and {} or xDTaraZ.Hatch.FreeNests()
+    if xDTaraZ.Hatch.NoNest() then placed = xDTaraZ.Hatch.Plant(tools) end
     for _, nest in ipairs(nests) do
         local tool = table.remove(tools, 1)
         if not tool or not xDTaraZ.Player:IsAlive() then break end
@@ -1068,7 +1150,7 @@ end
 
 function xDTaraZ.Hatch.Step()
     local opts, now = xDTaraZ.Options, osClock()
-    if opts.AutoPlaceEggs and not xDTaraZ:TrollActive() and #xDTaraZ.Hatch.FreeNests() > 0 and #xDTaraZ.Hatch.EggTools() > 0 then
+    if opts.AutoPlaceEggs and not xDTaraZ:TrollActive() and xDTaraZ.Hatch.Room() > 0 and #xDTaraZ.Hatch.EggTools() > 0 then
         xDTaraZ:WithLock("place", 0, xDTaraZ.Hatch.Place)
     end
     if opts.AutoHatch and now - State.LastHatch > Config.HatchGap then
@@ -2131,7 +2213,7 @@ end
 function xDTaraZ.UI.Hatching(window)
     local tab = window:AddTab(T("Hatch", "ฟักไข่"), "flower", T("Nests and hatching", "รังและการฟัก"))
     local place = tab:AddLeftGroupbox(T("Place Eggs", "วางไข่"), "flower")
-    xDTaraZ.UI.Toggle(place, "AutoPlaceEggs", "Auto Place Eggs", "วางไข่ลงรังอัตโนมัติ", T("Puts your best eggs into free nests", "เอาไข่ที่ดีที่สุดลงรังที่ว่าง"))
+    xDTaraZ.UI.Toggle(place, "AutoPlaceEggs", "Auto Place Eggs", "วางไข่อัตโนมัติ", T("Fills your plot with your best eggs up to the limit", "วางไข่ที่ดีที่สุดลงพล็อตจนเต็มลิมิต"))
     xDTaraZ.UI.Toggle(place, "FastestFirst", "Fastest Eggs First", "ไข่ที่ฟักเร็วก่อน", T("Off = best luck first", "ปิด = ไข่โชคดีสุดก่อน"))
     place:AddButton({ Text = T("Place Eggs Now", "วางไข่เดี๋ยวนี้"), Func = xDTaraZ.UI.Detach(xDTaraZ.Hatch.PlaceNow) })
 
