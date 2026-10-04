@@ -37,7 +37,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 | **[Violence District](#-violence-district)** | Auto repair, instant escape, killer auto slash and hook, auto farm both roles, ESP |
 | **[Anime Dice](#-anime-dice)** | Smart Kaitun, fast roll, auto upgrade and rebirth, auto tower, redeem all codes |
 | **[Ride A Pet](#-ride-a-pet)** | Instant egg collect, rare egg hunter with server hop, auto hatch, best pets, Smart Kaitun |
-| **[FPS AirDrop Arena](#-fps-airdrop-arena)** | Silent aim, ragebot, hunt, auto heal, loot best gear from anywhere, Kaitun |
+| **[FPS AirDrop Arena](#-fps-airdrop-arena)** | Silent aim, ragebot, triggerbot, hunt, auto rewards, loot best gear from anywhere |
 | **[BloxStrike](#-bloxstrike)** | Silent aim, aimbot, triggerbot, gun mods, skin changer, bunny hop, ESP |
 | **[+1 Stone Skipping](#-1-stone-skipping)** | Smart Kaitun, auto throw and train, best stones, auto rebirth, fast hatch, redeem codes |
 | **[Break and Steal an Egg](#-break-and-steal-an-egg)** | Instant steal, break eggs in any zone, upgrades-only filter, auto upgrades, bat troll, Kaitun |
@@ -243,17 +243,18 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 <details>
 <summary><b>Features</b></summary>
 
-- **Kaitun**: one switch that kills, hunts, heals, loots and respawns on its own, with gold, ore and kills per hour
-- **Silent aim** and **Ragebot** (works even when the game window is not focused)
-- **Hunt**: warps behind the closest enemy whenever nobody is in sight
-- Aimbot with Hold, Toggle or Always key modes and smoothness
-- **Auto heal**: grabs a med kit from anywhere on the map when your HP drops
-- **Instant respawn**
-- **Auto loot best gear**: better guns, pistols, helmets and armor from any crate on the map
-- Auto loot valuables (ore, crystals, gold) and air drops from anywhere
-- Rapid fire, no spread, no recoil, instant aim down sights
-- Super slide, speed, fly, infinite jump, noclip
-- Player ESP and loot ESP, fullbright, camera FOV, anti AFK, rejoin, server hop
+- **Silent aim** with hit chance, headshot chance, its own FOV and target priority
+- **Ragebot** and **Triggerbot** with reaction delay and fire chance
+- **Hunt**: warps behind, above or in front of the closest enemy when nobody is in sight
+- Aimbot with Hold, Toggle or Always key modes, smoothness and sticky target
+- **Auto heal**: grabs a med from anywhere on the map, pick which meds to use
+- Auto respawn with delay, auto rejoin match, auto reload between fights
+- **Auto loot best gear** ranked by real gun damage, auto ammo for your guns
+- Auto loot valuables, buffs and air drops from anywhere, pick what to take
+- **Rewards**: auto claim tasks, season pass, rank rewards, online gifts, sign-in, update gifts, redeem all codes
+- Auto open boxes and buy boxes with gold
+- No spread, no recoil, instant aim down sights, super slide, speed, fly, infinite jump, noclip
+- Player ESP with health bars, loot ESP, staff alert, fullbright, camera FOV, anti AFK, rejoin, server hop
 
 </details>
 
