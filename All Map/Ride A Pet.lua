@@ -79,7 +79,7 @@ xDTaraZ.Config = {
     UnloadCarryTimeout = 2,
     JobTick = {
         Volcano = 0.25, Junk = 0.25, Hatch = 1, Plant = 2, Pets = 2,
-        Feed = 10, Sell = 10, Fusion = 2, Economy = 3, Shop = 5, Rewards = 30, Boosts = 5, Server = 5,
+        Feed = 1, Sell = 10, Fusion = 2, Economy = 3, Shop = 5, Rewards = 30, Boosts = 5, Server = 5,
         Webhook = 1, Settle = 1, Kaitun = 2,
     },
     JobBackoff = 40,
@@ -98,7 +98,7 @@ xDTaraZ.Config = {
     PlantTries = 3,
     EquipSettle = 0.1,
     HatchPending = 5,
-    PlotEggsRefresh = 60,
+    PlotEggsRefresh = 60, PlotFullRecheck = 10,
     PlantStandLift = 3,
     PlantLongGrow = 3600,
     PlantLongShare = 0.5,
@@ -142,7 +142,7 @@ xDTaraZ.Config = {
     PetBaseKg = 10,
     PetMaxAge = 100,
     CollectGap = 0.15,
-    FeedGap = 0.2,
+    FeedGap = 0.36, FeedBurst = 8, FeedMissLimit = 3, FeedReplyTimeout = 1,
     TopCacheSec = 1,
     AutoCollectPass = { "AutoCollect", "1940707069" },
     PetAgeRefresh = 30,
@@ -197,7 +197,7 @@ xDTaraZ.Config = {
     KaitunSteerEvery = 60,
 
     UpdateLog = {
-        { "2026-10-05", "Fixed Volcano Dip and Auto Volcano Egg doing nothing unless Auto Eggs was on\nA returned egg no longer stops the whole farm, it slows delivery and keeps going\nAuto Reconnect after a disconnect\nWeather alerts now name the storm type\nScript rebuilt from scratch for the new game update\nEggs reach your base every time, no more returned eggs\nMuch less lag while farming with a big inventory\nClear Junk Eggs: hatch cheap eggs and sell the pets\nMinimum Egg Rarity to farm rare eggs only\nFixed Auto Place Best Pets swapping out good pets\nPerformance: Boost FPS, hide other pets and eggs, FPS cap, disable 3D\nFixed the inventory bar not coming back after farming\nRemoved the Stop All button" },
+        { "2026-10-05", "Auto Feed is about 5x faster\nFixed Auto Place Eggs saying the plot is full when it is not\nFixed Volcano Dip and Auto Volcano Egg doing nothing unless Auto Eggs was on\nA returned egg no longer stops the whole farm, it slows delivery and keeps going\nAuto Reconnect after a disconnect\nWeather alerts now name the storm type\nScript rebuilt from scratch for the new game update\nEggs reach your base every time, no more returned eggs\nMuch less lag while farming with a big inventory\nClear Junk Eggs: hatch cheap eggs and sell the pets\nMinimum Egg Rarity to farm rare eggs only\nFixed Auto Place Best Pets swapping out good pets\nPerformance: Boost FPS, hide other pets and eggs, FPS cap, disable 3D\nFixed the inventory bar not coming back after farming\nRemoved the Stop All button" },
         { "2026-10-04", "Rebuilt egg collecting: faster trips and no more returned eggs\nRide pet picker, rare egg hunter and plant order\nPet protect list, safer selling and smarter spending\nClear Junk Eggs now sells what it hatches, and Minimum Egg Rarity skips cheap eggs" },
     },
 }
@@ -3088,10 +3088,11 @@ end
 
 function xDTaraZ.Hatch.OnMessage(text)
     if type(text) ~= "string" then return end
-    local cap = text:match("Max (%d+)/%d+")
+    local used, cap = text:match("Max (%d+)/(%d+)")
     if not cap then return end
-    xDTaraZ.State.PlantCap = tonumber(cap)
+    xDTaraZ.State.PlantCap = math.max(tonumber(used), tonumber(cap))
     xDTaraZ.Hatch.CapHit = true
+    xDTaraZ.Hatch.RequestSnapshot()
 end
 
 function xDTaraZ.Hatch.Bind()
@@ -3170,7 +3171,7 @@ function xDTaraZ.Hatch.Step()
     if not opts.AutoHatch then return end
     xDTaraZ.Hatch.Bind()
 
-    if os.clock() - xDTaraZ.Hatch.LastRequest > xDTaraZ.Config.PlotEggsRefresh and not next(xDTaraZ.State.PlotEggs) then
+    if os.clock() - xDTaraZ.Hatch.LastRequest > xDTaraZ.Config.PlotEggsRefresh then
         xDTaraZ.Hatch.RequestSnapshot()
     end
     if opts.HoldHatchBoost and not xDTaraZ.Hatch.BoostActive() then
@@ -3356,13 +3357,20 @@ end
 ---@return { {Tool, string, number} }  Queue trimmed to room, slow growers capped by LongRoom
 function xDTaraZ.Hatch.Pick(room)
     local longRoom = xDTaraZ.Hatch.LongRoom()
-    local picked = {}
+    local picked, spare = {}, {}
     for _, entry in ipairs(xDTaraZ.Hatch.Queue()) do
         if #picked >= room then break end
         if xDTaraZ.Hatch.IsLong(entry[2], entry[3]) then
-            if longRoom <= 0 then continue end
+            if longRoom <= 0 then
+                spare[#spare + 1] = entry
+                continue
+            end
             longRoom -= 1
         end
+        picked[#picked + 1] = entry
+    end
+    for _, entry in ipairs(spare) do
+        if #picked >= room then break end
         picked[#picked + 1] = entry
     end
     return picked
@@ -3403,7 +3411,11 @@ function xDTaraZ.Hatch.PlaceNow()
     if not xDTaraZ.Hatch.CanPlant() then return 0 end
     local plot, bp = xDTaraZ.Player:Plot()
     if not plot or not bp then return 0 end
-    if xDTaraZ.Hatch.ValueRoom() == 0 then return 0 end
+    if xDTaraZ.Hatch.ValueRoom() == 0 then
+        if os.clock() - xDTaraZ.Hatch.LastRequest > xDTaraZ.Config.PlotFullRecheck then xDTaraZ.Hatch.RequestSnapshot() end
+        xDTaraZ.Hatch.SetStatus(string.format("Plot full (%d/%d)", xDTaraZ.Hatch.Count(), xDTaraZ.State.PlantCap or xDTaraZ.Config.PlantCapDefault))
+        return 0
+    end
 
     local token = xDTaraZ.Tasks.Request("Plant", 40)
     if not token then return 0 end
@@ -3414,7 +3426,7 @@ function xDTaraZ.Hatch.PlaceNow()
 
     planted = ok and planted or 0
     xDTaraZ.Hatch.Planted += planted
-    xDTaraZ.Hatch.SetStatus(planted > 0 and ("Placed " .. planted .. " eggs") or "Plot full or no eggs")
+    xDTaraZ.Hatch.SetStatus(planted > 0 and ("Placed " .. planted .. " eggs") or (#xDTaraZ.Hatch.EggTools() == 0 and "No eggs to place" or string.format("Plot %d/%d", xDTaraZ.Hatch.Count(), xDTaraZ.State.PlantCap or xDTaraZ.Config.PlantCapDefault)))
     return planted
 end
 
@@ -4156,6 +4168,7 @@ end
 
 function xDTaraZ.Pets.OnFed(reply)
     if type(reply) ~= "table" or not xDTaraZ.Pets.IsOurs(reply.Owner) then return end
+    xDTaraZ.Pets.FedAt = os.clock()
     local pet = xDTaraZ.Pets.Placed[reply.PetKey or ""]
     if not pet then return end
     pet.weight = tonumber(reply.Weight) or pet.weight
@@ -4619,28 +4632,50 @@ function xDTaraZ.Pets.Feed()
             xDTaraZ.State.Status.Feed = "Could not reach the ranch"
             return 0
         end
-        return xDTaraZ.Pets.FeedAll(remote)
+        return xDTaraZ.Pets.FeedAll(remote, token)
     end) or 0
 end
 
-function xDTaraZ.Pets.FeedAll(remote)
+---@return integer  food left in a stacked food tool
+local function FoodLeft(tool)
+    local data = tool and tool.Parent and tool:FindFirstChild("Data")
+    local amount = data and data:FindFirstChild("Amount")
+    return amount and tonumber(amount.Value) or 1
+end
 
-    local foods = xDTaraZ.Pets.FoodTools()
-    local used = 0
-    for _, target in ipairs(xDTaraZ.Pets.FeedTargets()) do
-        local food = foods[used + 1]
-        if not food or not food.Parent then break end
-        if target[2] then
-            remote:FireServer(target[1], food.Name, true)
-        else
-            remote:FireServer(target[1], food.Name)
+---@return integer  feeds the server took, one at a time at its own pace, until food, pets or the burst run out
+function xDTaraZ.Pets.FeedAll(remote, token)
+    local cfg = xDTaraZ.Config
+    local used, misses, turn = 0, 0, 0
+    local deadline = os.clock() + cfg.FeedBurst
+    while os.clock() < deadline and misses < cfg.FeedMissLimit and xDTaraZ.Tasks.Holds(token) do
+        local targets = xDTaraZ.Pets.FeedTargets()
+        local food
+        for _, tool in ipairs(xDTaraZ.Pets.FoodTools()) do
+            if FoodLeft(tool) > 0 then
+                food = tool
+                break
+            end
         end
-        used += 1
-        task.wait(xDTaraZ.Config.FeedGap)
+        if not food or #targets == 0 then break end
+
+        turn = turn % #targets + 1
+        local target = targets[turn]
+        local before, firedAt = xDTaraZ.Pets.FedAt, os.clock()
+        remote:FireServer(target[1], food.Name, target[2] or nil)
+        local ok = xDTaraZ.Tasks.Await(token, function() return xDTaraZ.Pets.FedAt ~= before end, cfg.FeedReplyTimeout)
+        if ok then
+            used += 1
+            misses = 0
+        else
+            misses += 1
+        end
+        local wait = firedAt + cfg.FeedGap - os.clock()
+        if wait > 0 then xDTaraZ.Tasks.Await(token, function() return false end, wait) end
     end
 
     xDTaraZ.Pets.Fed += used
-    xDTaraZ.State.Status.Feed = used > 0 and ("Fed " .. used .. " pets") or "No food or nothing to feed"
+    xDTaraZ.State.Status.Feed = used > 0 and ("Fed " .. xDTaraZ.Pets.Fed .. " times") or "No food or nothing to feed"
     return used
 end
 
