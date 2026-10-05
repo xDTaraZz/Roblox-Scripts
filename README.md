@@ -94,11 +94,14 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 <summary><b>Features</b></summary>
 
 - **Auto Loot**: takes the best eggs and brainrots from every wave without leaving your base
+- **Unlimited Carry** button: take the whole wave instead of one item (Risky)
 - Rarity and mutation filter for what to collect
 - **Auto Sell** eggs with a keep list, and brainrots
 - **Auto Hatch** and place the best animals on your plot
 - Auto upgrade with a cash reserve, auto train, best dumbbell, auto rebirth
-- Auto claim daily, playtime, spins, free shop, packs and offline cash
+- Auto pickaxe, potions, wheel spins, season pass free rewards and event pickups
+- Auto claim daily, playtime and offline cash
+- Teleport to base, shop and players, server hop, fullbright
 - Redeem all codes, speed, infinite jump, noclip, anti AFK
 - **Kaitun**: does all of the above at once
 

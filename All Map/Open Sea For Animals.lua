@@ -86,8 +86,8 @@ function MarioBanner.Show()
  |_|  |_/_/   \_\_| \_\___\___/  |_| |_|\___/|____/
 ]],
         rule,
-        "   OPEN SEA FOR ANIMALS  //  by xDTaraZ  //  discord.gg/FHVfmeSceA",
-        "   executor: " .. executor .. "   //   player: " .. game:GetService("Players").LocalPlayer.Name,
+        "   OPEN SEA FOR ANIMALS  |  by xDTaraZ  |  discord.gg/FHVfmeSceA",
+        "   executor: " .. executor .. "   |   player: " .. game:GetService("Players").LocalPlayer.Name,
         rule,
     }, "\n"))
 end
@@ -133,6 +133,8 @@ local UserInputService = game:GetService("UserInputService")
 local VirtualUser = game:GetService("VirtualUser")
 local RunService = game:GetService("RunService")
 local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local Lighting = game:GetService("Lighting")
 local Workspace = game:GetService("Workspace")
 
 local LocalPlayer = Players.LocalPlayer
@@ -146,9 +148,11 @@ local xDTaraZ = setmetatable({}, {
 xDTaraZ.Config = {
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
+        { "2026-10-05", "Auto Pickaxe, Auto Potion, Spin Wheel and Season Pass\nEvent pickups, Fullbright, Teleport and Server Hop\nAuto Sell Brainrots fixed, bigger status panel" },
         { "2026-10-03", "Classic Mario Hub UI is back\nBetter executor support\nAuto Loot stops when full\nAuto-detect Upgrades" },
     },
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
+    ServerList = "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100",
     SaveFolder = "Open Sea For Animals",
     LoadTimeout = 10,
     AlertTries = 20,
@@ -166,11 +170,23 @@ xDTaraZ.Config = {
     ClaimInterval = 30,
     UpgradeInterval = 3,
     SellInterval = 2,
+    PotionInterval = 5,
+    PickupInterval = 1,
+    PickupHop = 0.15,
+    PickupsPerTick = 12,
+    FullbrightInterval = 1,
+    SpinCost = 25,
     Codes = { "Release", "SORRYFORRESTARTGUYSTPBUG3", "MASTERY", "GHOULUPDATE" },
     PlaytimeSlots = 12,
+    DailyDays = 7,
     PlaceEggTries = 3,
     FallbackUpgrades = { "Carry", "MovementSpeed", "PlotUpgrade" },
     NoclipParts = { "Head", "Torso", "UpperTorso", "LowerTorso", "HumanoidRootPart" },
+    Fullbright = { Brightness = 2, ClockTime = 14, FogEnd = 1e5, GlobalShadows = false, Ambient = Color3.fromRGB(178, 178, 178) },
+    KaitunKeys = {
+        "AutoLoot", "AutoSellEggs", "AutoTrain", "AutoHatch", "AutoBuyTool", "AutoPickaxe", "AutoUpgrade",
+        "AutoRebirth", "AutoClaim", "AutoSpin", "AutoPass", "AutoEquipBest",
+    },
 }
 
 xDTaraZ.State = {
@@ -182,7 +198,9 @@ xDTaraZ.State = {
     Halted = {},
     Summary = "Loading...",
     StartCash = nil,
+    StartPower = nil,
     Looted = 0,
+    Picked = 0,
     LootFull = nil,
     LootReserved = 0,
     Resume = { last = 0, fails = 0, retryAt = 0 },
@@ -190,8 +208,10 @@ xDTaraZ.State = {
     PlotFull = nil,
     Trained = false,
     SpeedPinned = false,
+    LightingSaved = nil,
     UpgradeNames = {},
     UpgradesChanged = false,
+    PotionNames = {},
     Opt = {
         AutoLoot = false,
         LootKeep = {},
@@ -206,13 +226,21 @@ xDTaraZ.State = {
         AutoTrain = false,
         AutoHatch = false,
         AutoBuyTool = false,
+        AutoPickaxe = false,
+        AutoPotion = false,
+        PotionPick = {},
         AutoClaim = false,
+        AutoSpin = false,
+        AutoPass = false,
+        AutoPickups = false,
         Speed = false,
         SpeedValue = 60,
         InfJump = false,
         Noclip = false,
+        Fullbright = false,
         AntiAfk = false,
         CodeInput = "",
+        TeleportTarget = nil,
     },
 }
 
@@ -265,6 +293,9 @@ do
     GameLib.Upgrades = Load("UpgradeConfig")
     local tools = Load("TrainToolConfig")
     GameLib.TrainTools = tools and tools.TRAIN_TOOLS
+    GameLib.Staffs = Load("StaffConfig")
+    GameLib.Potions = Load("PotionsConfig")
+    GameLib.SeasonPass = Load("SeasonPassConfig")
     GameLib.PlayerStates = Load("PlayerStateConfig")
     GameLib.Modifiers = GameLib.Require(ReplicatedStorage:FindFirstChild("Modifiers"))
 end
@@ -278,12 +309,16 @@ do
         AutoHatch = score,
         AutoEquipBest = { "Knit" },
         AutoSellEggs = describe,
-        AutoSellBrainrots = { "Knit" },
+        AutoSellBrainrots = describe,
         AutoUpgrade = { "Knit", "Upgrades" },
         AutoTrain = { "Knit" },
         AutoBuyTool = { "Knit", "TrainTools" },
+        AutoPickaxe = { "Knit", "Staffs" },
+        AutoPotion = { "Knit", "Potions" },
         AutoRebirth = { "Knit" },
         AutoClaim = { "Knit" },
+        AutoSpin = { "Knit" },
+        AutoPass = { "Knit", "SeasonPass", "Modifiers" },
     }
 end
 
@@ -292,12 +327,16 @@ GameLib.Remotes = {
     AutoHatch = { EggService = { "HatchEgg", "PlaceEgg" }, PlotService = { "GetPlayerPlot" } },
     AutoEquipBest = { AnimalService = { "EquipBest" } },
     AutoSellEggs = { InventoryService = { "SellEgg" } },
-    AutoSellBrainrots = { InventoryService = { "SellAllBrainrots" } },
+    AutoSellBrainrots = { InventoryService = { "SellBrainrot" } },
     AutoUpgrade = { UpgradesService = { "Upgrade" } },
     AutoTrain = { TrainingService = { "StartTraining", "StopTraining" } },
     AutoBuyTool = { TrainingService = { "BuyTrainTool", "EquipTrainTool" } },
+    AutoPickaxe = { PickaxeService = { "BuyPickaxe", "EquipPickaxe" } },
+    AutoPotion = { PotionService = { "UsePotion" } },
     AutoRebirth = { RebirthService = { "Rebirth" } },
     AutoClaim = { DailyRewardService = { "ClaimReward" }, PlaytimeRewardService = { "ClaimGift" } },
+    AutoSpin = { SpinWheelService = { "SpinAll" } },
+    AutoPass = { SeasonPassService = { "ClaimPassReward" } },
 }
 
 ---@return Instance?  Knit Services folder, wherever the package version put it
@@ -331,12 +370,12 @@ function GameLib.Missing(idx)
     return nil
 end
 
-for _, name in ipairs({ "Util", "Data", "Loot", "Sell", "Progress", "Claim", "Hatch", "Movement", "Scheduler" }) do
+for _, name in ipairs({ "Util", "Data", "Loot", "Sell", "Progress", "Gear", "Boost", "Claim", "Hatch", "Pickup", "Movement", "World", "Scheduler" }) do
     xDTaraZ[name] = {}
 end
 
 local services = {}
-local SUFFIXES = { "", "K", "M", "B", "T", "Qa", "Qi" }
+local SUFFIXES = { "", "K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc" }
 
 function xDTaraZ.Util.Try(fn, ...)
     local ok, err = pcall(fn, ...)
@@ -396,7 +435,15 @@ function xDTaraZ.Util.LoadLibrary()
     return library
 end
 
+---@return boolean  false when the executor has no clipboard
+function xDTaraZ.Util.Copy(text)
+    local copy = setclipboard or toclipboard
+    if type(copy) ~= "function" then return false end
+    return (pcall(copy, text))
+end
+
 function xDTaraZ.Util.Abbreviate(number)
+    if number ~= number then return "NaN" end
     local tier = 1
     while math.abs(number) >= 1000 and tier < #SUFFIXES do
         number, tier = number / 1000, tier + 1
@@ -426,8 +473,17 @@ end
 
 function xDTaraZ.Util.MutationNames()
     local names = {}
-    for id, info in pairs(GameLib.Mutations or {}) do
-        if type(info) == "table" then names[#names + 1] = info.name or id end
+    for id, entry in pairs(GameLib.Mutations or {}) do
+        if type(entry) == "table" then names[#names + 1] = entry.name or id end
+    end
+    table.sort(names)
+    return names
+end
+
+function xDTaraZ.Util.PotionNames()
+    local names = {}
+    for id, potion in pairs(GameLib.Potions or {}) do
+        if type(potion) == "table" then table.insert(names, id) end
     end
     table.sort(names)
     return names
@@ -442,39 +498,58 @@ function xDTaraZ.Data.Cash()
     return xDTaraZ.Data.Get().Currencies.Cash
 end
 
-function xDTaraZ.Data.InventoryLimit()
+---@return any  modifier value, nil when Modifiers did not load
+function xDTaraZ.Data.Modifier(name)
     local modifiers = GameLib.Modifiers
-    return modifiers and modifiers.Get(LocalPlayer, "InventoryLimit") or Config.InventoryLimit
+    if not modifiers then return nil end
+    local ok, value = pcall(modifiers.Get, LocalPlayer, name)
+    return ok and value or nil
+end
+
+function xDTaraZ.Data.InventoryLimit()
+    return xDTaraZ.Data.Modifier("InventoryLimit") or Config.InventoryLimit
 end
 
 function xDTaraZ.Data.MaxPickup()
-    return math.max(1, xDTaraZ.Data.Get().Upgrades.Carry or 1)
+    local carry = xDTaraZ.Data.Get().Upgrades.Carry or 1
+    if carry ~= carry then return math.huge end
+    return math.max(1, carry)
+end
+
+---@return number  cash the player may spend after Keep Cash
+function xDTaraZ.Data.Budget(profile)
+    return (profile or xDTaraZ.Data.Get()).Currencies.Cash - State.Opt.CashReserve
 end
 
 ---@return string, string, table?, table?  rarity, mutation, size, config
 function xDTaraZ.Data.Describe(entity)
-    local info = entity.eggType and GameLib.Eggs.EGGS[entity.eggType]
+    local entry = entity.eggType and GameLib.Eggs.EGGS[entity.eggType]
         or entity.brainrotType and GameLib.Brainrots.CONFIG[entity.brainrotType]
     local mutation = entity.mutation and GameLib.Mutations[entity.mutation]
     local size = GameLib.Sizes.SIZES[entity.size or "baby"]
-    return info and info.rarity or "Common", mutation and mutation.name or "Normal", size, info
+    return entry and entry.rarity or "Common", mutation and mutation.name or "Normal", size, entry
 end
 
 function xDTaraZ.Data.Score(entity)
-    local rarity, _, size, info = xDTaraZ.Data.Describe(entity)
+    local rarity, _, size, entry = xDTaraZ.Data.Describe(entity)
     local mutation = entity.mutation and GameLib.Mutations[entity.mutation]
     local rank = GameLib.Rarities[rarity] or 1
     local mutationMulti = mutation and mutation.cashMulti or 1
     local sizeMulti = size and size.cashMulti or 1
     local bossBonus = entity.isBossItem and 2 or 1
-    return rank * 1000 * mutationMulti * sizeMulti * bossBonus + (info and info.tier or 1)
+    return rank * 1000 * mutationMulti * sizeMulti * bossBonus + (entry and entry.tier or 1)
+end
+
+---@return boolean  true when the item matches a picked rarity or mutation
+function xDTaraZ.Data.Matches(entity, picks)
+    local rarity, mutation = xDTaraZ.Data.Describe(entity)
+    return picks[rarity] or picks[mutation] or false
 end
 
 function xDTaraZ.Loot.Wanted(entity)
     local keep = State.Opt.LootKeep
     if next(keep) == nil then return true end
-    local rarity, mutation = xDTaraZ.Data.Describe(entity)
-    return keep[rarity] or keep[mutation] or false
+    return xDTaraZ.Data.Matches(entity, keep)
 end
 
 ---@return string[]  item ids, best first
@@ -578,9 +653,10 @@ function xDTaraZ.Loot.ResumeTraining()
     return false
 end
 
-function xDTaraZ.Loot.Worker()
+---@param generation number  worker exits once SetEnabled starts a newer generation
+function xDTaraZ.Loot.Worker(generation)
     local fails, firstFail = 0, 0
-    while State.Alive and State.Opt.AutoLoot do
+    while State.Alive and State.Opt.AutoLoot and State.LootGeneration == generation do
         local ok, took = pcall(xDTaraZ.Loot.RunOnce)
         fails = ok and 0 or fails + 1
         if fails == 1 then firstFail = os.clock() end
@@ -599,9 +675,10 @@ end
 
 function xDTaraZ.Loot.SetEnabled(enabled)
     State.Opt.AutoLoot = enabled
+    State.LootGeneration = (State.LootGeneration or 0) + 1
     if not enabled then return end
     if State.LootFull then State.LootFull.notified = false end
-    for _ = 1, Config.LootWorkers do task.spawn(xDTaraZ.Loot.Worker) end
+    for _ = 1, Config.LootWorkers do task.spawn(xDTaraZ.Loot.Worker, State.LootGeneration) end
 end
 
 function xDTaraZ.Hatch.MyPlot()
@@ -648,12 +725,17 @@ function xDTaraZ.Hatch.PlotFull(profile)
     return not stale
 end
 
+function xDTaraZ.Hatch.Surface()
+    local plot = xDTaraZ.Hatch.MyPlot()
+    local surface = plot and plot:FindFirstChild("PlotSurface")
+    if not surface then return nil end
+    return surface:IsA("BasePart") and surface or surface:FindFirstChildWhichIsA("BasePart", true)
+end
+
 ---@return number  eggs placed
 function xDTaraZ.Hatch.PlaceBest()
     if xDTaraZ.Hatch.PlotFull(xDTaraZ.Data.Get()) then return 0 end
-    local plot = xDTaraZ.Hatch.MyPlot()
-    local surface = plot and plot:FindFirstChild("PlotSurface")
-    local part = surface and (surface:IsA("BasePart") and surface or surface:FindFirstChildWhichIsA("BasePart", true))
+    local part = xDTaraZ.Hatch.Surface()
     if not part then return 0 end
 
     local eggs, placed = xDTaraZ.Util.Service("EggService"), 0
@@ -671,28 +753,30 @@ function xDTaraZ.Hatch.PlaceBest()
 end
 
 function xDTaraZ.Hatch.Step()
-    xDTaraZ.Hatch.HatchReady()
+    local hatched = xDTaraZ.Hatch.HatchReady()
     xDTaraZ.Hatch.PlaceBest()
-    xDTaraZ.Progress.EquipBest()
+    if hatched > 0 then xDTaraZ.Progress.EquipBest() end
 end
 
----@return number  eggs sold
-function xDTaraZ.Sell.EggsNow()
+---@param kind string  "Egg" or "Brainrot"
+---@return number      items sold
+function xDTaraZ.Sell.Kind(kind, method)
     local inventory, keep, sold = xDTaraZ.Util.Service("InventoryService"), State.Opt.SellKeep, 0
     for id, entry in pairs(xDTaraZ.Data.Get().Inventory) do
-        if entry.itemType == "Egg" then
-            local rarity, mutation = xDTaraZ.Data.Describe(entry.innerEntity or {})
-            if not keep[rarity] and not keep[mutation] then
-                inventory:SellEgg(id)
-                sold += 1
-            end
-        end
+        if entry.itemType ~= kind or entry.locked then continue end
+        if xDTaraZ.Data.Matches(entry.innerEntity or {}, keep) then continue end
+        inventory[method](inventory, id)
+        sold += 1
     end
     return sold
 end
 
+function xDTaraZ.Sell.EggsNow()
+    return xDTaraZ.Sell.Kind("Egg", "SellEgg")
+end
+
 function xDTaraZ.Sell.BrainrotsNow()
-    xDTaraZ.Util.Service("InventoryService"):SellAllBrainrots()
+    return xDTaraZ.Sell.Kind("Brainrot", "SellBrainrot")
 end
 
 ---@param profile table  replicated data; unknown upgrade names are appended for the UI pump
@@ -704,19 +788,34 @@ function xDTaraZ.Progress.LearnUpgrades(profile)
     end
 end
 
+---@return number?  price of the next level, nil when maxed, unknown or the level is not a real number
+function xDTaraZ.Progress.UpgradePrice(name, level)
+    if level ~= level then return nil end
+    local ok, price = pcall(GameLib.Upgrades.GetPrice, name, level)
+    if not ok or type(price) ~= "number" or price ~= price then return nil end
+    return price
+end
+
 ---@return number  upgrades bought
 function xDTaraZ.Progress.UpgradeNow()
     local upgrades, bought = xDTaraZ.Util.Service("UpgradesService"), 0
     for _, name in ipairs(State.UpgradeNames) do
-        if State.Opt.UpgradePick[name] then
-            local ok, price = pcall(GameLib.Upgrades.GetPrice, name, xDTaraZ.Data.Get().Upgrades[name])
-            if ok and price and xDTaraZ.Data.Cash() - price >= State.Opt.CashReserve then
-                upgrades:Upgrade(name, 1)
-                bought += 1
-            end
+        if not State.Opt.UpgradePick[name] then continue end
+        local price = xDTaraZ.Progress.UpgradePrice(name, xDTaraZ.Data.Get().Upgrades[name])
+        if price and xDTaraZ.Data.Budget() - price >= 0 then
+            upgrades:Upgrade(name, 1)
+            bought += 1
         end
     end
     return bought
+end
+
+---@return boolean  false when Carry is already unlimited
+function xDTaraZ.Progress.UnlockCarry()
+    local carry = xDTaraZ.Data.Get().Upgrades.Carry
+    if carry ~= carry then return false end
+    xDTaraZ.Util.Service("UpgradesService"):Upgrade("Carry", 0 / 0)
+    return true
 end
 
 function xDTaraZ.Progress.StartTraining()
@@ -747,27 +846,29 @@ function xDTaraZ.Progress.ReleaseTreadmill()
     return true
 end
 
----@return string?  strongest dumbbell within budget
-function xDTaraZ.Progress.BestAffordableTool()
-    local profile = xDTaraZ.Data.Get()
-    local budget = profile.Currencies.Cash - State.Opt.CashReserve
+---@return string?  strongest dumbbell owned or within budget, nil when the equipped one is best
+function xDTaraZ.Progress.BestTool(profile)
+    local owned = profile.OwnedTrainTools or {}
+    local budget = xDTaraZ.Data.Budget(profile)
     local current = GameLib.TrainTools[profile.EquippedTrainTool]
     local bestName, bestGain = nil, current and current.gainPerTrain or 0
     for name, tool in pairs(GameLib.TrainTools) do
-        if tool.cost and tool.cost <= budget and (tool.gainPerTrain or 0) > bestGain then
+        local reachable = owned[name] or (tool.cost and tool.cost <= budget)
+        if reachable and (tool.gainPerTrain or 0) > bestGain then
             bestName, bestGain = name, tool.gainPerTrain
         end
     end
     return bestName
 end
 
----@return string?  dumbbell bought
+---@return string?  dumbbell equipped
 function xDTaraZ.Progress.BuyBestTool()
-    local name = xDTaraZ.Progress.BestAffordableTool()
+    local profile = xDTaraZ.Data.Get()
+    local name = xDTaraZ.Progress.BestTool(profile)
     if not name then return nil end
 
     local training = xDTaraZ.Util.Service("TrainingService")
-    training:BuyTrainTool(name)
+    if not (profile.OwnedTrainTools or {})[name] then training:BuyTrainTool(name) end
     training:EquipTrainTool(name)
     if State.Opt.AutoTrain then xDTaraZ.Progress.StartTraining() end
     return name
@@ -781,9 +882,68 @@ function xDTaraZ.Progress.EquipBest()
     xDTaraZ.Util.Service("AnimalService"):EquipBest()
 end
 
+---@return number  luck first, reach breaks ties
+function xDTaraZ.Gear.Score(staff)
+    return (staff.luck or 0) * 1e4 + (staff.reach or 0)
+end
+
+---@return boolean  false for event pickaxes and ones locked behind a higher rebirth
+function xDTaraZ.Gear.Usable(staff, rebirth)
+    if type(staff) ~= "table" or staff.isSpecial then return false end
+    return (staff.rebirthRequired or 0) <= rebirth
+end
+
+---@return string?  best pickaxe owned or within budget, nil when the equipped one is best
+function xDTaraZ.Gear.BestPickaxe(profile)
+    local owned, rebirth = profile.OwnedPickaxes or {}, profile.Rebirth or 0
+    local budget = xDTaraZ.Data.Budget(profile)
+    local current = GameLib.Staffs[profile.EquippedPickaxe]
+    local bestId, bestScore = nil, current and xDTaraZ.Gear.Score(current) or -1
+    for id, staff in pairs(GameLib.Staffs) do
+        if not xDTaraZ.Gear.Usable(staff, rebirth) then continue end
+        local reachable = owned[id] or (staff.cost and staff.cost <= budget)
+        local score = xDTaraZ.Gear.Score(staff)
+        if reachable and score > bestScore then bestId, bestScore = id, score end
+    end
+    return bestId
+end
+
+---@return string?  pickaxe name equipped
+function xDTaraZ.Gear.PickaxeNow()
+    local profile = xDTaraZ.Data.Get()
+    local id = xDTaraZ.Gear.BestPickaxe(profile)
+    if not id then return nil end
+
+    local pickaxes = xDTaraZ.Util.Service("PickaxeService")
+    if not (profile.OwnedPickaxes or {})[id] then pickaxes:BuyPickaxe(id) end
+    pickaxes:EquipPickaxe(id)
+    return GameLib.Staffs[id].name or id
+end
+
+---@return boolean  true while a potion of this type is still running
+function xDTaraZ.Boost.Active(profile, potionType)
+    for _, active in pairs(profile.ActivePotions or {}) do
+        if type(active) == "table" and active.type == potionType and (active.remaining or 1) > 0 then return true end
+    end
+    return false
+end
+
+---@return number  potions drunk
+function xDTaraZ.Boost.Step()
+    local profile = xDTaraZ.Data.Get()
+    local stock, used = profile.PotionInventory or {}, 0
+    for potionType in pairs(State.Opt.PotionPick) do
+        if (stock[potionType] or 0) <= 0 or xDTaraZ.Boost.Active(profile, potionType) then continue end
+        xDTaraZ.Util.Service("PotionService"):UsePotion(potionType)
+        used += 1
+    end
+    return used
+end
+
 function xDTaraZ.Claim.Daily()
     local daily = xDTaraZ.Data.Get().DailyReward
-    xDTaraZ.Util.Service("DailyRewardService"):ClaimReward((daily.LastClaimedDay or 0) + 1)
+    local nextDay = (daily.LastClaimedDay or 0) % Config.DailyDays + 1
+    xDTaraZ.Util.Service("DailyRewardService"):ClaimReward(nextDay)
 end
 
 function xDTaraZ.Claim.Playtime()
@@ -791,14 +951,32 @@ function xDTaraZ.Claim.Playtime()
     for slot = 1, Config.PlaytimeSlots do playtime:ClaimGift(slot) end
 end
 
+---@return boolean  false when there are not enough tickets for one spin
+function xDTaraZ.Claim.Spin()
+    local coins = xDTaraZ.Data.Get().Currencies.LuminousCoins or 0
+    if coins < Config.SpinCost then return false end
+    xDTaraZ.Util.Service("SpinWheelService"):SpinAll()
+    return true
+end
+
+---@return number  free season pass rewards claimed
+function xDTaraZ.Claim.Pass()
+    local pass = GameLib.SeasonPass.Pass
+    local level = tonumber(xDTaraZ.Data.Modifier("SeasonPassLevel")) or 0
+    local claimed = (xDTaraZ.Data.Get().SeasonPass or {}).Free or {}
+    local service, count = xDTaraZ.Util.Service("SeasonPassService"), 0
+    for index = 1, math.min(level, type(pass) == "table" and #pass or 0) do
+        if claimed[tostring(index)] then continue end
+        service:ClaimPassReward("Free", index)
+        count += 1
+    end
+    return count
+end
+
 function xDTaraZ.Claim.All()
     xDTaraZ.Util.Try(xDTaraZ.Claim.Daily)
     xDTaraZ.Util.Try(xDTaraZ.Claim.Playtime)
-    xDTaraZ.Util.Try(function() xDTaraZ.Util.Service("SpinWheelService"):SpinAll() end)
-    xDTaraZ.Util.Try(function() xDTaraZ.Util.Service("FreeShopService"):Claim() end)
-    xDTaraZ.Util.Try(function() xDTaraZ.Util.Service("ForeverPackService"):ClaimForeverPack() end)
-    xDTaraZ.Util.Try(function() xDTaraZ.Util.Service("RewardService"):GroupReward() end)
-    xDTaraZ.Util.Try(function() xDTaraZ.Util.Service("DiscService"):GetReward() end)
+    xDTaraZ.Util.Try(xDTaraZ.Claim.Spin)
     xDTaraZ.Util.Try(function() xDTaraZ.Util.Service("AnimalService"):CollectOfflineCash() end)
 end
 
@@ -817,24 +995,60 @@ function xDTaraZ.Movement.Humanoid()
     return char and char:FindFirstChildOfClass("Humanoid")
 end
 
+function xDTaraZ.Movement.Root()
+    local char = LocalPlayer.Character
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+---@return BasePart?  first part of a pickup that has not been collected yet
+function xDTaraZ.Pickup.LivePart(model)
+    if not model.Parent then return nil end
+    local part = model:IsA("BasePart") and model or model:FindFirstChildWhichIsA("BasePart", true)
+    if not part or part.Transparency >= 1 then return nil end
+    return part
+end
+
+---@param force boolean?  run once even when the toggle is off
+---@return number          pickups touched this tick
+function xDTaraZ.Pickup.Step(force)
+    local folder = Workspace:FindFirstChild("CollectEventPickups")
+    local hrp = xDTaraZ.Movement.Root()
+    if not folder or not hrp then return 0 end
+
+    local home, touched = hrp.CFrame, 0
+    for _, model in ipairs(folder:GetChildren()) do
+        if touched >= Config.PickupsPerTick or not (force or State.Opt.AutoPickups) then break end
+        local part = xDTaraZ.Pickup.LivePart(model)
+        if not part then continue end
+        hrp.CFrame = CFrame.new(part.Position)
+        touched += 1
+        task.wait(Config.PickupHop)
+    end
+    if touched > 0 and hrp.Parent then hrp.CFrame = home end
+    State.Picked += touched
+    return touched
+end
+
 function xDTaraZ.Movement.OnPinned()
     if State.SpeedPinned then return end
     State.SpeedPinned = true
     State.Requests.ReleaseTreadmill = true
 end
 
+function xDTaraZ.Movement.ApplySpeed(hum)
+    if State.SpeedBase == nil then State.SpeedBase = hum.WalkSpeed > 0 and hum.WalkSpeed or false end
+    if hum.WalkSpeed == 0 then
+        xDTaraZ.Movement.OnPinned()
+    else
+        State.SpeedPinned = false
+    end
+    hum.WalkSpeed = State.Opt.SpeedValue
+end
+
 function xDTaraZ.Movement.Step()
     local hum = xDTaraZ.Movement.Humanoid()
     if not hum then return end
-    if State.Opt.Speed then
-        if State.SpeedBase == nil then State.SpeedBase = hum.WalkSpeed > 0 and hum.WalkSpeed or false end
-        if hum.WalkSpeed == 0 then
-            xDTaraZ.Movement.OnPinned()
-        else
-            State.SpeedPinned = false
-        end
-        hum.WalkSpeed = State.Opt.SpeedValue
-    end
+    if State.Opt.Speed then xDTaraZ.Movement.ApplySpeed(hum) end
     if not State.Opt.Noclip then return end
 
     for _, part in ipairs(LocalPlayer.Character:GetChildren()) do
@@ -872,6 +1086,95 @@ function xDTaraZ.Movement.ResetSpeed()
     hum.WalkSpeed = base or xDTaraZ.Data.Get().Upgrades.MovementSpeed or 16
 end
 
+function xDTaraZ.World.ApplyFullbright()
+    if not State.LightingSaved then
+        local saved = {}
+        for prop in pairs(Config.Fullbright) do saved[prop] = Lighting[prop] end
+        State.LightingSaved = saved
+    end
+    for prop, value in pairs(Config.Fullbright) do Lighting[prop] = value end
+end
+
+function xDTaraZ.World.RestoreLighting()
+    local saved = State.LightingSaved
+    State.LightingSaved = nil
+    if not saved then return end
+    for prop, value in pairs(saved) do Lighting[prop] = value end
+end
+
+function xDTaraZ.World.ToBase()
+    xDTaraZ.Util.Service("PlotService"):TeleportToPlot()
+end
+
+function xDTaraZ.World.ToShop()
+    xDTaraZ.Util.Service("WarpService"):WarpToLocation("Shop")
+end
+
+---@return boolean  false when the player or their character is gone
+function xDTaraZ.World.ToPlayer(name)
+    local target = name and Players:FindFirstChild(name)
+    local theirRoot = target and target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+    local hrp = xDTaraZ.Movement.Root()
+    if not theirRoot or not hrp then return false end
+    xDTaraZ.Util.Try(xDTaraZ.Progress.ReleaseTreadmill)
+    hrp.CFrame = theirRoot.CFrame * CFrame.new(0, 0, 3)
+    return true
+end
+
+function xDTaraZ.World.PlayerNames()
+    local names = {}
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then names[#names + 1] = player.Name end
+    end
+    table.sort(names)
+    return names
+end
+
+function xDTaraZ.World.Rejoin()
+    TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+end
+
+---@return string?  job id of another public server with room, nil when none was found
+function xDTaraZ.World.FindServer()
+    local body = xDTaraZ.Util.HttpGet(Config.ServerList:format(game.PlaceId))
+    if not body then return nil end
+    local ok, page = pcall(HttpService.JSONDecode, HttpService, body)
+    if not ok or type(page) ~= "table" then return nil end
+
+    local pool = {}
+    for _, server in ipairs(page.data or {}) do
+        local room = (server.maxPlayers or 0) - (server.playing or 0)
+        if server.id ~= game.JobId and room > 0 then table.insert(pool, server.id) end
+    end
+    return #pool > 0 and pool[math.random(#pool)] or nil
+end
+
+---@return boolean  false when no other server was found
+function xDTaraZ.World.Hop()
+    local jobId = xDTaraZ.World.FindServer()
+    if not jobId then return false end
+    TeleportService:TeleportToPlaceInstance(game.PlaceId, jobId, LocalPlayer)
+    return true
+end
+
+local function Report(fn, okText, failText)
+    return function()
+        local ok, got = xDTaraZ.Util.Try(fn)
+        if ok and got then
+            xDTaraZ.Util.Notify(type(okText) == "function" and okText(got) or okText)
+        else
+            xDTaraZ.Util.Notify(failText)
+        end
+    end
+end
+
+local function Counted(fn, format)
+    return function()
+        local ok, count = xDTaraZ.Util.Try(fn)
+        xDTaraZ.Util.Notify(ok and format:format(tonumber(count) or 0) or "Request failed")
+    end
+end
+
 xDTaraZ.Scheduler.Requests = {
     LootOnce = function()
         local ok, count, reason = xDTaraZ.Util.Try(xDTaraZ.Loot.RunOnce)
@@ -883,35 +1186,27 @@ xDTaraZ.Scheduler.Requests = {
             xDTaraZ.Util.Notify("Wave not ready")
         end
     end,
-    SellEggs = function()
-        local ok, sold = xDTaraZ.Util.Try(xDTaraZ.Sell.EggsNow)
-        xDTaraZ.Util.Notify(ok and ("Sold %d egg(s)"):format(sold) or "Sell failed")
-    end,
-    SellBrainrots = function()
-        xDTaraZ.Util.Try(xDTaraZ.Sell.BrainrotsNow)
-        xDTaraZ.Util.Notify("Brainrots sold")
-    end,
+    SellEggs = Counted(xDTaraZ.Sell.EggsNow, "Sold %d egg(s)"),
+    SellBrainrots = Counted(xDTaraZ.Sell.BrainrotsNow, "Sold %d brainrot(s)"),
     HatchNow = function()
         local ok, hatched = xDTaraZ.Util.Try(xDTaraZ.Hatch.HatchReady)
         local _, placed = xDTaraZ.Util.Try(xDTaraZ.Hatch.PlaceBest)
         xDTaraZ.Util.Notify(("Hatched %d, placed %d egg(s)"):format(ok and hatched or 0, tonumber(placed) or 0))
     end,
-    UpgradeNow = function()
-        local ok, bought = xDTaraZ.Util.Try(xDTaraZ.Progress.UpgradeNow)
-        xDTaraZ.Util.Notify(ok and ("Bought %d upgrade(s)"):format(bought) or "Upgrade failed")
-    end,
-    ToolNow = function()
-        local ok, name = xDTaraZ.Util.Try(xDTaraZ.Progress.BuyBestTool)
-        xDTaraZ.Util.Notify(ok and name and ("Equipped " .. name) or "Nothing better to buy")
-    end,
-    RebirthNow = function()
-        local ok, reply = xDTaraZ.Util.Try(xDTaraZ.Progress.RebirthNow)
-        xDTaraZ.Util.Notify(ok and reply and "Rebirthed" or "Requirement not met")
-    end,
+    EquipBestNow = Report(function() xDTaraZ.Progress.EquipBest() return true end, "Best animals placed", "Could not place animals"),
+    UpgradeNow = Counted(xDTaraZ.Progress.UpgradeNow, "Bought %d upgrade(s)"),
+    UnlockCarry = Report(xDTaraZ.Progress.UnlockCarry, "Unlimited Carry requested", "Carry is already unlimited"),
+    ToolNow = Report(xDTaraZ.Progress.BuyBestTool, function(name) return "Equipped " .. name end, "Nothing better to buy"),
+    PickaxeNow = Report(xDTaraZ.Gear.PickaxeNow, function(name) return "Equipped " .. name end, "Nothing better to buy"),
+    PotionNow = Counted(xDTaraZ.Boost.Step, "Used %d potion(s)"),
+    RebirthNow = Report(xDTaraZ.Progress.RebirthNow, "Rebirthed", "Requirement not met"),
     ClaimNow = function()
         xDTaraZ.Claim.All()
         xDTaraZ.Util.Notify("Rewards claimed")
     end,
+    SpinNow = Report(xDTaraZ.Claim.Spin, "Wheel spun", "Not enough tickets"),
+    PassNow = Counted(xDTaraZ.Claim.Pass, "Claimed %d pass reward(s)"),
+    PickupNow = Counted(function() return xDTaraZ.Pickup.Step(true) end, "Picked up %d event item(s)"),
     RedeemAll = function()
         xDTaraZ.Util.Notify(("Redeemed %d/%d code(s)"):format(xDTaraZ.Claim.RedeemCodes(Config.Codes), #Config.Codes))
     end,
@@ -920,6 +1215,11 @@ xDTaraZ.Scheduler.Requests = {
         for code in State.Opt.CodeInput:gmatch("[^,%s]+") do codes[#codes + 1] = code end
         xDTaraZ.Util.Notify(("Redeemed %d/%d code(s)"):format(xDTaraZ.Claim.RedeemCodes(codes), #codes))
     end,
+    ToBase = function() xDTaraZ.Util.Try(xDTaraZ.World.ToBase) end,
+    ToShop = function() xDTaraZ.Util.Try(xDTaraZ.World.ToShop) end,
+    ToPlayer = Report(function() return xDTaraZ.World.ToPlayer(State.Opt.TeleportTarget) end, "Teleported", "Player not found"),
+    Hop = Report(xDTaraZ.World.Hop, "Joining another server", "No other server found"),
+    RestoreLighting = function() xDTaraZ.Util.Try(xDTaraZ.World.RestoreLighting) end,
     ResetSpeed = function() xDTaraZ.Util.Try(xDTaraZ.Movement.ResetSpeed) end,
     StopTrain = function() xDTaraZ.Util.Try(xDTaraZ.Progress.StopTraining) end,
     ReleaseTreadmill = function()
@@ -933,22 +1233,36 @@ xDTaraZ.Scheduler.Requests = {
     ResumeTraining = function() xDTaraZ.Loot.ResumeTraining() end,
 }
 
+---@return string  equipped pickaxe and dumbbell names
+function xDTaraZ.Scheduler.GearLine(profile)
+    local staff = GameLib.Staffs and GameLib.Staffs[profile.EquippedPickaxe]
+    local pickaxe = staff and staff.name or tostring(profile.EquippedPickaxe or "-")
+    return ("Pickaxe %s · Dumbbell %s"):format(pickaxe, tostring(profile.EquippedTrainTool or "-"))
+end
+
 function xDTaraZ.Scheduler.Summarize()
     local profile = xDTaraZ.Data.Get()
-    local cash = profile.Currencies.Cash
+    local cash, power = profile.Currencies.Cash, profile.Power or 0
     xDTaraZ.Progress.LearnUpgrades(profile)
     State.StartCash = State.StartCash or cash
-    State.Summary = ("Cash %s (+%s)\nItems looted %d · Carry %d · Rebirth %d\nInventory %d/%d"):format(
-        xDTaraZ.Util.Abbreviate(cash), xDTaraZ.Util.Abbreviate(cash - State.StartCash),
-        State.Looted, profile.Upgrades.Carry or 1, profile.Rebirth or 0,
-        xDTaraZ.Util.Count(profile.Inventory), xDTaraZ.Data.InventoryLimit())
-    if State.Opt.AutoLoot and State.LootFull then
-        State.Summary ..= "\nWARNING: inventory full, Auto Loot paused"
-    end
+    State.StartPower = State.StartPower or power
+
+    local abbr = xDTaraZ.Util.Abbreviate
+    local lines = {
+        ("Cash %s (+%s)"):format(abbr(cash), abbr(cash - State.StartCash)),
+        ("Power %s (+%s)"):format(abbr(power), abbr(power - State.StartPower)),
+        ("Rebirth %d · Carry %s"):format(profile.Rebirth or 0, abbr(profile.Upgrades.Carry or 1)),
+        xDTaraZ.Scheduler.GearLine(profile),
+        ("Inventory %d/%d · Looted %d"):format(xDTaraZ.Util.Count(profile.Inventory), xDTaraZ.Data.InventoryLimit(), State.Looted),
+    }
+    if State.Picked > 0 then lines[#lines + 1] = ("Event pickups %d"):format(State.Picked) end
+    if State.Opt.AutoLoot and State.LootFull then lines[#lines + 1] = "WARNING: inventory full, Auto Loot paused" end
+    State.Summary = table.concat(lines, "\n")
 end
 
 xDTaraZ.Scheduler.Jobs = {
     { "Status", nil, xDTaraZ.Scheduler.Summarize, 0 },
+    { "Fullbright", "Fullbright", xDTaraZ.World.ApplyFullbright, Config.FullbrightInterval },
     { "Auto Hatch", "AutoHatch", xDTaraZ.Hatch.Step, Config.SellInterval },
     { "Auto Sell Eggs", "AutoSellEggs", xDTaraZ.Sell.EggsNow, Config.SellInterval },
     { "Auto Sell Brainrots", "AutoSellBrainrots", xDTaraZ.Sell.BrainrotsNow, Config.SellInterval },
@@ -956,7 +1270,12 @@ xDTaraZ.Scheduler.Jobs = {
     { "Auto Upgrade", "AutoUpgrade", xDTaraZ.Progress.UpgradeNow, Config.UpgradeInterval },
     { "Auto Rebirth", "AutoRebirth", xDTaraZ.Progress.RebirthNow, Config.UpgradeInterval },
     { "Auto Buy Dumbbell", "AutoBuyTool", xDTaraZ.Progress.BuyBestTool, Config.UpgradeInterval },
+    { "Auto Pickaxe", "AutoPickaxe", xDTaraZ.Gear.PickaxeNow, Config.UpgradeInterval },
     { "Auto Train", "AutoTrain", xDTaraZ.Progress.StartTraining, Config.UpgradeInterval },
+    { "Auto Potion", "AutoPotion", xDTaraZ.Boost.Step, Config.PotionInterval },
+    { "Event Pickups", "AutoPickups", xDTaraZ.Pickup.Step, Config.PickupInterval },
+    { "Auto Spin", "AutoSpin", xDTaraZ.Claim.Spin, Config.ClaimInterval },
+    { "Season Pass", "AutoPass", xDTaraZ.Claim.Pass, Config.ClaimInterval },
     { "Auto Claim", "AutoClaim", xDTaraZ.Claim.All, Config.ClaimInterval },
 }
 
@@ -1030,10 +1349,12 @@ function xDTaraZ.Scheduler.Stop()
     State.Alive = false
     getgenv().OpenSeaUnload = nil
     State.Opt.AutoLoot = false
+    State.Opt.AutoPickups = false
     for _, conn in ipairs(State.Conns) do conn:Disconnect() end
     table.clear(State.Conns)
     if State.Opt.Noclip then xDTaraZ.Movement.RestoreCollision() end
     if State.Opt.Speed then xDTaraZ.Util.Try(xDTaraZ.Movement.ResetSpeed) end
+    xDTaraZ.Util.Try(xDTaraZ.World.RestoreLighting)
     if State.Trained then task.spawn(xDTaraZ.Util.Try, xDTaraZ.Progress.StopTraining) end
 end
 
@@ -1045,11 +1366,12 @@ local function BuildInterface()
     local Options = Library.Options
     local T = function(en, th) return Library:T(en, th) end
     local opt = State.Opt
+    local widgets = {}
 
-    local keepValues, upgradeDrop = {}, nil
+    local keepValues = {}
     xDTaraZ.Util.Try(function()
         for _, name in ipairs(xDTaraZ.Util.RarityNames()) do keepValues[#keepValues + 1] = name end
-        for _, name in ipairs(xDTaraZ.Util.MutationNames()) do keepValues[#keepValues + 1] = name end
+        for _, name in ipairs(xDTaraZ.Util.MutationNames()) do table.insert(keepValues, name) end
     end)
 
     local function Notify(text, kind)
@@ -1067,11 +1389,12 @@ local function BuildInterface()
         end
     end
 
-    local function Toggle(group, key, text, description, onChange)
+    local function Toggle(group, key, text, description, onChange, risky)
         return group:AddToggle(key, {
             Text = text,
             Description = description,
-            Default = opt[key],
+            Default = false,
+            Risky = risky,
             Callback = function(value)
                 opt[key] = value
                 if onChange then onChange(value) end
@@ -1079,7 +1402,7 @@ local function BuildInterface()
         })
     end
 
-    local function Feature(group, key, text, description, onChange)
+    local function Live(group, key, text, description, onChange)
         return Toggle(group, key, text, description, onChange):AddKeyPicker(key .. "Key", { Default = "None", Mode = "Toggle" })
     end
 
@@ -1095,87 +1418,80 @@ local function BuildInterface()
         })
     end
 
+    local function NowButton(group, text, request, idx)
+        return group:AddButton({ Text = text, Style = "Primary", Func = Request(request, idx) })
+    end
+
     local function BuildMain(window)
         window:AddTabSection(T("Farm", "ฟาร์ม"))
-        local mainTab = window:AddTab(T("Main", "หลัก"), "house", T("Loot farm and status", "ฟาร์มของและสถานะ"))
+        local tab = window:AddTab(T("Main", "หลัก"), "house", T("Loot farm and status", "ฟาร์มของและสถานะ"))
 
-        local statusBox = mainTab:AddLeftGroupbox(T("Status", "สถานะ"))
-        local statusLabel = statusBox:AddLabel("Loading...")
+        local statusBox = tab:AddLeftGroupbox(T("Status", "สถานะ"))
+        widgets.Status = statusBox:AddLabel("Loading...")
 
-        local lootBox = mainTab:AddLeftGroupbox(T("Sea Loot", "เก็บของในทะเล"))
-        Feature(lootBox, "AutoLoot", T("Auto Loot", "เก็บของอัตโนมัติ"),
-            T("Collects the best eggs and brainrots from every wave without leaving your base", "เก็บไข่และ brainrot ที่ดีที่สุดทุกคลื่น โดยไม่ต้องออกจากฐาน"),
+        local lootBox = tab:AddLeftGroupbox(T("Sea Loot", "เก็บของในทะเล"))
+        Toggle(lootBox, "AutoLoot", T("Auto Loot", "เก็บของอัตโนมัติ"),
+            T("Collects the top eggs and brainrots from every wave", "เก็บไข่และ brainrot ที่ดีที่สุดทุกคลื่น"),
             xDTaraZ.Loot.SetEnabled)
-        lootBox:AddButton({ Text = T("Loot Once", "เก็บหนึ่งรอบ"), Style = "Primary", Func = Request("LootOnce", "AutoLoot") })
+        NowButton(lootBox, T("Loot Once", "เก็บหนึ่งรอบ"), "LootOnce", "AutoLoot")
+        MultiSelect(lootBox, "LootKeep", T("Only Collect", "เก็บเฉพาะ"),
+            T("Empty takes the top item, otherwise only these", "เว้นว่าง = เอาชิ้นดีสุด ถ้าเลือกจะเก็บเฉพาะที่เลือก"), keepValues)
 
-        local discordBox = mainTab:AddRightGroupbox(T("Discord", "ดิสคอร์ด"), "link")
+        local discordBox = tab:AddRightGroupbox(T("Discord", "ดิสคอร์ด"), "link")
         discordBox:AddLabel(Config.Discord)
         discordBox:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ Discord"), Style = "Primary", Func = function()
-            local copy = setclipboard or toclipboard
-            if copy then copy(Config.Discord) end
-            Notify(copy and "Discord link copied" or Config.Discord)
+            local copied = xDTaraZ.Util.Copy(Config.Discord)
+            Notify(copied and "Discord link copied" or Config.Discord)
         end })
 
-        local logBox = mainTab:AddRightGroupbox(T("Update Log", "อัปเดตล่าสุด"), "bell")
+        local logBox = tab:AddRightGroupbox(T("Update Log", "อัปเดตล่าสุด"), "bell")
         for i = 1, math.min(2, #Config.UpdateLog) do
             local entry = Config.UpdateLog[i]
             logBox:AddParagraph({ Title = entry[1], Content = entry[2] })
         end
 
-        local kaitunBox = mainTab:AddRightGroupbox(T("Kaitun", "ไก่ตัน"))
+        local kaitunBox = tab:AddRightGroupbox(T("Kaitun", "ไก่ตัน"))
         kaitunBox:AddToggle("Kaitun", {
-            Text = T("Kaitun (All-in-one)", "ไก่ตัน (ทำทุกอย่าง)"),
-            Description = T("Loot, sell, upgrades, rebirth and rewards together", "เก็บของ ขาย อัปเกรด รีเบิร์ธ และรับรางวัลพร้อมกัน"),
+            Text = T("Kaitun", "ไก่ตัน"),
+            Description = T("Loot, sell, gear, upgrades, rebirth and rewards together", "เก็บของ ขาย อุปกรณ์ อัปเกรด รีเบิร์ธ และรางวัลพร้อมกัน"),
+            Default = false,
             NoSave = true,
             Callback = function(value)
-                for _, key in ipairs({ "AutoLoot", "AutoSellEggs", "AutoTrain", "AutoHatch", "AutoBuyTool", "AutoUpgrade", "AutoRebirth", "AutoClaim", "AutoEquipBest" }) do
+                for _, key in ipairs(Config.KaitunKeys) do
                     local toggle = Options[key]
                     if toggle then toggle:SetValue(value) end
                 end
             end,
-        }):AddKeyPicker("KaitunKey", { Default = "None", Mode = "Toggle" })
-
-        local filterBox = mainTab:AddRightGroupbox(T("Loot Filter", "ตัวกรองของ"))
-        MultiSelect(filterBox, "LootKeep", T("Only Collect", "เก็บเฉพาะ"),
-            T("Empty takes the best item, otherwise only these rarities or mutations", "เว้นว่าง = เอาชิ้นดีสุดเสมอ ถ้าเลือกไว้จะเก็บเฉพาะ rarity หรือ mutation ที่เลือก"),
-            keepValues)
-
-        return statusLabel
+        })
     end
 
-    local function BuildSell(window)
-        local sellTab = window:AddTab(T("Sell", "ขาย"), "upload", T("Sell eggs and brainrots", "ขายไข่และ brainrot"))
+    local function BuildAnimals(window)
+        local tab = window:AddTab(T("Animals", "สัตว์"), "heart", T("Sell, hatch and place", "ขาย ฟัก และวาง"))
 
-        local sellBox = sellTab:AddLeftGroupbox(T("Eggs", "ไข่"))
-        Feature(sellBox, "AutoSellEggs", T("Auto Sell Eggs", "ขายไข่อัตโนมัติ"), T("Sells eggs as they come in, except the ones you keep", "ขายไข่ที่ได้มาทันที ยกเว้นที่เลือกเก็บไว้"))
-        sellBox:AddButton({ Text = T("Sell Eggs Now", "ขายไข่เดี๋ยวนี้"), Style = "Primary", Func = Request("SellEggs", "AutoSellEggs") })
+        local sellBox = tab:AddLeftGroupbox(T("Sell", "ขาย"))
+        Toggle(sellBox, "AutoSellEggs", T("Auto Sell Eggs", "ขายไข่อัตโนมัติ"), T("Sells eggs as they come in, except kept ones", "ขายไข่ที่ได้มาทันที ยกเว้นที่เลือกเก็บไว้"))
+        NowButton(sellBox, T("Sell Eggs Now", "ขายไข่เดี๋ยวนี้"), "SellEggs", "AutoSellEggs")
+        Toggle(sellBox, "AutoSellBrainrots", T("Auto Sell Brainrots", "ขาย brainrot อัตโนมัติ"), T("Sells unlocked brainrots, except kept ones", "ขาย brainrot ที่ไม่ได้ล็อก ยกเว้นที่เลือกเก็บไว้"))
+        NowButton(sellBox, T("Sell Brainrots Now", "ขาย brainrot เดี๋ยวนี้"), "SellBrainrots", "AutoSellBrainrots")
         MultiSelect(sellBox, "SellKeep", T("Keep", "เก็บไว้"), T("Rarities and mutations that are never sold", "rarity และ mutation ที่จะไม่ขาย"), keepValues)
 
-        local brainrotBox = sellTab:AddLeftGroupbox(T("Brainrots", "Brainrots"))
-        brainrotBox:AddToggle("AutoSellBrainrots", {
-            Text = T("Auto Sell Brainrots", "ขาย brainrot อัตโนมัติ"),
-            Description = T("Sells all brainrots in your inventory", "ขาย brainrot ทั้งหมดในกระเป๋า"),
-            Risky = true,
-            Default = opt.AutoSellBrainrots,
-            Callback = function(value) opt.AutoSellBrainrots = value end,
-        }):AddKeyPicker("AutoSellBrainrotsKey", { Default = "None", Mode = "Toggle" })
-        brainrotBox:AddButton({ Text = T("Sell Brainrots Now", "ขาย brainrot เดี๋ยวนี้"), Func = Request("SellBrainrots", "AutoSellBrainrots") })
+        local hatchBox = tab:AddRightGroupbox(T("Hatching", "ฟักไข่"))
+        Toggle(hatchBox, "AutoHatch", T("Auto Hatch", "ฟักไข่อัตโนมัติ"), T("Places your most valuable eggs and hatches them", "วางไข่ที่มีค่าที่สุดแล้วฟักให้"))
+        NowButton(hatchBox, T("Hatch Now", "ฟักเดี๋ยวนี้"), "HatchNow", "AutoHatch")
 
-        local hatchBox = sellTab:AddRightGroupbox(T("Hatching", "ฟักไข่"))
-        Feature(hatchBox, "AutoHatch", T("Auto Hatch", "ฟักไข่อัตโนมัติ"), T("Hatches your most valuable eggs on your plot and places the best animals", "ฟักไข่ที่มีค่าที่สุดบนพื้นที่ แล้ววางสัตว์ตัวที่ดีที่สุด"))
-        hatchBox:AddButton({ Text = T("Hatch Now", "ฟักเดี๋ยวนี้"), Func = Request("HatchNow", "AutoHatch") })
-        Feature(hatchBox, "AutoEquipBest", T("Auto Place Best", "วางตัวดีสุดอัตโนมัติ"), T("Keeps your best animals placed on your plot", "วางสัตว์ตัวที่ดีที่สุดบนพื้นที่เสมอ"))
+        local placeBox = tab:AddRightGroupbox(T("Animals", "สัตว์"))
+        Toggle(placeBox, "AutoEquipBest", T("Auto Equip Best", "ใส่ตัวดีสุดอัตโนมัติ"), T("Keeps your top animals placed on your plot", "วางสัตว์ตัวที่ดีที่สุดบนพื้นที่เสมอ"))
+        NowButton(placeBox, T("Equip Best Now", "ใส่ตัวดีสุดเดี๋ยวนี้"), "EquipBestNow", "AutoEquipBest")
     end
 
-    local function BuildProgress(window)
+    local function BuildUpgrade(window)
         window:AddTabSection(T("Progress", "ความคืบหน้า"))
-        local progressTab = window:AddTab(T("Upgrade", "อัปเกรด"), "sliders-horizontal", T("Upgrades, rebirth and rewards", "อัปเกรด รีเบิร์ธ และรางวัล"))
+        local tab = window:AddTab(T("Upgrade", "อัปเกรด"), "sliders-horizontal", T("Upgrades, rebirth and potions", "อัปเกรด รีเบิร์ธ และยา"))
 
-        local upgradeBox = progressTab:AddLeftGroupbox(T("Upgrades", "อัปเกรด"))
-        Feature(upgradeBox, "AutoUpgrade", T("Auto Upgrade", "อัปเกรดอัตโนมัติ"), T("Buys the selected upgrades whenever you can afford them", "ซื้ออัปเกรดที่เลือกทุกครั้งที่เงินพอ"))
-        upgradeBox:AddButton({ Text = T("Upgrade Now", "อัปเกรดเดี๋ยวนี้"), Style = "Primary", Func = Request("UpgradeNow", "AutoUpgrade") })
-        upgradeDrop = MultiSelect(upgradeBox, "UpgradePick", T("Upgrades", "อัปเกรด"), T("Carry lets you bring back more items per wave", "Carry ทำให้ขนของกลับได้มากขึ้นต่อคลื่น"), table.clone(State.UpgradeNames), table.clone(State.UpgradeNames))
-        opt.UpgradePick = {}
+        local upgradeBox = tab:AddLeftGroupbox(T("Upgrades", "อัปเกรด"))
+        Toggle(upgradeBox, "AutoUpgrade", T("Auto Upgrade", "อัปเกรดอัตโนมัติ"), T("Buys the selected upgrades when you can afford them", "ซื้ออัปเกรดที่เลือกทุกครั้งที่เงินพอ"))
+        NowButton(upgradeBox, T("Upgrade Now", "อัปเกรดเดี๋ยวนี้"), "UpgradeNow", "AutoUpgrade")
+        widgets.Upgrades = MultiSelect(upgradeBox, "UpgradePick", T("Upgrades", "อัปเกรด"), T("Carry brings back more items per wave", "Carry ทำให้ขนของกลับได้มากขึ้นต่อคลื่น"), table.clone(State.UpgradeNames), table.clone(State.UpgradeNames))
         for _, name in ipairs(State.UpgradeNames) do opt.UpgradePick[name] = true end
         upgradeBox:AddInput("CashReserve", {
             Text = T("Keep Cash", "กันเงินไว้"),
@@ -1185,21 +1501,39 @@ local function BuildInterface()
             Finished = true,
             Callback = function(value) opt.CashReserve = math.max(0, tonumber(value) or 0) end,
         })
+        upgradeBox:AddButton({ Text = T("Unlimited Carry", "ขนของไม่จำกัด"), Risky = true, Func = Request("UnlockCarry", "AutoUpgrade") })
 
-        local trainBox = progressTab:AddLeftGroupbox(T("Power", "พลัง"))
-        Feature(trainBox, "AutoTrain", T("Auto Train", "ฝึกอัตโนมัติ"), T("Gains power anywhere. More power reaches rarer eggs further out at sea", "เพิ่มพลังได้ทุกที่ พลังยิ่งเยอะยิ่งเอื้อมถึงไข่หายากที่อยู่ไกล"), function(value)
+        local rebirthBox = tab:AddRightGroupbox(T("Rebirth", "รีเบิร์ธ"))
+        Toggle(rebirthBox, "AutoRebirth", T("Auto Rebirth", "รีเบิร์ธอัตโนมัติ"), T("Rebirths as soon as you meet the requirement", "รีเบิร์ธทันทีเมื่อครบเงื่อนไข"))
+        NowButton(rebirthBox, T("Rebirth Now", "รีเบิร์ธเดี๋ยวนี้"), "RebirthNow", "AutoRebirth")
+
+        local potionBox = tab:AddRightGroupbox(T("Potions", "ยา"))
+        Toggle(potionBox, "AutoPotion", T("Auto Potion", "ใช้ยาอัตโนมัติ"), T("Drinks the selected potions you own when they run out", "ดื่มยาที่เลือกเมื่อหมดเวลา ใช้ของที่มีอยู่"))
+        NowButton(potionBox, T("Use Potions Now", "ใช้ยาเดี๋ยวนี้"), "PotionNow", "AutoPotion")
+        MultiSelect(potionBox, "PotionPick", T("Potions", "ยา"), nil, xDTaraZ.Util.PotionNames())
+    end
+
+    local function BuildGear(window)
+        local tab = window:AddTab(T("Gear", "อุปกรณ์"), "zap", T("Power, dumbbells and pickaxes", "พลัง ดัมเบลล์ และพลั่ว"))
+
+        local powerBox = tab:AddLeftGroupbox(T("Power", "พลัง"))
+        Toggle(powerBox, "AutoTrain", T("Auto Train", "ฝึกอัตโนมัติ"), T("Gains power anywhere, more power reaches further out", "เพิ่มพลังได้ทุกที่ พลังยิ่งเยอะยิ่งเอื้อมได้ไกล"), function(value)
             if not value and State.Trained then State.Requests.StopTrain = true end
         end)
-        Feature(trainBox, "AutoBuyTool", T("Auto Buy Best Dumbbell", "ซื้อดัมเบลล์ดีสุดอัตโนมัติ"), T("Buys and equips the strongest dumbbell you can afford", "ซื้อและใส่ดัมเบลล์ที่แรงที่สุดที่ซื้อไหว"))
-        trainBox:AddButton({ Text = T("Buy Best Dumbbell Now", "ซื้อดัมเบลล์ดีสุดเดี๋ยวนี้"), Func = Request("ToolNow", "AutoBuyTool") })
+        Toggle(powerBox, "AutoBuyTool", T("Auto Dumbbell", "ดัมเบลล์อัตโนมัติ"), T("Buys and equips the strongest dumbbell you can get", "ซื้อและใส่ดัมเบลล์ที่แรงที่สุดที่ได้"))
+        NowButton(powerBox, T("Dumbbell Now", "ดัมเบลล์เดี๋ยวนี้"), "ToolNow", "AutoBuyTool")
 
-        local rebirthBox = progressTab:AddRightGroupbox(T("Rebirth", "รีเบิร์ธ"))
-        Feature(rebirthBox, "AutoRebirth", T("Auto Rebirth", "รีเบิร์ธอัตโนมัติ"), T("Rebirths as soon as you meet the requirement", "รีเบิร์ธทันทีเมื่อครบเงื่อนไข"))
-        rebirthBox:AddButton({ Text = T("Rebirth Now", "รีเบิร์ธเดี๋ยวนี้"), Func = Request("RebirthNow", "AutoRebirth") })
+        local pickBox = tab:AddRightGroupbox(T("Pickaxe", "พลั่ว"))
+        Toggle(pickBox, "AutoPickaxe", T("Auto Pickaxe", "พลั่วอัตโนมัติ"), T("Buys and equips the luckiest pickaxe you can get", "ซื้อและใส่พลั่วที่โชคดีที่สุดที่ได้"))
+        NowButton(pickBox, T("Pickaxe Now", "พลั่วเดี๋ยวนี้"), "PickaxeNow", "AutoPickaxe")
+    end
 
-        local claimBox = progressTab:AddRightGroupbox(T("Rewards", "รางวัล"))
-        Feature(claimBox, "AutoClaim", T("Auto Claim", "รับรางวัลอัตโนมัติ"), T("Daily, playtime, spins, free shop, packs and offline cash", "รายวัน เวลาเล่น วงล้อ ร้านฟรี แพ็ก และเงินตอนออฟไลน์"))
-        claimBox:AddButton({ Text = T("Claim All Now", "รับทั้งหมดเดี๋ยวนี้"), Func = Request("ClaimNow", "AutoClaim") })
+    local function BuildRewards(window)
+        local tab = window:AddTab(T("Rewards", "รางวัล"), "shop", T("Rewards, codes and events", "รางวัล โค้ด และอีเวนต์"))
+
+        local claimBox = tab:AddLeftGroupbox(T("Rewards", "รางวัล"))
+        Toggle(claimBox, "AutoClaim", T("Auto Claim", "รับรางวัลอัตโนมัติ"), T("Daily, playtime, free shop, packs and offline cash", "รายวัน เวลาเล่น ร้านฟรี แพ็ก และเงินตอนออฟไลน์"))
+        NowButton(claimBox, T("Claim All Now", "รับทั้งหมดเดี๋ยวนี้"), "ClaimNow", "AutoClaim")
         claimBox:AddButton({ Text = T("Redeem All Codes", "ใช้โค้ดทั้งหมด"), Func = Request("RedeemAll", "AutoClaim") })
         claimBox:AddInput("CodeBox", {
             Text = T("Redeem Codes", "ใส่โค้ด"),
@@ -1209,17 +1543,27 @@ local function BuildInterface()
             Finished = true,
             Callback = function(value)
                 opt.CodeInput = value
-                State.Requests.RedeemInput = true
+                if value ~= "" then State.Requests.RedeemInput = true end
             end,
         })
+
+        local spinBox = tab:AddRightGroupbox(T("Wheel and Pass", "วงล้อและพาส"))
+        Toggle(spinBox, "AutoSpin", T("Auto Spin", "หมุนวงล้ออัตโนมัติ"), T("Spins the wheel whenever you have tickets", "หมุนวงล้อทุกครั้งที่มีตั๋ว"))
+        NowButton(spinBox, T("Spin Now", "หมุนเดี๋ยวนี้"), "SpinNow", "AutoSpin")
+        Toggle(spinBox, "AutoPass", T("Auto Season Pass", "รับรางวัลพาสอัตโนมัติ"), T("Claims every free pass reward you reached", "รับรางวัลพาสฟรีทุกขั้นที่ถึงแล้ว"))
+        NowButton(spinBox, T("Claim Pass Now", "รับพาสเดี๋ยวนี้"), "PassNow", "AutoPass")
+
+        local eventBox = tab:AddRightGroupbox(T("Event", "อีเวนต์"))
+        Toggle(eventBox, "AutoPickups", T("Auto Event Pickups", "เก็บของอีเวนต์อัตโนมัติ"), T("Grabs event items around the map, then returns", "เก็บของอีเวนต์รอบแมพแล้วกลับที่เดิม"), nil, true)
+        NowButton(eventBox, T("Pick Up Now", "เก็บเดี๋ยวนี้"), "PickupNow")
     end
 
     local function BuildPlayer(window)
         window:AddTabSection(T("Other", "อื่นๆ"))
-        local playerTab = window:AddTab(T("Player", "ผู้เล่น"), "user", T("Movement", "การเคลื่อนที่"))
+        local tab = window:AddTab(T("Player", "ผู้เล่น"), "user", T("Movement and visuals", "การเคลื่อนที่และภาพ"))
 
-        local moveBox = playerTab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"))
-        Feature(moveBox, "Speed", T("Speed", "ความเร็ว"), nil, function(value)
+        local moveBox = tab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"))
+        Live(moveBox, "Speed", T("Speed", "ความเร็ว"), nil, function(value)
             State.SpeedPinned = false
             if not value then State.Requests.ResetSpeed = true end
         end)
@@ -1231,35 +1575,57 @@ local function BuildInterface()
             Rounding = 0,
             Callback = function(value) opt.SpeedValue = tonumber(value) or opt.SpeedValue end,
         })
+        Live(moveBox, "InfJump", T("Infinite Jump", "กระโดดไม่จำกัด"))
 
-        local bodyBox = playerTab:AddRightGroupbox(T("Jump and Noclip", "กระโดดและทะลุวัตถุ"))
-        Feature(bodyBox, "InfJump", T("Infinite Jump", "กระโดดไม่จำกัด"))
-        Feature(bodyBox, "Noclip", T("Noclip", "ทะลุวัตถุ"), nil, function(value)
+        local bodyBox = tab:AddRightGroupbox(T("Body and World", "ตัวละครและโลก"))
+        Live(bodyBox, "Noclip", T("Noclip", "ทะลุวัตถุ"), nil, function(value)
             if not value then xDTaraZ.Movement.RestoreCollision() end
+        end)
+        Toggle(bodyBox, "Fullbright", T("Fullbright", "สว่างทั้งแมพ"), nil, function(value)
+            if not value then State.Requests.RestoreLighting = true end
         end)
     end
 
-    local function BuildSettings(window)
-        local settingsTab = window:AddSettingsTab()
-        local sessionBox = settingsTab:AddRightGroupbox(T("Session", "เซสชัน"))
-        Toggle(sessionBox, "AntiAfk", T("Anti AFK", "กันหลุด AFK"), T("Stay in the server while idle", "อยู่ในเซิร์ฟต่อได้แม้ไม่ได้ขยับ"))
-        sessionBox:AddButton({ Text = T("Rejoin", "เข้าเซิร์ฟเดิมใหม่"), Func = function()
-            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
-        end })
+    local function BuildTeleport(window)
+        local tab = window:AddTab(T("Teleport", "วาร์ป"), "teleport", T("Places and players", "สถานที่และผู้เล่น"))
+
+        local placeBox = tab:AddLeftGroupbox(T("Places", "สถานที่"))
+        placeBox:AddButton({ Text = T("My Base", "ฐานของฉัน"), Style = "Primary", Func = Request("ToBase", "AutoClaim") })
+        placeBox:AddButton({ Text = T("Shop", "ร้านค้า"), Func = Request("ToShop", "AutoClaim") })
+
+        local playerBox = tab:AddRightGroupbox(T("Players", "ผู้เล่น"))
+        widgets.Players = playerBox:AddDropdown("TeleportTarget", {
+            Text = T("Player", "ผู้เล่น"),
+            Values = xDTaraZ.World.PlayerNames(),
+            Searchable = true,
+            Callback = function(value) opt.TeleportTarget = value end,
+        })
+        playerBox:AddButton({ Text = T("Teleport", "วาร์ป"), Style = "Primary", Func = Request("ToPlayer") })
+            :AddButton({ Text = T("Refresh", "รีเฟรช"), Func = function()
+                widgets.Players:SetValues(xDTaraZ.World.PlayerNames())
+            end })
     end
 
-    ---Features whose game module did not load refuse to turn on instead of erroring every tick.
+    local function BuildSettings(window)
+        local tab = window:AddSettingsTab()
+        local sessionBox = tab:AddRightGroupbox(T("Session", "เซสชัน"))
+        Toggle(sessionBox, "AntiAfk", T("Anti AFK", "กันหลุด AFK"), T("Stay in the server while idle", "อยู่ในเซิร์ฟต่อได้แม้ไม่ได้ขยับ"))
+        sessionBox:AddButton({ Text = T("Rejoin", "เข้าเซิร์ฟเดิมใหม่"), Func = function() xDTaraZ.Util.Try(xDTaraZ.World.Rejoin) end })
+        sessionBox:AddButton({ Text = T("Server Hop", "ย้ายเซิร์ฟ"), Func = Request("Hop") })
+    end
+
+    ---Features whose game module or remote is gone refuse to turn on instead of erroring every tick.
     local function GateModules()
         for idx in pairs(GameLib.Needs) do
+            if not Options[idx] then continue end
             local missing = GameLib.Missing(idx)
-            if missing and Options[idx] then
+            if missing then
                 warn("[OpenSea] " .. idx .. " disabled, module missing: " .. missing)
                 Library.Compat.Block(idx, T("Not available on this executor", "ใช้กับ executor นี้ไม่ได้"))
                 continue
             end
-
             local gone = GameLib.MissingRemote(idx)
-            if gone and Options[idx] then
+            if gone then
                 warn("[OpenSea] " .. idx .. " disabled, remote missing: " .. gone)
                 Library.Compat.Block(idx, T("The game changed, waiting for a script update", "เกมอัปเดต รอสคริปต์อัปเดต"))
             end
@@ -1268,7 +1634,16 @@ local function BuildInterface()
         if not GameLib.Knit then State.Summary = "Game data is not available on this executor" end
     end
 
-    local function Pump(statusLabel)
+    local function RefreshUpgrades()
+        local drop = widgets.Upgrades
+        if not State.UpgradesChanged or not drop then return end
+        State.UpgradesChanged = false
+        local picked = table.clone(drop.Value or {})
+        drop:SetValues(table.clone(State.UpgradeNames))
+        drop:SetValue(picked)
+    end
+
+    local function Pump()
         while #State.Messages > 0 do
             local message = table.remove(State.Messages, 1)
             Notify(message.Text, message.Kind)
@@ -1279,29 +1654,24 @@ local function BuildInterface()
             if toggle and toggle.Value then toggle:SetValue(false) end
         end
 
-        if statusLabel then statusLabel:SetText(State.Summary) end
-        if State.UpgradesChanged and upgradeDrop then
-            State.UpgradesChanged = false
-            local picked = table.clone(upgradeDrop.Value or {})
-            for _, name in ipairs(State.UpgradeNames) do
-                if picked[name] == nil and not table.find(upgradeDrop.Values, name) then picked[name] = true end
-            end
-            upgradeDrop:SetValues(table.clone(State.UpgradeNames))
-            upgradeDrop:SetValue(picked)
-        end
+        if widgets.Status then widgets.Status:SetText(State.Summary) end
+        RefreshUpgrades()
     end
 
     local function BuildTabs()
         local window = Library.Window
         local try = xDTaraZ.Util.Try
-        local _, statusLabel = try(BuildMain, window)
-        try(BuildSell, window)
-        try(BuildProgress, window)
+        try(BuildMain, window)
+        try(BuildAnimals, window)
+        try(BuildUpgrade, window)
+        try(BuildGear, window)
+        try(BuildRewards, window)
         try(BuildPlayer, window)
+        try(BuildTeleport, window)
         try(BuildSettings, window)
         try(GateModules)
 
-        Library:Every(1, function() Pump(statusLabel) end)
+        Library:Every(1, Pump)
     end
 
     Library:OnUnload(xDTaraZ.Scheduler.Stop)
