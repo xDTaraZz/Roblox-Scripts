@@ -90,6 +90,7 @@ xDTaraZ.Config = {
     VolcanoStandLift = 3,
     VolcanoRetry = 30,
     VolcanoDipSettle = 0.7,
+    VolcanoTpTries = 4,
     VolcanoRefire = 0.3,
     VolcanoTailEggs = 1,
     VolcanoClaimSec = 2,
@@ -197,7 +198,7 @@ xDTaraZ.Config = {
     KaitunSteerEvery = 60,
 
     UpdateLog = {
-        { "2026-10-05", "Auto Feed is about 5x faster\nFixed Auto Place Eggs saying the plot is full when it is not\nFixed Volcano Dip and Auto Volcano Egg doing nothing unless Auto Eggs was on\nA returned egg no longer stops the whole farm, it slows delivery and keeps going\nAuto Reconnect after a disconnect\nWeather alerts now name the storm type\nScript rebuilt from scratch for the new game update\nEggs reach your base every time, no more returned eggs\nMuch less lag while farming with a big inventory\nClear Junk Eggs: hatch cheap eggs and sell the pets\nMinimum Egg Rarity to farm rare eggs only\nFixed Auto Place Best Pets swapping out good pets\nPerformance: Boost FPS, hide other pets and eggs, FPS cap, disable 3D\nFixed the inventory bar not coming back after farming\nRemoved the Stop All button" },
+        { "2026-10-05", "Teleport To Best Egg is back (Home tab)\nFixed Volcano Dip sometimes not reaching the volcano after picking up an egg\nAuto Feed is about 5x faster\nFixed Auto Place Eggs saying the plot is full when it is not\nFixed Volcano Dip and Auto Volcano Egg doing nothing unless Auto Eggs was on\nA returned egg no longer stops the whole farm, it slows delivery and keeps going\nAuto Reconnect after a disconnect\nWeather alerts now name the storm type\nScript rebuilt from scratch for the new game update\nEggs reach your base every time, no more returned eggs\nMuch less lag while farming with a big inventory\nClear Junk Eggs: hatch cheap eggs and sell the pets\nMinimum Egg Rarity to farm rare eggs only\nFixed Auto Place Best Pets swapping out good pets\nPerformance: Boost FPS, hide other pets and eggs, FPS cap, disable 3D\nFixed the inventory bar not coming back after farming\nRemoved the Stop All button" },
         { "2026-10-04", "Rebuilt egg collecting: faster trips and no more returned eggs\nRide pet picker, rare egg hunter and plant order\nPet protect list, safer selling and smarter spending\nClear Junk Eggs now sells what it hatches, and Minimum Egg Rarity skips cheap eggs" },
     },
 }
@@ -2843,9 +2844,15 @@ function xDTaraZ.Volcano.Dip(token)
 
     local top = xDTaraZ.Volcano.Part("VolcanoTop")
     if not top then return false end
-    xDTaraZ.Tasks.Teleport(token, CFrame.new(top.Position + Vector3.yAxis * (tonumber(info.HoverHeight) or 0)))
-    if not xDTaraZ.Volcano.Sleep(token, xDTaraZ.Config.VolcanoDipSettle) then return false end
-    if not xDTaraZ.Volcano.IsOver(top) then return false end
+    local hover = CFrame.new(top.Position + Vector3.yAxis * (tonumber(info.HoverHeight) or 0))
+    local over = false
+    for _ = 1, xDTaraZ.Config.VolcanoTpTries do
+        if not xDTaraZ.Tasks.Teleport(token, hover) then return false end
+        if not xDTaraZ.Volcano.Sleep(token, xDTaraZ.Config.VolcanoDipSettle) then return false end
+        over = xDTaraZ.Volcano.IsOver(top)
+        if over then break end
+    end
+    if not over then return false end
 
     xDTaraZ.Volcano.SetStatus("Dipping egg")
     local reply = xDTaraZ.Volcano.FireUntilReply(token, remote)
@@ -6051,6 +6058,21 @@ function xDTaraZ.Teleport.Home()
     return xDTaraZ.Teleport.To("My Plot")
 end
 
+function xDTaraZ.Teleport.BestEgg()
+    local best, bestScore = nil, -math.huge
+    for _, entry in pairs(xDTaraZ.EggIndex.Entries) do
+        if entry.privateTo and not IsOurs(entry.privateTo) then continue end
+        local score = xDTaraZ.Planner.Score(entry)
+        if score > bestScore then best, bestScore = entry, score end
+    end
+    if not best then
+        xDTaraZ.Util.Notify("Teleport", "No egg on the map right now")
+        return false
+    end
+    xDTaraZ.Util.Notify("Teleport", best.egg .. (best.mutation and (" (" .. tostring(best.mutation) .. ")") or ""))
+    return xDTaraZ.Teleport.Go(CFrame.new(best.pos + Vector3.new(0, Config.StandLift, 0)))
+end
+
 xDTaraZ.Move = { Saved = {}, Patched = {}, Parts = {}, PartsOf = nil, Conns = {}, Floats = {}, FlyWarned = false }
 
 ---@param idx string   option id
@@ -7619,6 +7641,7 @@ function xDTaraZ.UI.Home(window)
     local quick = tab:AddLeftGroupbox(T("Quick", "ด่วน"), "bomb")
     quick:AddButton({ Text = T("Collect Eggs Now", "เก็บไข่เดี๋ยวนี้"), Style = "Primary", Func = xDTaraZ.UI.Detach("collect now", xDTaraZ.Eggs.CollectNow) })
     quick:AddButton({ Text = T("Return Home", "กลับบ้าน"), Func = xDTaraZ.UI.Detach("return home", xDTaraZ.Teleport.Home) })
+        :AddButton({ Text = T("Teleport To Best Egg", "วาร์ปไปไข่ดีสุด"), Func = xDTaraZ.UI.Detach("best egg", xDTaraZ.Teleport.BestEgg) })
 
     local kaitun = tab:AddLeftGroupbox(T("Kaitun", "ไก่ตัน"), "star")
     xDTaraZ.UI.Toggle(kaitun, "Kaitun", {
