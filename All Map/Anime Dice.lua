@@ -153,6 +153,7 @@ xDTaraZ.Config = {
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
+        { "2026-10-05", "Added Rebirth Stats: auto spend points on the stat you pick\nAdded Reset Stats with Reset Token\nAdded auto use of gamepass items" },
         { "2026-10-03", "Classic Mario Hub UI is back\nBetter executor support\nAuto Roll stops at full storage\nFixed Group Reward\nImproved Fast Roll" },
     },
     ReloadSource = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/loader.lua"))()',
@@ -179,6 +180,7 @@ xDTaraZ.Config = {
     TowerRetry = 0.5,
     TowerStartCooldown = 3.2,
     ItemDelay = 0.6,
+    StatDelay = 0.12,
     RewardsInterval = 5,
     SnapshotTtl = 0.4,
     StorageHeadroom = 6,
@@ -247,6 +249,8 @@ xDTaraZ.Options = {
     UpgradePayback = 1800,
 
     AutoRebirth = false,
+    AutoRebirthStats = false,
+    RebirthStat = "Money",
 
     AutoGrade = false,
     GradeTarget = "S",
@@ -267,6 +271,7 @@ xDTaraZ.Options = {
     AutoPotion = false,
     PotionFilter = {},
     AutoSpin = false,
+    AutoGamepass = false,
     AutoTicketShop = false,
     TicketShopItems = {},
 
@@ -469,6 +474,7 @@ do
     GameLib.Buffs = Load("Buffs.BuffController")
     GameLib.BuffsConfig = Load("Buffs.BuffsConfig")
     GameLib.FusingConfig = Load("Fusing.FusingConfig")
+    GameLib.RebirthStats = Load("Rebirth.RebirthStatsConfig")
 
     local rewards = GameLib.Find(features, "Rewards")
     GameLib.Daily = GameLib.Require(rewards and rewards:FindFirstChild("DailyRewardConfig", true))
@@ -519,6 +525,14 @@ function GameLib.NamesOfKind(kind)
         for name in pairs(entries) do names[#names + 1] = tostring(name) end
     end
     table.sort(names)
+    return names
+end
+
+function GameLib.RebirthStatNames()
+    local names = {}
+    local config = GameLib.RebirthStats
+    if not (config and type(config.Stats) == "table") then return names end
+    for _, stat in ipairs(config.Stats) do names[#names + 1] = tostring(stat.name) end
     return names
 end
 
@@ -1256,6 +1270,7 @@ function xDTaraZ.Economy.Step()
     local options = xDTaraZ.Options
     if options.AutoBuyDice or options.AutoEquipBestDice then xDTaraZ.Dice.Step() end
     if options.AutoRebirth then xDTaraZ.Rebirth.RebirthNow() end
+    if options.AutoRebirthStats then xDTaraZ.Rebirth.SpendPoints() end
     if options.AutoBuyUpgrades then xDTaraZ.Upgrade.BuyAll() end
     if options.AutoLevelUp then xDTaraZ.Plot.LevelPass() end
 end
@@ -1568,6 +1583,40 @@ function xDTaraZ.Rebirth.RebirthNow()
     return true
 end
 
+function xDTaraZ.Rebirth.PointsLeft()
+    local config = GameLib.RebirthStats
+    if not config then return 0 end
+    local ok, left = pcall(config.GetRemaining, xDTaraZ.Data.Rebirth(), xDTaraZ.Data.Table("RebirthStats"))
+    return ok and tonumber(left) or 0
+end
+
+---@return number  points spent
+function xDTaraZ.Rebirth.SpendPoints()
+    local stat = xDTaraZ.Options.RebirthStat
+    local spent = 0
+    while xDTaraZ.Rebirth.PointsLeft() > 0 and spent < 200 do
+        local before = xDTaraZ.Rebirth.PointsLeft()
+        xDTaraZ.Net.Fire("RebirthService.RE.AddStat", stat)
+        task.wait(xDTaraZ.Config.StatDelay)
+        if xDTaraZ.Rebirth.PointsLeft() >= before then
+            task.wait(xDTaraZ.Config.StatDelay * 3)
+            if xDTaraZ.Rebirth.PointsLeft() >= before then break end
+        end
+        spent += 1
+    end
+    return spent
+end
+
+---@return boolean, string?  false and why when the reset can't run
+function xDTaraZ.Rebirth.ResetStats()
+    local config = GameLib.RebirthStats
+    if not config then return false, "Stats not found" end
+    if config.GetSpent(xDTaraZ.Data.Table("RebirthStats")) <= 0 then return false, "No points spent" end
+    if xDTaraZ.Data.Token("Reset Token") < 1 then return false, "No Reset Token" end
+    xDTaraZ.Net.Fire("RebirthService.RE.UseResetToken")
+    return true
+end
+
 xDTaraZ.Grade = { Status = "Off" }
 
 ---@return table?  next unit that should be rerolled toward the target
@@ -1872,6 +1921,20 @@ function xDTaraZ.Items.UseSpins()
     return used
 end
 
+---@return number  gamepass items redeemed
+function xDTaraZ.Items.UseGamepasses()
+    local owned = xDTaraZ.Data.Table("OwnedGamepasses")
+    local used = 0
+    for _, item in ipairs(xDTaraZ.Data.ItemsOfKind("Gamepass")) do
+        local config = GameLib.EntryOf(item.Name)
+        if config and config.gamepass and owned[config.gamepass] then continue end
+        xDTaraZ.Net.Fire("GamepassService.RE.Use", item.Key)
+        used += 1
+        task.wait(xDTaraZ.Config.ItemDelay)
+    end
+    return used
+end
+
 ---@return number  ticket shop purchases made
 function xDTaraZ.Items.BuyTicketShop()
     local wanted = Util.SetFromList(xDTaraZ.Options.TicketShopItems)
@@ -1895,6 +1958,7 @@ end
 function xDTaraZ.Items.Step()
     if xDTaraZ.Options.AutoPotion then xDTaraZ.Items.UsePotions() end
     if xDTaraZ.Options.AutoSpin then xDTaraZ.Items.UseSpins() end
+    if xDTaraZ.Options.AutoGamepass then xDTaraZ.Items.UseGamepasses() end
     if xDTaraZ.Options.AutoTicketShop then xDTaraZ.Items.BuyTicketShop() end
 end
 
@@ -2076,8 +2140,8 @@ end
 
 xDTaraZ.Kaitun = { Status = "Off", Members = {
     "AntiAfk", "AutoRejoin", "RareNotify", "AutoLock", "TowerSmart", "AutoFuse", "DisableCutscene", "AutoRoll", "AutoCollect", "EquipBestUnitsAuto", "AutoLevelUp",
-    "AutoBuyDice", "AutoEquipBestDice", "AutoBuyUpgrades", "AutoSell", "AutoRebirth", "AutoGrade",
-    "AutoTrait", "AutoTower", "AutoPotion", "AutoSpin", "AutoTicketShop", "AutoDaily", "AutoGroup",
+    "AutoBuyDice", "AutoEquipBestDice", "AutoBuyUpgrades", "AutoSell", "AutoRebirth", "AutoRebirthStats", "AutoGrade",
+    "AutoTrait", "AutoTower", "AutoPotion", "AutoSpin", "AutoGamepass", "AutoTicketShop", "AutoDaily", "AutoGroup",
     "AutoOffline", "AutoQuest", "AutoGear", "AutoClearStorage",
 } }
 
@@ -2190,6 +2254,8 @@ xDTaraZ.UI.Needs = {
     AutoEquipBestDice = { "DataClient", "Dice" },
     AutoBuyUpgrades = { "DataClient", "Upgrades", "Tree", "Buffs", "BuffsConfig" },
     AutoRebirth = { "DataClient", "Rebirths" },
+    AutoRebirthStats = { "DataClient", "RebirthStats" },
+    AutoGamepass = { "DataClient", "Entry" },
     AutoGrade = { "DataClient", "Entry", "Grades" },
     AutoTrait = { "DataClient", "Entry", "Traits" },
     AutoFuse = { "DataClient", "Entry", "FusingConfig" },
@@ -2217,6 +2283,8 @@ xDTaraZ.UI.Remotes = {
     AutoEquipBestDice = { "DiceShopService.RE.EquipDice" },
     AutoBuyUpgrades = { "RE.BuyUpgrade" },
     AutoRebirth = { "RebirthService.RE.Rebirth" },
+    AutoRebirthStats = { "RebirthService.RE.AddStat" },
+    AutoGamepass = { "GamepassService.RE.Use" },
     AutoGrade = { "GradeService.RE.Roll" },
     AutoTrait = { "TraitService.RE.Roll" },
     AutoFuse = { "FusingService.RE.Fuse" },
@@ -2286,12 +2354,6 @@ function xDTaraZ.UI.DrainNotices()
     end
 end
 
-function xDTaraZ.UI.Panic()
-    for _, toggle in pairs(Library.Toggles) do
-        if toggle.Value == true then toggle:SetValue(false) end
-    end
-end
-
 function xDTaraZ.UI.BuildMain(window)
     local tab = window:AddTab(T("Home", "หน้าแรก"), "mushroom", T("Status and full auto", "สถานะและโหมดอัตโนมัติ"))
 
@@ -2325,9 +2387,8 @@ function xDTaraZ.UI.BuildMain(window)
         Text = T("Kaitun (full auto)", "ไคตุน (อัตโนมัติทั้งหมด)"),
         Description = T("Rolls, levels, upgrades, grades, climbs towers and rebirths on its own", "ทอย อัปเลเวล อัปเกรด รีเกรด ไต่หอคอย และรีเบิร์ธเองทั้งหมด"),
         Callback = xDTaraZ.UI.StartStop(xDTaraZ.Kaitun),
-    }):AddKeyPicker("KaitunKey", { Default = "None", Mode = "Toggle" })
+    })
     xDTaraZ.UI.Labels.Kaitun = master:AddParagraph({ Title = T("Progress", "ความคืบหน้า"), Content = "-" })
-    master:AddButton({ Text = T("Panic - all off", "ฉุกเฉิน ปิดทั้งหมด"), Style = "Danger", Func = xDTaraZ.UI.Detach(xDTaraZ.UI.Panic) })
 end
 
 function xDTaraZ.UI.BuildFarm(window)
@@ -2336,7 +2397,6 @@ function xDTaraZ.UI.BuildFarm(window)
 
     local roll = tab:AddLeftGroupbox(T("Rolling", "การทอย"), "star")
     roll:AddToggle("AutoRoll", { Text = T("Fast roll", "ทอยเร็ว"), Description = T("Rolls non-stop with no roll animation", "ทอยต่อเนื่องไม่มีแอนิเมชัน") })
-        :AddKeyPicker("AutoRollKey", { Default = "None", Mode = "Toggle" })
     roll:AddSlider("RollInterval", { Text = T("Roll interval", "ความถี่ทอย"), Min = 0.02, Max = 0.5, Default = 0.02, Rounding = 2, Suffix = "s" })
     roll:AddButton({ Text = T("Roll Once", "ทอย 1 ครั้ง"), Func = xDTaraZ.UI.Detach(function() xDTaraZ.Roll.Once() end) })
     roll:AddButton({ Text = T("Reset roll counter", "รีเซ็ตตัวนับการทอย"), Func = xDTaraZ.UI.Detach(xDTaraZ.Roll.ResetCounter) })
@@ -2405,6 +2465,17 @@ function xDTaraZ.UI.BuildEconomy(window)
         xDTaraZ.Rebirth.RebirthNow()
         xDTaraZ.UI.Notify(T("Rebirth", "รีเบิร์ธ"), xDTaraZ.Rebirth.Status)
     end) })
+
+    local statNames = xDTaraZ.UI.Values(GameLib.RebirthStatNames)
+    local stats = tab:AddLeftGroupbox(T("Rebirth Stats", "สเตตัสรีเบิร์ธ"), "oneup")
+    stats:AddToggle("AutoRebirthStats", { Text = T("Auto spend points", "ลงแต้มอัตโนมัติ"), Description = T("Puts every new rebirth point into the stat below", "ลงแต้มรีเบิร์ธใหม่ทุกแต้มที่สเตตัสด้านล่าง") })
+    stats:AddDropdown("RebirthStat", { Text = T("Stat", "สเตตัส"), Values = statNames, Default = xDTaraZ.UI.Prefer(statNames, "Money", 1) })
+    stats:AddButton({ Text = T("Spend Points Now", "ลงแต้มตอนนี้"), Func = xDTaraZ.UI.Detach(function()
+        xDTaraZ.UI.Notify(T("Rebirth Stats", "สเตตัสรีเบิร์ธ"), xDTaraZ.Rebirth.SpendPoints() .. " points spent")
+    end) }):AddButton({ Text = T("Reset Stats", "รีเซ็ตสเตตัส"), Func = xDTaraZ.UI.Detach(function()
+        local ok, why = xDTaraZ.Rebirth.ResetStats()
+        xDTaraZ.UI.Notify(T("Rebirth Stats", "สเตตัสรีเบิร์ธ"), ok and "Reset Token used" or why)
+    end) })
 end
 
 function xDTaraZ.UI.BuildUnits(window)
@@ -2447,7 +2518,6 @@ function xDTaraZ.UI.BuildTower(window)
 
     local group = tab:AddLeftGroupbox(T("Auto Tower", "ไต่หอคอยอัตโนมัติ"), "castle")
     group:AddToggle("AutoTower", { Text = T("Auto tower", "ไต่หอคอยอัตโนมัติ"), Description = T("Climbs, restarts after each run and keeps going", "ไต่ จบรอบแล้วเริ่มใหม่ต่อเนื่อง") })
-        :AddKeyPicker("AutoTowerKey", { Default = "None", Mode = "Toggle" })
     local labels = xDTaraZ.UI.Values(xDTaraZ.Tower.Labels)
     group:AddDropdown("TowerDifficulty", {
         Text = T("Difficulty", "ความยาก"),
@@ -2479,6 +2549,7 @@ function xDTaraZ.UI.BuildItems(window)
     spin:AddButton({ Text = T("Use Spins Now", "ใช้สปินตอนนี้"), Func = xDTaraZ.UI.Detach(function()
         xDTaraZ.UI.Notify(T("Spins", "สปิน"), xDTaraZ.Items.UseSpins() .. " used")
     end) })
+    spin:AddToggle("AutoGamepass", { Text = T("Auto use gamepass items", "ใช้ไอเทมเกมพาสอัตโนมัติ"), Description = T("Unlocks gamepasses you got from codes and rewards", "ปลดล็อกเกมพาสที่ได้จากโค้ดและรางวัล") })
 
     local shop = tab:AddRightGroupbox(T("Ticket Shop", "ร้านตั๋ว"), "shop")
     shop:AddToggle("AutoTicketShop", { Text = T("Auto buy with tickets", "ซื้อด้วยตั๋วอัตโนมัติ"), Description = T("Spends quest tickets on what you pick", "ใช้ตั๋วเควสต์ซื้อของที่เลือก") })
@@ -2648,14 +2719,14 @@ function xDTaraZ.Boot()
     every("Roll", function() return options.RollInterval end, xDTaraZ.Roll.Step, { "AutoRoll" })
     every("Collect", function() return options.CollectInterval end, xDTaraZ.Plot.CollectStep, { "AutoCollect" })
     every("Equip", function() return options.EquipInterval end, xDTaraZ.Plot.EquipStep, { "EquipBestUnitsAuto" })
-    every("Economy", 1, xDTaraZ.Economy.Step, { "AutoBuyDice", "AutoEquipBestDice", "AutoRebirth", "AutoBuyUpgrades", "AutoLevelUp" })
+    every("Economy", 1, xDTaraZ.Economy.Step, { "AutoBuyDice", "AutoEquipBestDice", "AutoRebirth", "AutoRebirthStats", "AutoBuyUpgrades", "AutoLevelUp" })
     every("Sell", function() return options.SellInterval end, xDTaraZ.Sell.Step, { "AutoSell" })
     every("Storage", 1, xDTaraZ.Storage.Step, { "AutoClearStorage" })
     every("Grade", config.GradeDelay, xDTaraZ.Grade.Step, { "AutoGrade" })
     every("Trait", config.TraitDelay, xDTaraZ.Trait.Step, { "AutoTrait" })
     every("Fuse", config.FuseDelay, xDTaraZ.Fuse.Step, { "AutoFuse" })
     every("Tower", config.TowerTick, xDTaraZ.Tower.Step, { "AutoTower" })
-    every("Items", config.RewardsInterval, xDTaraZ.Items.Step, { "AutoPotion", "AutoSpin", "AutoTicketShop" })
+    every("Items", config.RewardsInterval, xDTaraZ.Items.Step, { "AutoPotion", "AutoSpin", "AutoGamepass", "AutoTicketShop" })
     every("Gear", config.RewardsInterval, xDTaraZ.Gear.Step, { "AutoGear" })
     every("Watch", 1, xDTaraZ.Watch.Step, { "RareNotify" })
     every("Lock", config.RewardsInterval, xDTaraZ.Lock.Step, { "AutoLock" })
