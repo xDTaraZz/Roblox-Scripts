@@ -149,8 +149,8 @@ xDTaraZ.Config = {
     SaveFolder = "Loot To Forge",
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
+        { "2026-10-06", "Updated for the new game version\nSpawn Items now lists only items that still work (ores and runes)\nDupe Whole Inventory skips items the game no longer allows" },
         { "2026-10-04", "Spawn Scrolls, Tickets & Stones\nDupe Whole Inventory\nAdd Season Coins (OP)\nFaster Tower farm\nRemoved keybinds from auto features\nMax Gear picks Exclusive gear\nSpawn Gear (OP)\nPotions (OP)\nFixed Auto World Boss\nBoss Server Hop\nAuto Sell keeps your best base gear\nMax Gear now goes to +20, much faster\nFixed freeze when loading the script\nUpdated for the new game version\nAuto Sell keeps items you locked\nSteadier Boss Server Hop" },
-        { "2026-10-03", "Fixed World Boss, Auto Click & Codes\nImproved Auto Train\nAuto rune detection" },
     },
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
     ReloadSource = [[
@@ -815,30 +815,8 @@ function xDTaraZ.Spawn.Choices()
         byLabel[label] = { id = stoneId, kind = "EnchStone" }
         table.insert(labels, label)
     end
-    local materialModule = xDTaraZ.GameLib.Find("Config.Material.Show")
-    local materialShow = materialModule and xDTaraZ.GameLib.Require(materialModule)
-    if type(materialShow) == "table" then
-        local materials = {}
-        for materialId, show in pairs(materialShow) do
-            table.insert(materials, { materialId, show.DisplayName or materialId })
-        end
-        table.sort(materials, function(a, b) return a[2] < b[2] end)
-        for i, entry in ipairs(materials) do
-            byLabel[entry[2]] = { id = entry[1], kind = "Material" }
-            table.insert(labels, i, entry[2])
-        end
-    end
     State.SpawnLabels = byLabel
     return labels
-end
-
----@param counts table<string, number>  uuid -> amount to add
-function xDTaraZ.Spawn.Stack(counts)
-    local list = {}
-    for uuid, amount in pairs(counts) do
-        list[uuid] = -math.abs(amount)
-    end
-    xDTaraZ.Util.Remote("Forge", "ForgeRF"):InvokeServer({ ConfigType = "Weapon", UUIDList = list })
 end
 
 ---@return boolean  false if the item was never owned and can't be found
@@ -851,11 +829,7 @@ function xDTaraZ.Spawn.Give(itemId, kind, amount)
     end
     local uuid = xDTaraZ.Data.Uuid(xDTaraZ.Data.Get(), itemId)
     if not uuid then return false end
-    if kind == "Material" then
-        xDTaraZ.Spawn.Stack({ [uuid] = amount })
-    else
-        xDTaraZ.Ore.Add(uuid, amount)
-    end
+    xDTaraZ.Ore.Add(uuid, amount)
     return true
 end
 
@@ -887,17 +861,12 @@ end
 
 ---@return number  stacks touched
 function xDTaraZ.Spawn.DupeAll(amount)
-    local materials, touched = {}, 0
+    local touched = 0
     for uuid, entry in pairs(xDTaraZ.Data.Get().Backpack.have) do
-        if type(entry) ~= "table" or not entry.Number then continue end
+        if type(entry) ~= "table" or not entry.Number or entry.Type == "Material" then continue end
         touched += 1
-        if entry.Type == "Material" then
-            materials[uuid] = amount
-        else
-            xDTaraZ.Ore.Add(uuid, amount)
-        end
+        xDTaraZ.Ore.Add(uuid, amount)
     end
-    if next(materials) then xDTaraZ.Spawn.Stack(materials) end
     return touched
 end
 
@@ -2839,7 +2808,7 @@ local function BuildInterface()
 
     local function BuildSpawn(tab)
         local spawnBox = tab:AddLeftGroupbox(T("Spawn Items", "เสกของ"), nil, "OP")
-        Pick(spawnBox, "SpawnItem", T("Item", "ของ"), T("Ores, runes, scrolls, tickets and stones. Runes and materials need at least one owned", "แร่ รูน สกรอล ตั๋ว และหิน รูนกับวัตถุดิบต้องมีอย่างน้อย 1 ชิ้น"), xDTaraZ.Spawn.Choices, true, true)
+        Pick(spawnBox, "SpawnItem", T("Item", "ของ"), T("Ores and runes. Runes need at least one owned", "แร่และรูน รูนต้องมีอย่างน้อย 1 ชิ้น"), xDTaraZ.Spawn.Choices, true, true)
         NumberInput(spawnBox, "SpawnAmount", T("Amount", "จำนวน"), nil, 1)
         spawnBox:AddButton({ Text = T("Spawn", "เสก"), Style = "Primary", Func = function()
             local picked = State.SpawnLabels[opt.SpawnItem]
