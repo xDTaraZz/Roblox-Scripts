@@ -159,7 +159,7 @@ xDTaraZ.Config = {
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
-        { "2026-10-10", "Fixed the game crashing when you shoot\nFixed ESP Team Check showing your own team\nSkin pictures and rarity colors in skin lists" },
+        { "2026-10-10", "Silent Aim and Ragebot hit again after the game update\nFixed the game crashing when you shoot\nFixed ESP Team Check and health\nAim and ESP now include bots\nSkin pictures, turning skins off restores the stock look\nAuto Rebuy works from round 1, No Flash/No Smoke/FOV restore when off" },
         { "2026-10-03", "Classic Mario Hub UI is back\nBetter executor support\nImproved Combat & Movement" },
     },
     SaveFolder = "BloxStrike",
@@ -167,7 +167,8 @@ xDTaraZ.Config = {
     AimRenderPriority = Enum.RenderPriority.Camera.Value + 1,
     RefireGap = 0.12,
     TriggerRay = 2000,
-    MinShotDistance = 0.05,
+    SilentFocusTime = 1,
+    EspCacheMax = 256,
     RedeemGap = 1.1,
     RebuyGap = 0.25,
     AlertTries = 20,
@@ -177,7 +178,7 @@ xDTaraZ.Config = {
     FailWindow = 10,
     CombatToggles = { "Aimbot", "Triggerbot", "Ragebot", "AimbotShowFov", "SilentShowFov" },
     ModuleFeatures = {
-        Net = { "SilentAim", "Ragebot", "AutoRebuy" },
+        Net = { "AutoRebuy" },
         Character = { "BunnyHop" },
         Skins = { "SkinChanger" },
     },
@@ -225,8 +226,10 @@ xDTaraZ.State = {
     Shots = 0,
     Redirected = 0,
     Bought = {},
-    LastRebuyRound = nil,
     LightSaved = nil,
+    Hidden = setmetatable({}, { __mode = "k" }),
+    SmokeScanned = false,
+    FovSaved = nil,
     Hooks = {},
     TriggerWarned = false,
     HopAt = 0,
@@ -495,9 +498,10 @@ end
 
 function xDTaraZ.Target.IsEnemy(model)
     if tostring(model:GetAttribute("Dead")) == "true" then return false end
-    if not xDTaraZ.Target.Owner(model) then return false end
+    if not xDTaraZ.Target.Owner(model) and model:GetAttribute("Health") == nil then return false end
     local mine = xDTaraZ.Target.MyTeam()
-    return mine == nil or xDTaraZ.Target.TeamOf(model) ~= mine
+    if mine == nil then return tostring(Workspace:GetAttribute("Gamemode")):find("Deathmatch") ~= nil end
+    return xDTaraZ.Target.TeamOf(model) ~= mine
 end
 
 function xDTaraZ.Target.Part(model, bone)
@@ -591,7 +595,8 @@ function xDTaraZ.Aimbot.Step()
     state.AimTarget, state.AimPart = xDTaraZ.Target.Pick(cfg)
 end
 
-function xDTaraZ.Aimbot.Lock()
+---@param dt number  frame time from RenderStep
+function xDTaraZ.Aimbot.Lock(dt)
     local o, state = xDTaraZ.Options, xDTaraZ.State
     local part, smooth = nil, 1
     if o.Ragebot and state.RagePart and state.RagePart.Parent then
@@ -603,7 +608,8 @@ function xDTaraZ.Aimbot.Lock()
     local cam = Workspace.CurrentCamera
     local origin = cam.CFrame.Position
     local want = (part.Position - origin).Unit
-    local look = smooth <= 1 and want or cam.CFrame.LookVector:Lerp(want, 1 / smooth).Unit
+    local alpha = 1 - (1 - 1 / smooth) ^ ((dt or 1 / 60) * 60)
+    local look = smooth <= 1 and want or cam.CFrame.LookVector:Lerp(want, alpha).Unit
     cam.CFrame = cframeLookAt(origin, origin + look)
 end
 
@@ -616,49 +622,45 @@ function xDTaraZ.Silent.Config(bone, forced)
     return { Bone = bone, Fov = o.SilentFov, Visible = o.SilentVisible, MaxDistance = o.SilentMaxDistance, Priority = o.SilentPriority }
 end
 
----@param payload table  ShootWeapon packet, edited in place
-function xDTaraZ.Silent.Rewrite(payload)
-    local o = xDTaraZ.Options
+---@return BasePart?  part this shot should go to, nil = shoot where you look
+function xDTaraZ.Silent.Aim()
+    local o, state = xDTaraZ.Options, xDTaraZ.State
+    state.SilentTarget = nil
+    if not (o.SilentAim or o.Ragebot) then return nil end
     local forced = o.Ragebot
-    if not forced and not roll(o.SilentHitChance) then return end
+    if not forced and not roll(o.SilentHitChance) then return nil end
     local bone = (forced or roll(o.SilentHeadChance)) and "Head" or "Torso"
     local target, part = xDTaraZ.Target.Pick(xDTaraZ.Silent.Config(bone, forced))
-    xDTaraZ.State.SilentTarget = target
-    if not part then return end
-    local material = part.Material.Name
-    for _, bullet in ipairs(payload.Bullets) do
-        local origin = typeof(bullet.Origin) == "Vector3" and bullet.Origin or Workspace.CurrentCamera.CFrame.Position
-        local offset = part.Position - origin
-        local dist = offset.Magnitude
-        if dist < xDTaraZ.Config.MinShotDistance then continue end
-        local unit = offset / dist
-        bullet.Direction = unit
-        bullet.Hits = { { Instance = part, Position = part.Position, Normal = -unit, Material = material, Distance = dist, Exit = false } }
-    end
-    xDTaraZ.State.Redirected += 1
+    state.SilentTarget = target
+    return part
 end
 
+---The server checks bullets against where you really look, so the camera turns to the target for the one call that fires and turns back before the frame is drawn.
 function xDTaraZ.Silent.InstallHook()
-    local net = xDTaraZ.GameLib.Net
-    local packet = net and net.Inventory and net.Inventory.ShootWeapon
-    if not packet then return end
+    local gun = xDTaraZ.Guns.FindClass()
+    if not gun then return end
     local original
-    original = xDTaraZ.Util.Hook("Shoot", packet.Send, function(payload, ...)
-        if type(payload) == "table" and type(payload.Bullets) == "table" then
-            xDTaraZ.State.LastShot = osClock()
-            xDTaraZ.State.Shots += 1
-            if xDTaraZ.Options.SilentAim or xDTaraZ.Options.Ragebot then
-                local ok, err = pcall(xDTaraZ.Silent.Rewrite, payload)
-                if not ok then warn("[BloxStrike] silent:", err) end
-            end
-        end
-        return original(payload, ...)
+    original = xDTaraZ.Util.Hook("Shoot", gun.shoot, function(self, ...)
+        local state = xDTaraZ.State
+        state.LastShot = osClock()
+        state.Shots += 1
+        local ok, part = pcall(xDTaraZ.Silent.Aim)
+        local cam = Workspace.CurrentCamera
+        if not (ok and part and cam) then return original(self, ...) end
+        local saved = cam.CFrame
+        cam.CFrame = cframeLookAt(saved.Position, part.Position)
+        local result = table.pack(pcall(original, self, ...))
+        cam.CFrame = saved
+        state.Redirected += 1
+        if not result[1] then error(result[2], 0) end
+        return table.unpack(result, 2, result.n)
     end)
 end
 
 xDTaraZ.Trigger = {}
 
 function xDTaraZ.Trigger.Press(down)
+    if down and Library.Window and Library.Window.Visible then return end
     xDTaraZ.State.Firing = down
     if down then xDTaraZ.State.PressedAt = osClock() end
     local center = Workspace.CurrentCamera.ViewportSize / 2
@@ -768,7 +770,7 @@ function xDTaraZ.Combat.Step()
     xDTaraZ.Combat.Circle("Aimbot", o.AimbotShowFov, o.AimbotFov)
     xDTaraZ.Combat.Circle("Silent", o.SilentShowFov, o.SilentFov)
     if not xDTaraZ.Player.Alive() then
-        state.AimTarget, state.AimPart, state.RageTarget, state.RagePart = nil, nil, nil, nil
+        state.AimTarget, state.AimPart, state.RageTarget, state.RagePart, state.SilentTarget = nil, nil, nil, nil, nil
         xDTaraZ.Trigger.Fire(false)
         return
     end
@@ -779,7 +781,7 @@ end
 
 function xDTaraZ.Combat.Rest()
     local state = xDTaraZ.State
-    state.AimTarget, state.AimPart, state.RageTarget, state.RagePart = nil, nil, nil, nil
+    state.AimTarget, state.AimPart, state.RageTarget, state.RagePart, state.SilentTarget = nil, nil, nil, nil, nil
     xDTaraZ.Trigger.Fire(false)
     for key in pairs(xDTaraZ.Combat.Circles) do
         xDTaraZ.Combat.Circle(key, false, 0)
@@ -843,9 +845,16 @@ function xDTaraZ.Guns.Scoped()
 end
 
 function xDTaraZ.Guns.StepFov()
-    if not xDTaraZ.Options.CameraFov or xDTaraZ.Guns.Scoped() then return end
-    local camera = Workspace.CurrentCamera
-    if camera then camera.FieldOfView = xDTaraZ.Options.CameraFovValue end
+    local camera, state = Workspace.CurrentCamera, xDTaraZ.State
+    if not camera then return end
+    if not xDTaraZ.Options.CameraFov then
+        if state.FovSaved then camera.FieldOfView, state.FovSaved = state.FovSaved, nil end
+        state.FovBase = 0
+        return
+    end
+    if xDTaraZ.Guns.Scoped() then return end
+    state.FovSaved = state.FovSaved or camera.FieldOfView
+    camera.FieldOfView = xDTaraZ.Options.CameraFovValue
 end
 
 function xDTaraZ.Guns.BindFov()
@@ -856,7 +865,9 @@ function xDTaraZ.Guns.BindFov()
 end
 
 function xDTaraZ.Guns.UnbindFov()
-    xDTaraZ.State.FovBound = false
+    local state, camera = xDTaraZ.State, Workspace.CurrentCamera
+    if state.FovSaved and camera then camera.FieldOfView, state.FovSaved = state.FovSaved, nil end
+    state.FovBound = false
     pcall(RunService.UnbindFromRenderStep, RunService, "xDTaraZFov")
 end
 
@@ -878,15 +889,19 @@ function xDTaraZ.Guns.HookSpread()
     end)
 end
 
-xDTaraZ.Esp = { Count = 0, Decoded = {} }
+xDTaraZ.Esp = { Count = 0, Decoded = {}, CacheSize = 0 }
 
 ---@return table?  JSON attribute decoded once per distinct raw string
 function xDTaraZ.Esp.Attr(owner, key)
     local raw = owner:GetAttribute(key)
     if type(raw) ~= "string" then return nil end
-    local cache = xDTaraZ.Esp.Decoded
-    if cache[raw] == nil then cache[raw] = xDTaraZ.Util.Decode(raw) or false end
-    return cache[raw] or nil
+    local esp = xDTaraZ.Esp
+    if esp.Decoded[raw] == nil then
+        esp.CacheSize += 1
+        if esp.CacheSize > xDTaraZ.Config.EspCacheMax then table.clear(esp.Decoded) esp.CacheSize = 1 end
+        esp.Decoded[raw] = xDTaraZ.Util.Decode(raw) or false
+    end
+    return esp.Decoded[raw] or nil
 end
 
 ---@return string  " C4 Kit Helmet Scoped" style tags, "" when none
@@ -905,7 +920,8 @@ end
 ---@return Model?  whatever aimbot, silent aim or ragebot is locked on
 function xDTaraZ.Esp.Focus()
     local state = xDTaraZ.State
-    return state.AimTarget or state.SilentTarget or state.RageTarget
+    local silent = osClock() - state.LastShot < xDTaraZ.Config.SilentFocusTime and state.SilentTarget or nil
+    return state.AimTarget or silent or state.RageTarget
 end
 
 ---@return table[]  targets in the shape Library.Visuals expects; bots count as enemies
@@ -916,14 +932,14 @@ function xDTaraZ.Esp.Targets()
     for _, model in ipairs(xDTaraZ.Target.Candidates()) do
         if tostring(model:GetAttribute("Dead")) == "true" then continue end
         local owner = xDTaraZ.Target.Owner(model)
-        local equipped = owner and xDTaraZ.Util.Decode(owner:GetAttribute("CurrentEquipped"))
+        local equipped = owner and xDTaraZ.Esp.Attr(owner, "CurrentEquipped")
         local label = owner and owner.DisplayName or model.Name
         if equipped and equipped.Name then label = label .. " [" .. equipped.Name .. "]" end
 
         list[#list + 1] = {
             Model = model,
             Name = label .. xDTaraZ.Esp.Flags(owner),
-            Health = tonumber(model:GetAttribute("Health")) or 100,
+            Health = tonumber(owner and owner:GetAttribute("Health")) or tonumber(model:GetAttribute("Health")) or 100,
             MaxHealth = tonumber(model:GetAttribute("MaxHealth")) or 100,
             Friendly = mine ~= nil and xDTaraZ.Target.TeamOf(model) == mine,
             Root = model:FindFirstChild("HumanoidRootPart"),
@@ -946,26 +962,59 @@ function xDTaraZ.World.Step()
         Lighting.Brightness, Lighting.ClockTime, Lighting.FogEnd, Lighting.GlobalShadows, Lighting.Ambient = table.unpack(state.LightSaved)
         state.LightSaved = nil
     end
-    if opts.NoFlash then xDTaraZ.World.ClearFlash() end
+    if opts.NoFlash then xDTaraZ.World.ClearFlash() else xDTaraZ.World.Restore("Flash") end
+    if opts.NoSmoke and not state.SmokeScanned then
+        state.SmokeScanned = true
+        local debris = Workspace:FindFirstChild("Debris")
+        for _, inst in ipairs(debris and debris:GetDescendants() or {}) do xDTaraZ.World.OnDescendant(inst) end
+    elseif not opts.NoSmoke and state.SmokeScanned then
+        state.SmokeScanned = false
+        xDTaraZ.World.Restore("Smoke")
+    end
+end
+
+---Hides one effect and remembers how it looked, so turning the feature off puts it back.
+function xDTaraZ.World.Hide(inst, kind)
+    local hidden = xDTaraZ.State.Hidden
+    if hidden[inst] then return end
+    if inst:IsA("BasePart") then
+        hidden[inst] = { kind, "LocalTransparencyModifier", inst.LocalTransparencyModifier }
+        inst.LocalTransparencyModifier = 1
+    else
+        hidden[inst] = { kind, "Enabled", inst.Enabled }
+        inst.Enabled = false
+    end
+end
+
+function xDTaraZ.World.Restore(kind)
+    local hidden = xDTaraZ.State.Hidden
+    for inst, saved in pairs(hidden) do
+        if saved[1] ~= kind then continue end
+        hidden[inst] = nil
+        if inst.Parent then pcall(function() inst[saved[2]] = saved[3] end) end
+    end
 end
 
 function xDTaraZ.World.ClearFlash()
     for _, effect in ipairs(Lighting:GetChildren()) do
-        if effect.Name:lower():find("flash") and effect:IsA("PostEffect") then effect.Enabled = false end
+        if effect.Name:lower():find("flash") and effect:IsA("PostEffect") and effect.Enabled then xDTaraZ.World.Hide(effect, "Flash") end
     end
     local gui = LocalPlayer:FindFirstChild("PlayerGui")
     if not gui then return end
     for _, screen in ipairs(gui:GetChildren()) do
-        if screen:IsA("ScreenGui") and screen.Name:lower():find("flash") then screen.Enabled = false end
+        if screen:IsA("ScreenGui") and screen.Name:lower():find("flash") and screen.Enabled then xDTaraZ.World.Hide(screen, "Flash") end
     end
 end
 
 function xDTaraZ.World.OnDescendant(inst)
     if not xDTaraZ.Options.NoSmoke then return end
-    if not (inst:IsA("ParticleEmitter") or inst:IsA("Smoke")) then return end
+    local effect = inst:IsA("ParticleEmitter") or inst:IsA("Smoke")
+    if not (effect or inst:IsA("BasePart")) then return end
+    local debris = Workspace:FindFirstChild("Debris")
+    if not effect and not (debris and inst:IsDescendantOf(debris)) then return end
     local owner = inst:FindFirstAncestorOfClass("Model") or inst.Parent
     local name = (owner and owner.Name or ""):lower() .. inst.Name:lower()
-    if name:find("smoke") then inst.Enabled = false end
+    if name:find("smoke") or (not effect and name:find("voxel")) then xDTaraZ.World.Hide(inst, "Smoke") end
 end
 
 function xDTaraZ.World.OnIdled()
@@ -1031,7 +1080,7 @@ function xDTaraZ.World.ServerHop()
     pcall(TeleportService.Teleport, TeleportService, game.PlaceId, LocalPlayer)
 end
 
-xDTaraZ.Skins = { Map = {}, Applied = setmetatable({}, { __mode = "k" }), Catalog = nil, Rarity = {}, Images = {}, Colors = {} }
+xDTaraZ.Skins = { Map = {}, Applied = setmetatable({}, { __mode = "k" }), Catalog = nil, Rarity = {}, Images = {}, Colors = {}, Originals = setmetatable({}, { __mode = "k" }) }
 
 function xDTaraZ.Skins.Folder()
     local assets = ReplicatedStorage:FindFirstChild("Assets")
@@ -1134,10 +1183,25 @@ function xDTaraZ.Skins.Paint(model, weapon, skin, view)
         local look = source:FindFirstChild(part.Name)
         if not look and whole and old and not arms[part.Name] then look = whole end
         if not look then continue end
+        local originals = xDTaraZ.Skins.Originals
+        if originals[part] == nil then originals[part] = old and old:Clone() or false end
         if old then old:Destroy() end
         look:Clone().Parent = part
     end
     return true
+end
+
+---Puts back the look each part had before we painted it.
+function xDTaraZ.Skins.Reset(model)
+    local originals = xDTaraZ.Skins.Originals
+    for _, part in ipairs(model:GetDescendants()) do
+        local saved = part:IsA("BasePart") and originals[part]
+        if saved == nil then continue end
+        local current = part:FindFirstChildOfClass("SurfaceAppearance")
+        if current then current:Destroy() end
+        if saved then saved:Clone().Parent = part end
+        originals[part] = nil
+    end
 end
 
 function xDTaraZ.Skins.WeaponOf(model)
@@ -1170,12 +1234,13 @@ function xDTaraZ.Skins.Step()
     for _, entry in ipairs(skins.Models()) do
         local model, view = entry[1], entry[2]
         local weapon = skins.WeaponOf(model)
-        local skin = weapon and (on and skins.Map[weapon] or (skins.Applied[model] and "Stock"))
-        local key = tostring(weapon) .. "|" .. tostring(skin) .. "|" .. tostring(gloveSkin)
-        if skins.Applied[model] == key or not (skin or gloveSkin) then continue end
+        local skin = on and weapon and skins.Map[weapon] or nil
+        local key = (skin or gloveSkin) and (tostring(weapon) .. "|" .. tostring(skin) .. "|" .. tostring(gloveSkin)) or nil
+        if skins.Applied[model] == key then continue end
+        if skins.Applied[model] then skins.Reset(model) end
         if skin then skins.Paint(model, weapon, skin, view) end
         if gloveSkin and view == "Camera" then skins.Paint(model, glove, gloveSkin, view) end
-        skins.Applied[model] = on and key or nil
+        skins.Applied[model] = key
     end
 end
 
@@ -1232,12 +1297,14 @@ xDTaraZ.Economy = {}
 function xDTaraZ.Economy.RedeemAll()
     local net = xDTaraZ.GameLib.Net
     local packet = net and net.Dashboard and net.Dashboard.RedeemCode
-    if not packet then return 0 end
+    if not packet or xDTaraZ.State.Redeeming then return 0 end
+    xDTaraZ.State.Redeeming = true
     local sent = 0
     for _, code in ipairs(xDTaraZ.Config.Codes) do
         if pcall(packet.Send, code) then sent += 1 end
         task.wait(xDTaraZ.Config.RedeemGap)
     end
+    xDTaraZ.State.Redeeming = false
     return sent
 end
 
@@ -1261,7 +1328,7 @@ end
 function xDTaraZ.Economy.Rebuy()
     local net = xDTaraZ.GameLib.Net
     local packet = net and net.Inventory and net.Inventory.BuyMenuPurchase
-    if not packet or #xDTaraZ.State.Bought == 0 then return 0 end
+    if not packet or #xDTaraZ.State.Bought == 0 or xDTaraZ.State.Replaying then return 0 end
     xDTaraZ.State.Replaying = true
     local sent = 0
     for _, entry in ipairs(xDTaraZ.State.Bought) do
@@ -1272,12 +1339,21 @@ function xDTaraZ.Economy.Rebuy()
     return sent
 end
 
+---Buys once each time the game enters a buy phase, so warmup and round 1 each get their own rebuy.
 function xDTaraZ.Economy.Step()
-    if not xDTaraZ.Options.AutoRebuy or not xDTaraZ.Player.Alive() then return end
-    if not xDTaraZ.Config.BuyStates[Workspace:GetAttribute("GameState")] then return end
-    local round = tostring(Workspace:GetAttribute("MatchSessionId")) .. ":" .. tostring((Workspace:GetAttribute("TScore") or 0) + (Workspace:GetAttribute("CTScore") or 0))
-    if xDTaraZ.State.LastRebuyRound == round then return end
-    xDTaraZ.State.LastRebuyRound = round
+    local state = xDTaraZ.State
+    local phase = Workspace:GetAttribute("GameState")
+    local entered = xDTaraZ.Config.BuyStates[phase] and phase ~= state.LastPhase
+    state.LastPhase = phase
+    if not entered then state.RebuyPending = state.RebuyPending and xDTaraZ.Config.BuyStates[phase] return end
+    state.RebuyPending = true
+end
+
+function xDTaraZ.Economy.Tick()
+    local state = xDTaraZ.State
+    xDTaraZ.Economy.Step()
+    if not (xDTaraZ.Options.AutoRebuy and state.RebuyPending and xDTaraZ.Player.Alive()) then return end
+    state.RebuyPending = false
     task.spawn(xDTaraZ.Economy.Rebuy)
 end
 
@@ -1468,11 +1544,11 @@ function xDTaraZ.UI.BuildSilent(window)
     local tab = window:AddTab(T("Silent Aim", "ไซเลนต์เอม"), "bomb", T("Your shots find the enemy for you", "กระสุนวิ่งหาศัตรูเอง"))
 
     local main = tab:AddLeftGroupbox(T("Silent Aim", "ไซเลนต์เอม"), "bomb")
-    xDTaraZ.UI.NamedToggle(main, "SilentAim", { Text = T("Silent aim", "ไซเลนต์เอม"), Description = T("Shots you fire go to the enemy in the FOV", "นัดที่ยิงพุ่งไปหาศัตรูในวง FOV"), Risky = true })
+    xDTaraZ.UI.NamedToggle(main, "SilentAim", { Text = T("Silent aim", "ไซเลนต์เอม"), Description = T("Shots you fire go to the enemy in the FOV", "นัดที่ยิงพุ่งไปหาศัตรูในวง FOV") })
         :AddKeyPicker("SilentKey", { Default = "None", Mode = "Toggle" })
     main:AddSlider("SilentHitChance", { Text = T("Hit chance", "โอกาสโดน"), Description = T("Lower looks more legit", "ยิ่งต่ำยิ่งดูเนียน"), Min = 1, Max = 100, Default = 100, Rounding = 0, Suffix = "%" })
     main:AddSlider("SilentHeadChance", { Text = T("Headshot chance", "โอกาสเข้าหัว"), Description = T("The rest go to the body", "ที่เหลือเข้าลำตัว"), Min = 0, Max = 100, Default = 100, Rounding = 0, Suffix = "%" })
-    Library.Compat.NeedCap("SilentAim", "HookFunction")
+    Library.Compat.NeedCap("SilentAim", { "HookFunction", "Gc" })
 
     local target = tab:AddRightGroupbox(T("Silent Targeting", "การเลือกเป้า (ไซเลนต์)"), "target")
     target:AddDropdown("SilentPriority", { Text = T("Priority", "เลือกเป้าตาม"), Values = priorities, Default = "Crosshair" })
@@ -1493,11 +1569,10 @@ function xDTaraZ.UI.BuildTrigger(window)
     trigger:AddSlider("TriggerHitChance", { Text = T("Fire chance", "โอกาสยิง"), Min = 1, Max = 100, Default = 100, Rounding = 0, Suffix = "%" })
 
     local rage = tab:AddRightGroupbox(T("Ragebot", "เรจบอท"), "bomb")
-    xDTaraZ.UI.NamedToggle(rage, "Ragebot", { Text = T("Ragebot", "เรจบอท"), Description = T("Snaps to and kills any enemy it can reach on its own", "หันไปยิงศัตรูที่ยิงถึงเองทันที"), Risky = true })
+    xDTaraZ.UI.NamedToggle(rage, "Ragebot", { Text = T("Ragebot", "เรจบอท"), Description = T("Snaps to and kills any enemy it can reach on its own", "หันไปยิงศัตรูที่ยิงถึงเองทันที") })
         :AddKeyPicker("RageKey", { Default = "None", Mode = "Toggle" })
     rage:AddCheckbox("RageVisible", { Text = T("Visible only", "เฉพาะที่มองเห็น"), Description = T("Off = also through walls", "ปิด = ยิงทะลุกำแพงด้วย"), Default = true })
     rage:AddSlider("RageMaxDistance", { Text = T("Max distance", "ระยะสูงสุด"), Min = 50, Max = 3000, Default = 2000, Suffix = "m" })
-    Library.Compat.NeedCap("Ragebot", "HookFunction")
 end
 
 function xDTaraZ.UI.BuildGuns(window)
@@ -1618,6 +1693,7 @@ function xDTaraZ.UI.BuildMisc(window)
     Library.Compat.NeedCap("AutoRebuy", "HookFunction")
     xDTaraZ.UI.Labels.Bought = buy:AddParagraph({ Title = T("Saved loadout", "ชุดที่จำไว้"), Content = "-" })
     buy:AddButton({ Text = T("Rebuy Now", "ซื้อซ้ำตอนนี้"), Style = "Primary", Func = xDTaraZ.UI.Detach(function()
+        xDTaraZ.Util.Try("hook buys", xDTaraZ.Economy.HookBuys)
         local sent = xDTaraZ.Economy.Rebuy()
         Library:Notify("Auto Buy", sent > 0 and ("Bought " .. sent .. " items") or "Buy something once first", 3, sent > 0 and "Success" or "Info")
     end) }):AddButton({ Text = T("Clear", "ล้าง"), Func = xDTaraZ.UI.Detach(function()
@@ -1631,8 +1707,8 @@ function xDTaraZ.UI.BuildMisc(window)
     end) })
 
     local util = tab:AddRightGroupbox(T("Utility", "อรรถประโยชน์"), "flower")
-    util:AddToggle("InfiniteJump", { Text = T("Infinite jump", "กระโดดไม่จำกัด"), Description = T("Lobby only, use Bunny hop in rounds", "ใช้ได้เฉพาะล็อบบี้ ในรอบใช้บันนี่ฮอป"), Risky = true })
-    util:AddToggle("BunnyHop", { Text = T("Bunny hop", "บันนี่ฮอป"), Description = T("Hold Space to keep hopping and carry your speed", "กด Space ค้างเพื่อกระโดดต่อเนื่องและรักษาความเร็ว"), Risky = true })
+    util:AddToggle("InfiniteJump", { Text = T("Infinite jump", "กระโดดไม่จำกัด"), Description = T("Lobby only, use Bunny hop in rounds", "ใช้ได้เฉพาะล็อบบี้ ในรอบใช้บันนี่ฮอป") })
+    util:AddToggle("BunnyHop", { Text = T("Bunny hop", "บันนี่ฮอป"), Description = T("Hold Space to keep hopping and carry your speed", "กด Space ค้างเพื่อกระโดดต่อเนื่องและรักษาความเร็ว") })
     util:AddCheckbox("BunnyCrouch", { Text = T("Crouch jump", "ย่อตอนลอย"), Description = T("Crouches in the air like a CS crouch jump", "ย่อตัวกลางอากาศแบบ crouch jump ใน CS"), Default = true })
     util:AddToggle("AntiAfk", { Text = T("Anti AFK", "กันหลุด AFK") })
     util:AddButton({ Text = T("Rejoin", "เข้าใหม่"), Func = xDTaraZ.UI.Detach(xDTaraZ.World.Rejoin) })
@@ -1760,8 +1836,8 @@ function xDTaraZ.Boot()
     xDTaraZ:Connect(UserInputService.InputEnded, function(input) xDTaraZ.World.OnSpace(input, false) end)
     xDTaraZ:Connect(Workspace.DescendantAdded, xDTaraZ.World.OnDescendant)
 
-    xDTaraZ.Scheduler.Every("World", 0.2, xDTaraZ.World.Step, { "Fullbright", "NoFlash" }, xDTaraZ.World.Step)
-    xDTaraZ.Scheduler.Every("Auto Rebuy", 0.5, xDTaraZ.Economy.Step, { "AutoRebuy" })
+    xDTaraZ.Scheduler.Every("World", 0.2, xDTaraZ.World.Step, { "Fullbright", "NoFlash", "NoSmoke" }, xDTaraZ.World.Step)
+    xDTaraZ.Scheduler.Every("Auto Rebuy", 0.5, xDTaraZ.Economy.Tick, { "AutoRebuy" })
     xDTaraZ.Scheduler.Every("Skin Changer", 0.15, xDTaraZ.Skins.Step, { "SkinChanger" }, xDTaraZ.Skins.Step)
     xDTaraZ.Util.Try("scheduler", xDTaraZ.Scheduler.Boot)
 end
