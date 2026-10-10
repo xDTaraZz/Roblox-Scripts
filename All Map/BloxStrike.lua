@@ -159,6 +159,7 @@ xDTaraZ.Config = {
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
+        { "2026-10-10", "Fixed the game crashing when you shoot\nFixed ESP Team Check showing your own team\nSkin pictures and rarity colors in skin lists" },
         { "2026-10-03", "Classic Mario Hub UI is back\nBetter executor support\nImproved Combat & Movement" },
     },
     SaveFolder = "BloxStrike",
@@ -178,7 +179,6 @@ xDTaraZ.Config = {
     ModuleFeatures = {
         Net = { "SilentAim", "Ragebot", "AutoRebuy" },
         Character = { "BunnyHop" },
-        Weapons = { "FullAuto", "RapidFire", "WeaponSpeed" },
         Skins = { "SkinChanger" },
     },
     Codes = {
@@ -227,9 +227,7 @@ xDTaraZ.State = {
     Bought = {},
     LastRebuyRound = nil,
     LightSaved = nil,
-    WeaponSaved = {},
     Hooks = {},
-    RecoilWarned = false,
     TriggerWarned = false,
     HopAt = 0,
     HopCrouched = false,
@@ -263,13 +261,7 @@ xDTaraZ.Options = {
     RageVisible = true,
     RageMaxDistance = 2000,
     NoRecoil = false,
-    RecoilKeep = 0,
     NoSpread = false,
-    FullAuto = false,
-    RapidFire = false,
-    FireRateMult = 1.5,
-    WeaponSpeed = false,
-    WeaponSpeedMult = 1.3,
     Fullbright = false,
     NoFlash = false,
     NoSmoke = false,
@@ -424,6 +416,7 @@ do
     xDTaraZ.GameLib.Character = xDTaraZ.GameLib.Require(find(controllers, "CharacterController", "ModuleScript", "Controllers"))
     xDTaraZ.GameLib.Camera = xDTaraZ.GameLib.Require(find(controllers, "CameraController", "ModuleScript", "Controllers"))
     xDTaraZ.GameLib.WeaponFolder = find(custom, "Weapons", "Folder", "Custom")
+    xDTaraZ.GameLib.Rarities = xDTaraZ.GameLib.Require(find(custom, "Rarities", "ModuleScript", "GameStats"))
 end
 
 xDTaraZ.Weapons = {}
@@ -484,12 +477,27 @@ function xDTaraZ.Target.Owner(model)
     return Players:FindFirstChild(model.Name)
 end
 
+---@return string?  team of a character: owner's Team attribute, else the team that wears this character model
+function xDTaraZ.Target.TeamOf(model)
+    local owner = model and xDTaraZ.Target.Owner(model)
+    local team = owner and owner:GetAttribute("Team")
+    if team then return team end
+    local look = model and model:GetAttribute("CharacterName")
+    if not look then return nil end
+    if look == Workspace:GetAttribute("CTCharacter") then return "Counter-Terrorists" end
+    if look == Workspace:GetAttribute("TCharacter") then return "Terrorists" end
+    return nil
+end
+
+function xDTaraZ.Target.MyTeam()
+    return LocalPlayer:GetAttribute("Team") or xDTaraZ.Target.TeamOf(xDTaraZ.Player.Character())
+end
+
 function xDTaraZ.Target.IsEnemy(model)
     if tostring(model:GetAttribute("Dead")) == "true" then return false end
-    local owner = xDTaraZ.Target.Owner(model)
-    if not owner then return false end
-    local mine = LocalPlayer:GetAttribute("Team")
-    return mine == nil or owner:GetAttribute("Team") ~= mine
+    if not xDTaraZ.Target.Owner(model) then return false end
+    local mine = xDTaraZ.Target.MyTeam()
+    return mine == nil or xDTaraZ.Target.TeamOf(model) ~= mine
 end
 
 function xDTaraZ.Target.Part(model, bone)
@@ -809,83 +817,13 @@ end
 
 xDTaraZ.Guns = { Signature = nil, Warned = false }
 
-function xDTaraZ.Guns.Save(name, data)
-    local saved = xDTaraZ.State.WeaponSaved
-    if saved[name] then return saved[name] end
-    local spread = type(data.Spread) == "table" and table.clone(data.Spread) or nil
-    local recoil = type(data.Recoil) == "table" and table.clone(data.Recoil) or nil
-    saved[name] = { FireRate = data.FireRate, Automatic = data.Automatic, WalkSpeed = data.WalkSpeed, Spread = spread, Recoil = recoil }
-    return saved[name]
-end
-
----@return boolean  false when a frozen weapon table stays read-only on this executor
-function xDTaraZ.Guns.Unfreeze(data)
-    for _, section in pairs({ data = data, spread = data.Spread, recoil = data.Recoil }) do
-        if type(section) ~= "table" or not table.isfrozen(section) then continue end
-        if setreadonly then pcall(setreadonly, section, false) end
-        if table.isfrozen(section) then return false end
-    end
-    return true
-end
-
-function xDTaraZ.Guns.Locked()
-    if xDTaraZ.Guns.Warned then return end
-    xDTaraZ.Guns.Warned = true
-    warn("[BloxStrike] gun mods: weapon tables are read-only on this executor")
-    table.insert(xDTaraZ.State.Notices, { "Gun Mods", "Some gun mods are not supported on this executor" })
-end
-
-function xDTaraZ.Guns.AnyActive()
-    local opts = xDTaraZ.Options
-    return opts.NoSpread or opts.NoRecoil or opts.FullAuto or opts.RapidFire or opts.WeaponSpeed
-end
-
-function xDTaraZ.Guns.ApplyOne(name, data)
-    local opts = xDTaraZ.Options
-    if not xDTaraZ.Guns.Unfreeze(data) then
-        xDTaraZ.Guns.Locked()
-        return
-    end
-    local base = xDTaraZ.Guns.Save(name, data)
-    if base.Spread then
-        for key, value in pairs(base.Spread) do
-            data.Spread[key] = (opts.NoSpread and type(value) == "number") and 0 or value
-        end
-    end
-    if base.Recoil then
-        for key, value in pairs(base.Recoil) do
-            local scaled = opts.NoRecoil and type(value) == "number" and key ~= "RecoverySpeed" and key ~= "Damper"
-            data.Recoil[key] = scaled and value * opts.RecoilKeep / 100 or value
-        end
-    end
-    data.Automatic = opts.FullAuto or base.Automatic
-    data.FireRate = opts.RapidFire and base.FireRate / math.max(opts.FireRateMult, 1) or base.FireRate
-    if base.WalkSpeed then data.WalkSpeed = opts.WeaponSpeed and base.WalkSpeed * opts.WeaponSpeedMult or base.WalkSpeed end
-end
-
-function xDTaraZ.Guns.Key()
-    local o = xDTaraZ.Options
-    return table.concat({ tostring(o.NoSpread), tostring(o.NoRecoil), o.RecoilKeep, tostring(o.FullAuto), tostring(o.RapidFire), o.FireRateMult, tostring(o.WeaponSpeed), o.WeaponSpeedMult }, "|")
-end
-
-function xDTaraZ.Guns.Step()
-    local signature = xDTaraZ.Guns.Key()
-    if signature == xDTaraZ.Guns.Signature then return end
-    xDTaraZ.Guns.Signature = signature
-    if not xDTaraZ.Guns.AnyActive() and not next(xDTaraZ.State.WeaponSaved) then return end
-    for name, data in pairs(xDTaraZ.Weapons) do
-        local ok, err = pcall(xDTaraZ.Guns.ApplyOne, name, data)
-        if not ok then warn("[BloxStrike] gun:", name, err) end
-    end
-end
-
 function xDTaraZ.Guns.HookKick()
     local cam = xDTaraZ.GameLib.Camera
     if not cam then return end
     local kick
     kick = xDTaraZ.Util.Hook("Kick", cam.weaponKick, function(...)
         local o = xDTaraZ.Options
-        if o.NoRecoil and o.RecoilKeep <= 0 then return end
+        if o.NoRecoil then return end
         return kick(...)
     end)
 end
@@ -940,23 +878,6 @@ function xDTaraZ.Guns.HookSpread()
     end)
 end
 
-function xDTaraZ.Guns.Restore()
-    for name, base in pairs(xDTaraZ.State.WeaponSaved) do
-        local data = xDTaraZ.Weapons[name]
-        if data and xDTaraZ.Guns.Unfreeze(data) then
-            if base.Spread then for k, v in pairs(base.Spread) do data.Spread[k] = v end end
-            if base.Recoil then for k, v in pairs(base.Recoil) do data.Recoil[k] = v end end
-            data.FireRate, data.Automatic = base.FireRate, base.Automatic
-            if base.WalkSpeed then data.WalkSpeed = base.WalkSpeed end
-        end
-    end
-end
-
-function xDTaraZ.Guns.Rest()
-    xDTaraZ.Guns.Signature = nil
-    xDTaraZ.Guns.Restore()
-end
-
 xDTaraZ.Esp = { Count = 0, Decoded = {} }
 
 ---@return table?  JSON attribute decoded once per distinct raw string
@@ -990,7 +911,7 @@ end
 ---@return table[]  targets in the shape Library.Visuals expects; bots count as enemies
 function xDTaraZ.Esp.Targets()
     local list = {}
-    local mine = LocalPlayer:GetAttribute("Team")
+    local mine = xDTaraZ.Target.MyTeam()
     local focus = xDTaraZ.Esp.Focus()
     for _, model in ipairs(xDTaraZ.Target.Candidates()) do
         if tostring(model:GetAttribute("Dead")) == "true" then continue end
@@ -1004,7 +925,7 @@ function xDTaraZ.Esp.Targets()
             Name = label .. xDTaraZ.Esp.Flags(owner),
             Health = tonumber(model:GetAttribute("Health")) or 100,
             MaxHealth = tonumber(model:GetAttribute("MaxHealth")) or 100,
-            Friendly = mine ~= nil and owner ~= nil and owner:GetAttribute("Team") == mine,
+            Friendly = mine ~= nil and xDTaraZ.Target.TeamOf(model) == mine,
             Root = model:FindFirstChild("HumanoidRootPart"),
             Color = model == focus and xDTaraZ.Config.EspFocusColor or nil,
         }
@@ -1110,7 +1031,7 @@ function xDTaraZ.World.ServerHop()
     pcall(TeleportService.Teleport, TeleportService, game.PlaceId, LocalPlayer)
 end
 
-xDTaraZ.Skins = { Map = {}, Applied = setmetatable({}, { __mode = "k" }), Catalog = nil, Rarity = {} }
+xDTaraZ.Skins = { Map = {}, Applied = setmetatable({}, { __mode = "k" }), Catalog = nil, Rarity = {}, Images = {}, Colors = {} }
 
 function xDTaraZ.Skins.Folder()
     local assets = ReplicatedStorage:FindFirstChild("Assets")
@@ -1139,9 +1060,14 @@ function xDTaraZ.Skins.Build()
         if not category then continue end
         catalog[category] = catalog[category] or {}
         table.insert(catalog[category], name)
-        skins.Rarity[name] = {}
+        skins.Rarity[name], skins.Images[name], skins.Colors[name] = {}, {}, {}
         for skin, entry in pairs(entries) do
-            skins.Rarity[name][skin] = type(entry) == "table" and ranks[entry.rarity] or 0
+            if type(entry) ~= "table" then continue end
+            skins.Rarity[name][skin] = ranks[entry.rarity] or 0
+            local look = type(entry.wearImages) == "table" and entry.wearImages[1]
+            skins.Images[name][skin] = look and look.assetId
+            local rarity = xDTaraZ.GameLib.Rarities and xDTaraZ.GameLib.Rarities[entry.rarity]
+            skins.Colors[name][skin] = type(rarity) == "table" and rarity.Color or nil
         end
     end
     for _, names in pairs(catalog) do table.sort(names) end
@@ -1499,13 +1425,6 @@ function xDTaraZ.UI.BuildMain(window)
     xDTaraZ.UI.Labels.Spectators = status:AddParagraph({ Title = T("Spectators", "คนดูเรา"), Content = "-" })
     xDTaraZ.UI.Labels.Esp = status:AddParagraph({ Title = T("ESP", "ESP"), Content = "-" })
 
-    local quick = tab:AddRightGroupbox(T("Quick", "ด่วน"), "bomb")
-    quick:AddButton({ Text = T("Panic - all off", "ฉุกเฉิน ปิดทั้งหมด"), Style = "Danger", Func = xDTaraZ.UI.Detach(function()
-        for _, toggle in pairs(Library.Toggles) do
-            if toggle.Value == true then toggle:SetValue(false) end
-        end
-    end) })
-
     local discord = tab:AddRightGroupbox(T("Discord", "ดิสคอร์ด"), "link")
     discord:AddLabel(xDTaraZ.Config.Discord)
     discord:AddButton({ Text = T("Copy Discord Link", "คัดลอกลิงก์ดิสคอร์ด"), Func = xDTaraZ.UI.Detach(function()
@@ -1582,20 +1501,13 @@ function xDTaraZ.UI.BuildTrigger(window)
 end
 
 function xDTaraZ.UI.BuildGuns(window)
-    local tab = window:AddTab(T("Gun Mods", "ม็อดปืน"), "swords", T("Recoil, spread and fire rate", "แรงถีบ การกระจาย และอัตรายิง"))
+    local tab = window:AddTab(T("Gun Mods", "ม็อดปืน"), "swords", T("Recoil and spread", "แรงถีบและการกระจาย"))
 
     local mods = tab:AddLeftGroupbox(T("Gun Mods", "ม็อดปืน"), "swords")
-    xDTaraZ.UI.NamedToggle(mods, "NoRecoil", { Text = T("No recoil", "ไม่มีแรงถีบ"), Description = T("Your view and bullets stay still while spraying", "จอและกระสุนนิ่งตอนกดยิงค้าง") })
-    mods:AddSlider("RecoilKeep", { Text = T("Recoil left", "แรงถีบที่เหลือ"), Description = T("0 = none, 100 = normal", "0 = ไม่มีเลย, 100 = ปกติ"), Min = 0, Max = 100, Default = 0, Rounding = 0, Suffix = "%" })
+    xDTaraZ.UI.NamedToggle(mods, "NoRecoil", { Text = T("No recoil", "ไม่มีแรงถีบ"), Description = T("Your view stays still while spraying", "จอนิ่งตอนกดยิงค้าง") })
     xDTaraZ.UI.NamedToggle(mods, "NoSpread", { Text = T("No spread", "ไม่มีการกระจาย"), Description = T("Every bullet lands on the crosshair", "ทุกนัดลงกลางเป้า") })
-    xDTaraZ.UI.NamedToggle(mods, "FullAuto", { Text = T("Full auto", "ยิงรัวทุกปืน"), Description = T("Hold to spray with any gun", "กดค้างยิงรัวได้ทุกปืน") })
+    Library.Compat.NeedCap("NoRecoil", "HookFunction")
     Library.Compat.NeedCap("NoSpread", { "HookFunction", "Gc" })
-
-    local rate = tab:AddRightGroupbox(T("Fire Rate", "อัตรายิง"), "zap")
-    xDTaraZ.UI.NamedToggle(rate, "RapidFire", { Text = T("Rapid fire", "ยิงเร็ว"), Description = T("Shoots faster than normal", "ยิงเร็วกว่าปกติ"), Risky = true })
-    rate:AddSlider("FireRateMult", { Text = T("Speed", "ความเร็ว"), Min = 1, Max = 4, Default = 1.5, Rounding = 1, Suffix = "x" })
-    xDTaraZ.UI.NamedToggle(rate, "WeaponSpeed", { Text = T("Move speed", "เดินเร็ว"), Description = T("Run faster with any weapon", "วิ่งเร็วขึ้นทุกอาวุธ"), Risky = true })
-    rate:AddSlider("WeaponSpeedMult", { Text = T("Move speed", "ความเร็วเดิน"), Min = 1, Max = 2, Default = 1.3, Rounding = 1, Suffix = "x" })
 end
 
 function xDTaraZ.UI.BuildVisuals(window)
@@ -1636,7 +1548,7 @@ function xDTaraZ.UI.SkinGroup(tab, category, side)
         if weapon == "-" then continue end
         local values = { "Default" }
         for _, skin in ipairs(xDTaraZ.Skins.List(weapon)) do values[#values + 1] = skin end
-        group:AddDropdown("Skin_" .. weapon, { Text = weapon, Values = values, Default = xDTaraZ.Skins.Map[weapon] or "Default", Searchable = true, Callback = function(skin)
+        group:AddDropdown("Skin_" .. weapon, { Text = weapon, Values = values, Default = xDTaraZ.Skins.Map[weapon] or "Default", Searchable = true, Images = xDTaraZ.Skins.Images[weapon], Colors = xDTaraZ.Skins.Colors[weapon], Callback = function(skin)
             xDTaraZ.Skins.Set(weapon, skin)
         end })
     end
@@ -1790,13 +1702,6 @@ function xDTaraZ.UI.HookOnDemand()
             if on then task.delay(xDTaraZ.Config.HookSettle, xDTaraZ.UI.WarnReducedTrigger) end
         end)
     end
-
-    local recoil = Library.Options.NoRecoil
-    if recoil then
-        recoil:OnChanged(function(on)
-            if on then task.defer(xDTaraZ.UI.WarnPartialRecoil) end
-        end)
-    end
 end
 
 ---Triggerbot fires without the shoot hook; only shot pacing is less exact, so say so once.
@@ -1807,20 +1712,11 @@ function xDTaraZ.UI.WarnReducedTrigger()
     table.insert(state.Notices, { T("Triggerbot", "ยิงอัตโนมัติ"), T("Running in reduced mode on this executor; shot pacing is less exact", "ทำงานแบบจำกัดบน executor นี้ จังหวะยิงอาจไม่แม่นเท่าที่ควร") })
 end
 
----No recoil still clears the gun's own recoil without hooks; the camera kick needs one, so say so once.
-function xDTaraZ.UI.WarnPartialRecoil()
-    local state = xDTaraZ.State
-    if state.Hooks.Kick or state.RecoilWarned then return end
-    state.RecoilWarned = true
-    table.insert(state.Notices, { T("No recoil", "ไม่มีแรงถีบ"), T("Your view still kicks on this executor; bullet recoil is removed", "จอยังเด้งบน executor นี้ แต่แรงถีบกระสุนหายแล้ว") })
-end
-
 function xDTaraZ.UI.BlockMissing()
     local absent = xDTaraZ.GameLib.Missing
     local missing = {
         Net = xDTaraZ.GameLib.Net == nil and (absent.Remotes or true),
         Character = xDTaraZ.GameLib.Character == nil and (absent.CharacterController or true),
-        Weapons = next(xDTaraZ.Weapons) == nil and (absent.Weapons or true),
         Skins = xDTaraZ.Skins.Folder() == nil and "Absent",
     }
     if missing.Skins then warn("[BloxStrike] Assets.Skins not found, the skin changer is blocked") end
@@ -1864,7 +1760,6 @@ function xDTaraZ.Boot()
     xDTaraZ:Connect(UserInputService.InputEnded, function(input) xDTaraZ.World.OnSpace(input, false) end)
     xDTaraZ:Connect(Workspace.DescendantAdded, xDTaraZ.World.OnDescendant)
 
-    xDTaraZ.Scheduler.Every("Gun Mods", 0.25, xDTaraZ.Guns.Step, { "NoSpread", "NoRecoil", "FullAuto", "RapidFire", "WeaponSpeed" }, xDTaraZ.Guns.Rest)
     xDTaraZ.Scheduler.Every("World", 0.2, xDTaraZ.World.Step, { "Fullbright", "NoFlash" }, xDTaraZ.World.Step)
     xDTaraZ.Scheduler.Every("Auto Rebuy", 0.5, xDTaraZ.Economy.Step, { "AutoRebuy" })
     xDTaraZ.Scheduler.Every("Skin Changer", 0.15, xDTaraZ.Skins.Step, { "SkinChanger" }, xDTaraZ.Skins.Step)
@@ -1874,10 +1769,9 @@ end
 function xDTaraZ:Unload()
     self.State.Alive = false
     xDTaraZ.Combat.Unload()
-    for _, key in ipairs({ "NoRecoil", "NoSpread", "FullAuto", "RapidFire", "WeaponSpeed", "Fullbright", "CameraFov", "BunnyHop", "SkinChanger" }) do
+    for _, key in ipairs({ "NoRecoil", "NoSpread", "Fullbright", "CameraFov", "BunnyHop", "SkinChanger" }) do
         xDTaraZ.Options[key] = false
     end
-    pcall(xDTaraZ.Guns.Restore)
     pcall(xDTaraZ.World.Step)
     pcall(xDTaraZ.World.SetCrouch, false)
     xDTaraZ.Guns.UnbindFov()
