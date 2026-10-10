@@ -147,7 +147,7 @@ xDTaraZ.Config = {
     SaveFolder = "Loot To Forge",
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
-        { "2026-10-10", "Find Old Server: join a server still on the old version, where Spawn Rolls works\nSpawn Best Set: strongest weapon, armor and hat, equipped\nAuto Roll Race: pick target stars\nSpawn Race Rolls, Season Tickets and Tokens (OP)\nAuto Token Shop: every pass and pack for free\nHop to emptiest server, save and return position" },
+        { "2026-10-10", "Find Old Server: join a server still on the old version, where Spawn Rolls works. Remembers old servers it found\nSpawn Best Set: strongest weapon, armor and hat, equipped\nAuto Roll Race: pick target stars\nSpawn Race Rolls, Season Tickets and Tokens (OP)\nAuto Token Shop: every pass and pack for free\nHop to emptiest server, save and return position" },
         { "2026-10-06", "Updated for the new game version\nSpawn Items now lists only items that still work (ores and runes)\nDupe Whole Inventory skips items the game no longer allows" },
     },
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
@@ -246,6 +246,8 @@ if type(body) == "string" then loadstring(body)() end]],
     HopStall = 30,
     HopGap = 15,
     OldServerFlag = "oldserver.json",
+    OldServerKnown = "oldservers.json",
+    OldServerKeep = 20,
     OldServerVersion = 36046,
     OldServerTries = 40,
     OldServerGap = 4,
@@ -2538,17 +2540,21 @@ end
 ---@param target number?  place version to look for, nil to continue a saved search
 ---@return string         found / searching / gaveup / nolist
 function xDTaraZ.Session.FindOldServer(target)
-    local search = target and { target = target, tries = 0 } or xDTaraZ.Session.OldSearch()
+    local search = target and { target = target, tries = 0, known = xDTaraZ.Session.KnownOld() } or xDTaraZ.Session.OldSearch()
     if not search then return "gaveup" end
     if game.PlaceVersion <= search.target then
         xDTaraZ.Session.SaveOldSearch(nil)
+        xDTaraZ.Session.RememberOld(game.JobId)
         return "found"
     end
     if search.tries >= Config.OldServerTries then
         xDTaraZ.Session.SaveOldSearch(nil)
         return "gaveup"
     end
-    local serverId = xDTaraZ.Boss.PickServer()
+    local serverId
+    search.known = type(search.known) == "table" and search.known or {}
+    repeat serverId = table.remove(search.known, 1) until serverId ~= game.JobId
+    serverId = serverId or xDTaraZ.Boss.PickServer()
     if not serverId then return "nolist" end
     search.tries += 1
     xDTaraZ.Session.SaveOldSearch(search)
@@ -2561,8 +2567,32 @@ function xDTaraZ.Session.FindOldServer(target)
     return "searching"
 end
 
+---@return string[]  old-version servers found before, newest first
+function xDTaraZ.Session.KnownOld()
+    local ok, text = pcall(readfile, Config.SaveFolder .. "/" .. Config.OldServerKnown)
+    if not ok then return {} end
+    local decoded
+    ok, decoded = pcall(HttpService.JSONDecode, HttpService, text)
+    return ok and type(decoded) == "table" and decoded or {}
+end
+
+function xDTaraZ.Session.RememberOld(jobId)
+    local known = { jobId }
+    for _, id in ipairs(xDTaraZ.Session.KnownOld()) do
+        if id ~= jobId and #known < Config.OldServerKeep then table.insert(known, id) end
+    end
+    pcall(function()
+        if not isfolder(Config.SaveFolder) then makefolder(Config.SaveFolder) end
+        writefile(Config.SaveFolder .. "/" .. Config.OldServerKnown, HttpService:JSONEncode(known))
+    end)
+end
+
 function xDTaraZ.Session.Bind()
     table.insert(State.Conns, TeleportService.TeleportInitFailed:Connect(function()
+        if xDTaraZ.Session.OldSearch() then
+            task.delay(1, xDTaraZ.Util.Try, xDTaraZ.Session.FindOldServer)
+            return
+        end
         if not State.BossHopping then return end
         State.BossHopping = false
         task.delay(1, xDTaraZ.Util.Try, xDTaraZ.Boss.HopStep)
@@ -2997,7 +3027,7 @@ local function BuildInterface()
         Feature(bossBox, "AutoWorldBoss", T("Auto World Boss", "บอสโลกอัตโนมัติ"), T("Joins every world boss and kills it", "เข้าบอสโลกทุกรอบแล้วฆ่า"), function(value)
             if not value and LocalPlayer:GetAttribute("IntoFight") == "WorldBoss" then task.spawn(xDTaraZ.Util.Try, xDTaraZ.Boss.Leave) end
         end)
-        Check(bossBox, "BossCards", T("Take every reward card", "เปิดการ์ดรางวัลทุกใบ"))
+        Check(bossBox, "BossCards", T("Auto Take Reward Card", "เปิดการ์ดรางวัลอัตโนมัติ"))
         Feature(bossBox, "BossHop", T("Boss Server Hop", "ย้ายเซิร์ฟหาบอส"), T("Hops to servers where the boss is up or about to spawn, kills it, then moves on", "ย้ายไปเซิร์ฟที่บอสเกิดอยู่หรือใกล้เกิด ฆ่าแล้วย้ายต่อ"), function(value)
             xDTaraZ.Boss.HopFlag(value)
             if value and Options.AutoWorldBoss and not Options.AutoWorldBoss.Value then Options.AutoWorldBoss:SetValue(true) end
