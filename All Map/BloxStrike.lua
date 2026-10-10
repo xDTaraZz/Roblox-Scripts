@@ -1301,7 +1301,7 @@ end
 
 function xDTaraZ.World.OnSpace(input, down, processed)
     if input.KeyCode ~= Enum.KeyCode.Space then return end
-    if down and (processed or UserInputService:GetFocusedTextBox()) then return end
+    if down and UserInputService:GetFocusedTextBox() then return end
     xDTaraZ.State.SpaceHeld = down
 end
 
