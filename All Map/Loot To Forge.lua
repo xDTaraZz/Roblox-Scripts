@@ -147,9 +147,8 @@ xDTaraZ.Config = {
     SaveFolder = "Loot To Forge",
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
-        { "2026-10-10", "Spawn Race Rolls, Season Tickets and Tokens (OP)\nAuto Token Shop: every pass and pack for free\nAuto Roll Race refills rolls by itself\nNew Gear tab, cleaner layout\nHop to emptiest server, save and return position\nFixed most features after the latest game update" },
+        { "2026-10-10", "Find Old Server: join a server still on the old version, where Spawn Rolls works\nSpawn Best Set: strongest weapon, armor and hat, equipped\nAuto Roll Race: pick target stars\nSpawn Race Rolls, Season Tickets and Tokens (OP)\nAuto Token Shop: every pass and pack for free\nHop to emptiest server, save and return position" },
         { "2026-10-06", "Updated for the new game version\nSpawn Items now lists only items that still work (ores and runes)\nDupe Whole Inventory skips items the game no longer allows" },
-        { "2026-10-04", "Spawn Scrolls, Tickets & Stones\nDupe Whole Inventory\nAdd Season Coins (OP)\nFaster Tower farm\nRemoved keybinds from auto features\nMax Gear picks Exclusive gear\nSpawn Gear (OP)\nPotions (OP)\nFixed Auto World Boss\nBoss Server Hop\nAuto Sell keeps your best base gear\nMax Gear now goes to +20, much faster\nFixed freeze when loading the script\nUpdated for the new game version\nAuto Sell keeps items you locked\nSteadier Boss Server Hop" },
     },
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
     ReloadSource = [[
@@ -246,6 +245,10 @@ if type(body) == "string" then loadstring(body)() end]],
     HopGiveUp = 8,
     HopStall = 30,
     HopGap = 15,
+    OldServerFlag = "oldserver.json",
+    OldServerVersion = 36046,
+    OldServerTries = 40,
+    OldServerGap = 4,
     TrainRejoinDelay = 0.3,
     TrainWatchdog = 3,
     TrainAcceptWait = 1.5,
@@ -382,6 +385,7 @@ xDTaraZ.State = {
         AutoRace = false,
         RaceTargets = {},
         RaceMinLevel = nil,
+        RaceStar = 0,
         RaceSlot = "Equipped",
         RaceRefill = false,
         RaceLock = false,
@@ -390,6 +394,7 @@ xDTaraZ.State = {
         SpawnItem = nil,
         SpawnAmount = 100000,
         CoinTarget = 1000000,
+        OldVersion = 36046,
         SpawnGear = nil,
         GearCopies = 1,
         SpeedOn = false,
@@ -943,10 +948,23 @@ function xDTaraZ.Bonus.Key(rewardId)
     return table.concat(pad) .. rewardId
 end
 
+---@return boolean  false once the server stops paying repeat claims
+function xDTaraZ.Bonus.Works()
+    if State.BonusWorks ~= nil then return State.BonusWorks end
+    local classStore = xDTaraZ.GameLib.Need(ReplicatedStorage.LocalData.ClassData)
+    local before = classStore.GetLuckTimes()
+    xDTaraZ.Util.Remote("UpdateLog", "TryClaimUPDRewardRE"):FireServer(xDTaraZ.Bonus.Key(Config.BonusRewards.Race.id))
+    local deadline = os.clock() + Config.RaceResultWait * 2
+    repeat task.wait(0.1) until classStore.GetLuckTimes() > before or os.clock() > deadline
+    State.BonusWorks = classStore.GetLuckTimes() > before
+    return State.BonusWorks
+end
+
 ---@param kind   string  Race, Season or Token
 ---@param amount number  rolls, tickets or tokens wanted
----@return number        claims sent
+---@return number        claims sent, 0 when the game no longer pays them
 function xDTaraZ.Bonus.Spawn(kind, amount)
+    if not xDTaraZ.Bonus.Works() then return 0 end
     local reward = Config.BonusRewards[kind]
     local claim = xDTaraZ.Util.Remote("UpdateLog", "TryClaimUPDRewardRE")
     local times = math.clamp(math.ceil(amount / reward.per), 1, Config.BonusMaxClaims)
@@ -1598,6 +1616,25 @@ function xDTaraZ.Spawn.GearChoices(slot)
 end
 
 ---@return number, number  found, tried
+---@return number  pieces spawned, one per slot at most
+function xDTaraZ.Spawn.BestSet()
+    local made = 0
+    for _, slot in ipairs(Config.GearTypes) do
+        local best, bestPower = nil, -1
+        for _, gear in ipairs(xDTaraZ.Index.GearCatalog()) do
+            if not gear.forgeable or gear.slot ~= slot then continue end
+            local helper = xDTaraZ.GameLib.Api(gear.forgeType == "Weapon" and GameConfig.Weapon.Helper or GameConfig.Armor.Helper)
+            local ok, power = pcall(helper.GetMainAffix, gear.id)
+            power = ok and tonumber(power) or 0
+            if power > bestPower then best, bestPower = gear, power end
+        end
+        if best and xDTaraZ.Index.Hunt(best, 1) then made += 1 end
+    end
+    task.wait(0.5)
+    xDTaraZ.Gear.EquipBest()
+    return made
+end
+
 function xDTaraZ.Index.HuntAll()
     local found, tried = 0, 0
     for _, gear in ipairs(xDTaraZ.Index.Missing()) do
@@ -2217,10 +2254,18 @@ function xDTaraZ.Race.RarityChoices()
     return labels, byLabel
 end
 
+---@return number  star level the account has on this race, 0 if never rolled
+function xDTaraZ.Race.Stars(classId)
+    local record = xDTaraZ.GameLib.Need(ReplicatedStorage.LocalData.ClassData).GetData().recored
+    local entry = record and record[classId]
+    return entry and tonumber(entry.Level) or 0
+end
+
 function xDTaraZ.Race.IsGoal(classId)
     if not classId then return false end
-    if State.Opt.RaceTargets[classId] then return true end
-    return State.Opt.RaceMinLevel ~= nil and xDTaraZ.Race.Level(classId) >= State.Opt.RaceMinLevel
+    local wanted = State.Opt.RaceTargets[classId]
+        or (State.Opt.RaceMinLevel ~= nil and xDTaraZ.Race.Level(classId) >= State.Opt.RaceMinLevel)
+    return wanted and xDTaraZ.Race.Stars(classId) >= (State.Opt.RaceStar or 0)
 end
 
 ---@return string?, string?  slot to roll, or nil + why not
@@ -2467,6 +2512,53 @@ function xDTaraZ.Boss.HopStep()
         return
     end
     xDTaraZ.Boss.Hop()
+end
+
+---@return table?  { target, tries } while a search is running
+function xDTaraZ.Session.OldSearch()
+    local ok, text = pcall(readfile, Config.SaveFolder .. "/" .. Config.OldServerFlag)
+    if not ok then return nil end
+    local decoded
+    ok, decoded = pcall(HttpService.JSONDecode, HttpService, text)
+    return ok and type(decoded) == "table" and tonumber(decoded.target) and decoded or nil
+end
+
+function xDTaraZ.Session.SaveOldSearch(search)
+    local path = Config.SaveFolder .. "/" .. Config.OldServerFlag
+    pcall(function()
+        if not search then
+            if isfile(path) then delfile(path) end
+            return
+        end
+        if not isfolder(Config.SaveFolder) then makefolder(Config.SaveFolder) end
+        writefile(path, HttpService:JSONEncode(search))
+    end)
+end
+
+---@param target number?  place version to look for, nil to continue a saved search
+---@return string         found / searching / gaveup / nolist
+function xDTaraZ.Session.FindOldServer(target)
+    local search = target and { target = target, tries = 0 } or xDTaraZ.Session.OldSearch()
+    if not search then return "gaveup" end
+    if game.PlaceVersion <= search.target then
+        xDTaraZ.Session.SaveOldSearch(nil)
+        return "found"
+    end
+    if search.tries >= Config.OldServerTries then
+        xDTaraZ.Session.SaveOldSearch(nil)
+        return "gaveup"
+    end
+    local serverId = xDTaraZ.Boss.PickServer()
+    if not serverId then return "nolist" end
+    search.tries += 1
+    xDTaraZ.Session.SaveOldSearch(search)
+    local queue = queue_on_teleport or queueonteleport
+    if queue and not State.HopQueued then
+        queue(Config.ReloadSource)
+        State.HopQueued = true
+    end
+    TeleportService:TeleportToPlaceInstance(game.PlaceId, serverId, LocalPlayer)
+    return "searching"
 end
 
 function xDTaraZ.Session.Bind()
@@ -3122,6 +3214,9 @@ local function BuildInterface()
         end, function(got)
             return got and "Spawned!" or "Not all copies this time, press again"
         end) })
+        gearBox:AddButton({ Text = T("Spawn Best Set", "เสกเซ็ตที่แรงสุด"), Func = LongAction("Index", xDTaraZ.Spawn.BestSet, function(made)
+            return ("Spawned and equipped %d/3 pieces"):format(made or 0)
+        end) })
         gearBox:AddButton({ Text = T("Buy Exclusive Gear", "ซื้อของ Exclusive"), Func = LongAction("Tower", xDTaraZ.Season.BuyExclusive, function(bought)
             return (bought or 0) > 0 and ("Bought %d exclusive pieces"):format(bought) or "Already bought this refresh"
         end) })
@@ -3141,7 +3236,8 @@ local function BuildInterface()
         bonusBox:AddButton({ Text = T("Spawn", "เสก"), Style = "Primary", Func = LongAction("Spawn", function()
             return xDTaraZ.Bonus.Spawn(opt.BonusKind, opt.BonusAmount) * Config.BonusRewards[opt.BonusKind].per
         end, function(added)
-            return ("+%s %s (stay 1 min so it saves)"):format(xDTaraZ.Util.Abbreviate(added or 0), opt.BonusKind)
+            if (added or 0) <= 0 then return "Patched by the latest game update" end
+            return ("+%s %s (stay 1 min so it saves)"):format(xDTaraZ.Util.Abbreviate(added), opt.BonusKind)
         end) })
 
         local tokenBox = tab:AddRightGroupbox(T("Token Shop", "ร้าน Token"), nil, "OP")
@@ -3206,6 +3302,15 @@ local function BuildInterface()
             Default = 1,
             Callback = function(value)
                 opt.RaceMinLevel = rarityLevels[value]
+            end,
+        })
+        local starByLabel = { ["Any"] = 0, ["2 Stars+"] = 2, ["3 Stars"] = 3 }
+        raceBox:AddDropdown("RaceStar", {
+            Text = T("Target Stars", "ดาวที่ต้องการ"),
+            Values = { "Any", "2 Stars+", "3 Stars" },
+            Default = 1,
+            Callback = function(value)
+                opt.RaceStar = starByLabel[value] or 0
             end,
         })
         raceBox:AddDropdown("RaceSlot", {
@@ -3289,6 +3394,16 @@ local function BuildInterface()
         Toggle(sessionBox, "AutoRejoin", T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), T("Rejoins the game by itself after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"))
         Toggle(sessionBox, "LowGraphics", T("FPS Boost", "เพิ่ม FPS"), T("Turns off 3D rendering to save CPU and GPU", "ปิดการแสดงผล 3D ประหยัด CPU/GPU"), xDTaraZ.Session.SetLowGraphics)
         sessionBox:AddButton({ Text = T("Rejoin Now", "เข้าเกมใหม่เดี๋ยวนี้"), Func = Action(xDTaraZ.Session.Rejoin) })
+        NumberInput(sessionBox, "OldVersion", T("Old Server Version", "เวอร์ชันเซิร์ฟเก่า"), T("Hops until it lands in a server still on this version", "ย้ายเซิร์ฟไปเรื่อยๆ จนเจอเซิร์ฟที่ยังเป็นเวอร์ชันนี้"), 1)
+        sessionBox:AddButton({ Text = T("Find Old Server", "หาเซิร์ฟเวอร์ชันเก่า"), Func = Action(function()
+            local target = math.floor(tonumber(opt.OldVersion) or Config.OldServerVersion)
+            if game.PlaceVersion <= target then return Notify(("Already on version %d"):format(game.PlaceVersion), "Success") end
+            local outcome = xDTaraZ.Session.FindOldServer(target)
+            Notify(outcome == "searching" and ("Looking for version %d (now %d)"):format(target, game.PlaceVersion) or "Server list unavailable, try again", outcome == "searching" and "Info" or "Warning")
+        end) }):AddButton({ Text = T("Stop", "หยุด"), Func = Action(function()
+            xDTaraZ.Session.SaveOldSearch(nil)
+            Notify("Old server search stopped", "Info")
+        end) })
         sessionBox:AddButton({ Text = T("Hop To Emptiest Server", "ย้ายไปเซิร์ฟคนน้อยสุด"), Func = Action(function()
             if not xDTaraZ.Session.HopSmallest() then Notify("Server list unavailable, try again", "Warning") end
         end) })
@@ -3393,6 +3508,21 @@ local function BuildInterface()
             Notify("Loaded", "Success")
             xDTaraZ.Util.Try(Library.LoadAutoloadConfig, Library)
             if xDTaraZ.Boss.HopWanted() and Options.BossHop then Options.BossHop:SetValue(true) end
+            local search = xDTaraZ.Session.OldSearch()
+            if search then
+                task.delay(Config.OldServerGap, function()
+                    local outcome = xDTaraZ.Session.FindOldServer()
+                    if outcome == "found" then
+                        Notify(("Found a version %d server!"):format(game.PlaceVersion), "Success", 10)
+                    elseif outcome == "gaveup" then
+                        Notify(("No version %d server after %d hops"):format(search.target, Config.OldServerTries), "Warning", 10)
+                    elseif outcome == "nolist" then
+                        Notify("Server list unavailable, press Find Old Server again", "Warning")
+                    else
+                        Notify(("Version %d, hop %d/%d"):format(game.PlaceVersion, search.tries + 1, Config.OldServerTries), "Info")
+                    end
+                end)
+            end
         end,
     })
 end
