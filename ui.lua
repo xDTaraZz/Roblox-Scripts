@@ -25,7 +25,11 @@ local Config = {
     AssetDir = "mariohub/assets",
     ConfigRoot = "mariohub/configs",
     KeyCache = "mariohub/key.txt",
-    DefaultAssets = { logo = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/main/logo.png" },
+    DefaultAssets = {
+        logo = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/main/logo.png",
+        logo_halloween = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/main/logo_halloween.png",
+    },
+    SeasonTheme = "Halloween",
     FontDir = "mariohub/fonts",
     HttpTimeout = 8,
     FontTimeout = 20,
@@ -89,8 +93,11 @@ end
 local function Palette(spec)
     local palette = {}
     for token, value in pairs(spec) do
-        if token == "Particle" then
-            palette.ParticleGlyph, palette.ParticleFall, palette.ParticleColor = value[1], value[2], rgb(value[3])
+        if token == "Logo" then
+            palette.Logo = value
+        elseif token == "Particle" then
+            local glyphs = type(value[1]) == "table" and value[1] or { value[1] }
+            palette.ParticleGlyph, palette.ParticleGlyphs, palette.ParticleFall, palette.ParticleColor = glyphs[1], glyphs, value[2], rgb(value[3])
         elseif token == "Decor" then
             palette.Decor, palette.DecorGlyph, palette.DecorColor = value[1], value[2] or "✦", rgb(value[3] or "FFFFFF")
         elseif type(value) == "string" then
@@ -103,7 +110,7 @@ local function Palette(spec)
 end
 
 local Themes = {
-    Order = { "Overworld", "Light", "Dark", "Underground", "Castle", "Ghost House", "Star Road", "Desert", "Ice Land", "Jungle", "Sky World" },
+    Order = { "Overworld", "Halloween", "Light", "Dark", "Underground", "Castle", "Ghost House", "Star Road", "Desert", "Ice Land", "Jungle", "Sky World" },
     Overworld = Palette({
         Backdrop = "C4D6EC", BackdropAlt = "E2E9F2", Topbar = "7092CC", Sidebar = "96563E", SidebarAlt = "804834",
         SidebarText = "FCF2E6", SidebarMuted = "E2C4B0", TabActive = "FAF4E9", TabActiveText = "B84034",
@@ -111,6 +118,15 @@ local Themes = {
         Outline = "3E384A", Shadow = "7880A0", Text = "3A3028", SubText = "76685A", Muted = "A09484", Track = "DED4C4",
         Cloud = "FFFFFF", CloudAlpha = 0.25, Accent = "D64C40", AccentDark = "A0342C", Grass = "74B45C", GrassDark = "4E8840", Brick = "A46042", BrickDark = "683A28", Decor = { "Clouds" },
         Particle = { "✦", false, "F6D878" },
+    }),
+    Halloween = Palette({
+        Backdrop = "1A1226", BackdropAlt = "2A1838", Topbar = "2B1A3E", Sidebar = "3A2150", SidebarAlt = "2C1840",
+        SidebarText = "FFF1E2", SidebarMuted = "C9A9D8", TabActive = "F28A2E", TabActiveText = "1E1024",
+        Panel = "241830", PanelHeader = "301F40", Element = "2E2140", Hover = "3C2A52",
+        Outline = "0B0610", Shadow = "0B0610", Text = "FFF1E2", SubText = "D7BFD9", Muted = "9C85A8", Track = "4A3460",
+        Cloud = "B98CFF", CloudAlpha = 0.85, Accent = "F28A2E", AccentDark = "B85E14", Grass = "7A3FA8", GrassDark = "4E2470", Brick = "4A2E60", BrickDark = "1E1028", Decor = { "Halloween", "✦", "FFB347" },
+        Glow = "F28A2E", Fog = "8E5CD0", Logo = "logo_halloween",
+        Particle = { { "✦", "✦", "•", "✧" }, false, "FFB347" },
     }),
     Light = Palette({
         Backdrop = "F2EEE6", BackdropAlt = "FAF8F3", Topbar = "EDE4D4", TopbarText = "4A3F35", Sidebar = "EAE2D4", SidebarAlt = "DDD3C2",
@@ -583,6 +599,7 @@ function Theme.Apply(name)
     end
     local palette = Themes[name]
     State.ThemeName = name
+    Theme.Colors.Logo, Theme.Colors.Glow, Theme.Colors.Fog, Theme.Colors.ParticleGlyphs = nil, nil, nil, nil
     Theme.Colors.TopbarText = Themes.Shared.White
     for token, color in pairs(Themes.Shared) do
         Theme.Colors[token] = color
@@ -1041,11 +1058,23 @@ function Draw.Cloud(parent, width, token)
     return cloud
 end
 
+-- โลโก้ตามธีม: ธีมที่มี Logo ใช้รูปของธีมนั้น ไม่มีใช้ logo ปกติ โหลดไม่ได้วาด M เอง
 function Draw.Emblem(parent, size)
-    local image = Assets.Resolve("logo")
-    if image then
-        return Draw.New("ImageLabel", { BackgroundTransparency = 1, Image = image, Size = UDim2.fromOffset(size, size), ScaleType = Enum.ScaleType.Fit, Parent = parent })
-    end
+    local holder = Draw.New("Frame", { BackgroundTransparency = 1, Size = UDim2.fromOffset(size, size), Parent = parent })
+    local picture = Draw.New("ImageLabel", { BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.fromScale(1, 1), ScaleType = Enum.ScaleType.Fit, Visible = false, Parent = holder })
+    local drawn = Draw.DrawnEmblem(holder, size)
+    Theme.OnRender(holder, function()
+        local content = (Theme.Colors.Logo and Assets.Resolve(Theme.Colors.Logo)) or Assets.Resolve("logo")
+        picture.Image = content or ""
+        picture.Visible = content ~= nil
+        drawn.Visible = content == nil
+        picture.Size = UDim2.fromScale(Theme.Colors.Logo and 1.25 or 1, Theme.Colors.Logo and 1.25 or 1)
+    end)
+    Anim.Tween(picture, { Rotation = 6 }, 1.6, "Sine", -1, true)
+    return holder
+end
+
+function Draw.DrawnEmblem(parent, size)
     local emblem = Draw.Box("Frame", { Size = UDim2.fromOffset(size, size), Parent = parent }, "Accent", "Outline", UDim.new(1, 0), 2)
     local ring = Draw.New("Frame", {
         AnchorPoint = Vector2.new(0.5, 0.5),
@@ -1140,9 +1169,30 @@ Sprite.Palette = {
     g = Color3.fromRGB(67, 176, 71), G = Color3.fromRGB(38, 116, 44), l = Color3.fromRGB(150, 226, 122),
     n = Color3.fromRGB(154, 160, 166), N = Color3.fromRGB(46, 46, 58), B = Color3.fromRGB(200, 86, 28),
     m = Color3.fromRGB(90, 42, 14), b = Color3.fromRGB(4, 156, 216),
+    p = Color3.fromRGB(156, 92, 220), P = Color3.fromRGB(96, 44, 150),
 }
 
 Sprite.Art = {
+    pumpkin = {
+        ".....mm.....", "....kmGk....", "..kkkkkkkk..", ".koooBBooook",
+        "kooyyooyyook", "koyyyooyyyok", "koooooooooBk", "kooyoyyoyook",
+        "koooyyyyoook", ".kooooBoook.", "..kkkkkkkk..", "............",
+    },
+    bat = {
+        "............", "............", "k..........k", "kk...kk...kk",
+        "kpk.kppk.kpk", "kppkpyypkppk", "kppppppppppk", ".kppppppppk.",
+        "..kpk..kpk..", "...k....k...", "............", "............",
+    },
+    spider = {
+        "............", "............", "k...kkkk...k", ".k.knnnnk.k.",
+        "..knynnynk..", "kkknnnnnnkkk", "..knnnnnnk..", ".k.knnnnk.k.",
+        "k...kkkk...k", "............", "............", "............",
+    },
+    candy = {
+        "............", ".....kk.....", "....kwwk....", "....kwwk....",
+        "...kooook...", "...kooook...", "..kooooook..", "..kyyyyyyk..",
+        ".kyyyyyyyyk.", ".kyyyyyyyyk.", "..kkkkkkkk..", "............",
+    },
     mushroom = {
         "....kkkk....", "..kkrrwwkk..", ".krrrrwwwrk.", ".kwwrrwwrrk.",
         "kwwwwrrrrrrk", "kwwwwrrrwwrk", "krwwrrrwwwwk", "krrrrrrwwwrk",
@@ -3453,20 +3503,66 @@ function Window:BuildDecor(topbar)
         Anim.Tween(star, { TextTransparency = 0.8 }, 0.9 + index * 0.37, "Sine", -1, true)
         table.insert(self.Stars, star)
     end
+    self.Spooky = {}
+    for index, spot in ipairs({ { 0.5, 10, 30, "pumpkin" }, { 0.55, 26, 20, "bat" }, { 0.6, 6, 30, "boo" }, { 0.645, 28, 18, "candy" }, { 0.69, 10, 30, "pumpkin" }, { 0.735, 20, 20, "bat" } }) do
+        local item = Sprite.New(topbar, spot[4], spot[3])
+        item.AnchorPoint = Vector2.new(0.5, 0)
+        item.Position = UDim2.new(spot[1], 0, 0, spot[2])
+        item.ZIndex = 2
+        local swing = spot[4] == "bat" and 14 or 6
+        Anim.Tween(item, { Position = UDim2.new(spot[1], 0, 0, spot[2] + (spot[4] == "bat" and 6 or 3)), Rotation = index % 2 == 0 and swing or -swing }, 1.2 + index * 0.35, "Sine", -1, true)
+        table.insert(self.Spooky, item)
+    end
+    self:BuildSpookyBody()
     Theme.OnRender(self.Stars, function()
         self:RenderDecor()
     end)
 end
 
+-- ของ Halloween นอก topbar: ขอบเรืองส้ม หมอกม่วงด้านล่าง แมงมุมห้อยใย
+function Window:BuildSpookyBody()
+    self.SpookyBody = {}
+    local shadow, radius = Config.Window.Shadow, Config.Window.Radius
+    local glow = Draw.New("Frame", { Name = "Glow", BackgroundTransparency = 1, Position = UDim2.fromOffset(-3, -3), Size = UDim2.new(1, 6 - shadow, 1, 6 - shadow), ZIndex = 0, Parent = self.Pop })
+    Draw.Corner(glow, radius + 3)
+    local glowStroke = Draw.New("UIStroke", { Thickness = 4, Transparency = 0.25, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = glow })
+    Theme.OnRender(glowStroke, function()
+        glowStroke.Color = Theme.Colors.Glow or Theme.Colors.Accent
+    end)
+    Anim.Tween(glowStroke, { Transparency = 0.75, Thickness = 2 }, 1.8, "Sine", -1, true)
+    table.insert(self.SpookyBody, glow)
+
+    local fog = Draw.New("Frame", { Name = "Fog", AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, 70), BorderSizePixel = 0, ZIndex = 1, Parent = self.Body })
+    local fogShape = Draw.New("UIGradient", { Rotation = 90, Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 1), NumberSequenceKeypoint.new(1, 0.72) }), Parent = fog })
+    Theme.OnRender(fog, function()
+        fog.BackgroundColor3 = Theme.Colors.Fog or Theme.Colors.Accent
+    end)
+    Anim.Tween(fogShape, { Offset = Vector2.new(0, 0.12) }, 3.2, "Sine", -1, true)
+    table.insert(self.SpookyBody, fog)
+
+    local hanger = Draw.New("Frame", { Name = "Spider", BackgroundTransparency = 1, Position = UDim2.new(1, -16, 0, Config.Window.Topbar + 60), Size = UDim2.fromOffset(16, 16), ZIndex = 9, Parent = self.Body })
+    Draw.New("Frame", { AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 0, 4), Size = UDim2.new(0, 1, 0, 300), BackgroundColor3 = Color3.fromRGB(200, 186, 222), BackgroundTransparency = 0.5, Parent = hanger })
+    local spider = Sprite.New(hanger, "spider", 16)
+    Anim.Tween(hanger, { Position = UDim2.new(1, -16, 0, Config.Window.Topbar + 150) }, 3.4, "Sine", -1, true)
+    Anim.Tween(spider, { Rotation = 10 }, 0.9, "Sine", -1, true)
+    table.insert(self.SpookyBody, hanger)
+end
+
 function Window:RenderDecor()
     local wide = self.Size and self.Size.X >= 700
-    local night = Theme.Colors.Decor == "Stars"
+    local decor = Theme.Colors.Decor
     for _, cloud in ipairs(self.Clouds) do
-        cloud.Visible = wide and not night
+        cloud.Visible = wide and decor == "Clouds"
     end
     for _, star in ipairs(self.Stars) do
         star.Text = Theme.Colors.DecorGlyph or "✦"
-        star.Visible = wide and night
+        star.Visible = wide and decor == "Stars"
+    end
+    for _, item in ipairs(self.Spooky or {}) do
+        item.Visible = decor == "Halloween" and wide
+    end
+    for _, item in ipairs(self.SpookyBody or {}) do
+        item.Visible = decor == "Halloween"
     end
 end
 
@@ -4136,8 +4232,16 @@ end
 
 function Particles.Restyle()
     for _, entry in ipairs(Particles.Pool) do
-        entry.Label.Text = Theme.Colors.ParticleGlyph or "✦"
+        entry.Label.Text = Particles.Glyph()
     end
+end
+
+function Particles.Glyph()
+    local glyphs = Theme.Colors.ParticleGlyphs
+    if glyphs and #glyphs > 1 then
+        return glyphs[math.random(#glyphs)]
+    end
+    return Theme.Colors.ParticleGlyph or "✦"
 end
 
 function Particles.Active()
@@ -4152,6 +4256,7 @@ function Particles.Launch(entry, delay)
     end
     entry.Busy = true
     local label = entry.Label
+    label.Text = Particles.Glyph()
     local fall = Theme.Colors.ParticleFall == true
     local size = math.random(9, 16)
     local x = math.random()
@@ -5827,7 +5932,7 @@ function Library:CreateWindow(options)
     end
     State.Language = language == "TH" and "TH" or "EN"
     State.UserScale = math.clamp(options.Scale or 1, Config.ScaleRange.Min, Config.ScaleRange.Max)
-    Theme.Apply(options.Theme or "Overworld")
+    Theme.Apply(Config.SeasonTheme or options.Theme or "Overworld")
     Assets.Configure(Config.DefaultAssets)
     Assets.Configure(options.Assets)
     Window.DetectTouch(options.Layout)
