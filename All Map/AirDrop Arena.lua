@@ -157,8 +157,8 @@ xDTaraZ.Config = {
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
+        { "2026-10-10", "Updated for Season 5\nAuto Lottery in Auto Claim\nTeleport to and spectate any player\nItem pictures in every item list\nHalloween menu" },
         { "2026-10-05", "Fixed shots not killing: ammo spam, knife in hand\nAuto reload between fights, Auto ammo\nHealth bars on ESP now go down\nNew Rewards tab and Triggerbot\nSilent Aim, Aimbot, Ragebot each have their own settings" },
-        { "2026-10-04", "Updated for the new season\nAuto Gear reads gear slots from the game" },
     },
     SaveFolder = "AirDrop Arena",
     Intro = true,
@@ -202,7 +202,7 @@ xDTaraZ.Config = {
     CurrencyType = 1,
     TriggerRange = 1000,
     GunTypes = { [4] = true, [5] = true },
-    ClaimKinds = { "Tasks", "Season", "Online gifts", "Sign-in", "Update gift" },
+    ClaimKinds = { "Tasks", "Season", "Online gifts", "Sign-in", "Update gift", "Lottery" },
     GoldId = 1,
     BuffType = 24,
     CodeGap = 0.6,
@@ -210,6 +210,7 @@ xDTaraZ.Config = {
     BoxIds = { 2001, 2040 },
     BuyAmountMax = 100,
     ItemScan = 400,
+    TeleportBehind = 4,
     OpenBatch = 20,
     OpenGap = 0.25,
     GearSlots = {
@@ -266,6 +267,8 @@ xDTaraZ.State = {
 }
 
 xDTaraZ.Options = {
+    TargetPlayer = false,
+    Spectate = false,
     Hunt = false,
     HuntMode = "Behind",
     HuntDistance = 15,
@@ -1669,6 +1672,29 @@ function xDTaraZ.World.Hop()
     return false
 end
 
+---@return Model?  that player's character, if it's alive in the match
+function xDTaraZ.World.Body(name)
+    local plr = name and Players:FindFirstChild(name)
+    local char = plr and plr.Character
+    if not (char and char:FindFirstChild("HumanoidRootPart")) then return nil end
+    return char
+end
+
+---@return boolean  false when the player has no body right now
+function xDTaraZ.World.TeleportTo(name)
+    local char, root = xDTaraZ.World.Body(name), xDTaraZ.Player.Root()
+    if not (char and root) then return false end
+    root.CFrame = char.HumanoidRootPart.CFrame * CFrame.new(0, 0, xDTaraZ.Config.TeleportBehind)
+    return true
+end
+
+function xDTaraZ.World.Spectate(name)
+    local cam = Workspace.CurrentCamera
+    local char = name and xDTaraZ.World.Body(name)
+    local hum = char and char:FindFirstChildOfClass("Humanoid") or xDTaraZ.Player.Humanoid()
+    if cam and hum then cam.CameraSubject = hum end
+end
+
 xDTaraZ.Respawn = {}
 
 function xDTaraZ.Respawn.Now()
@@ -2002,6 +2028,7 @@ function xDTaraZ.Rewards.ClaimAll()
         { kinds.Tasks, xDTaraZ.Rewards.Tasks },
         { kinds.Season, xDTaraZ.Rewards.Season },
         { kinds["Online gifts"] or kinds["Sign-in"] or kinds["Update gift"], xDTaraZ.Rewards.Daily },
+        { kinds.Lottery, xDTaraZ.Rewards.Lottery },
     }
     for _, entry in ipairs(steps) do
         if not entry[1] then continue end
@@ -2073,6 +2100,27 @@ function xDTaraZ.Rewards.BuyBoxes()
         task.wait(xDTaraZ.Config.OpenGap)
     end
     return bought
+end
+
+---@return number  digits filled plus past draws claimed
+function xDTaraZ.Rewards.Lottery(data)
+    local lottery = data and data.Lottery
+    if type(lottery) ~= "table" then return 0 end
+    local sent = 0
+    local today = type(lottery.datamap) == "table" and lottery.datamap.listarray
+    local picks = {}
+    for pos, slot in ipairs(type(today) == "table" and today or {}) do
+        if type(slot) == "table" and not slot.lock and slot.value == -1 then
+            picks[#picks + 1] = { pos = pos, value = math.random(0, 9) }
+        end
+    end
+    if #picks > 0 and xDTaraZ.Net.Send("Lottery_C2SCustom", { action = "SetTicket", data = picks }) then sent += #picks end
+
+    for _, draw in ipairs(type(lottery.history) == "table" and lottery.history or {}) do
+        if type(draw) ~= "table" or draw.isclaim or not draw.id then continue end
+        if xDTaraZ.Net.Send("Lottery_C2SCustom", { action = "ClaimReward", data = { id = draw.id } }) then sent += 1 end
+    end
+    return sent
 end
 
 ---@param action string  "Claim", "Codes", "Open", "Buy"
@@ -2294,6 +2342,49 @@ function xDTaraZ.Scheduler.Boot()
     xDTaraZ:Connect(RunService.Heartbeat, xDTaraZ.Scheduler.Step)
 end
 
+xDTaraZ.Look = {}
+
+---@return table  item name -> config, built once from the game's item table
+function xDTaraZ.Look.Index()
+    if xDTaraZ.Look.ByName then return xDTaraZ.Look.ByName end
+    local byName = {}
+    for id = 1, xDTaraZ.Config.ItemScan do
+        local cfg = xDTaraZ.Loot.ItemConfig(id)
+        if cfg and type(cfg.name) == "string" and not byName[cfg.name] then byName[cfg.name] = cfg end
+    end
+    for _, box in ipairs(xDTaraZ.Rewards.Boxes()) do
+        byName[box[2]] = byName[box[2]] or xDTaraZ.Loot.ItemConfig(box[1])
+    end
+    xDTaraZ.Look.ByName = byName
+    return byName
+end
+
+---@return Color3?  the colour the game paints this quality with
+function xDTaraZ.Look.Color(quality)
+    local helper = xDTaraZ.Look.Quality
+    if helper == nil then
+        local scripts = ReplicatedStorage:FindFirstChild("Scripts")
+        helper = GameLib.Require(scripts and scripts:FindFirstChild("QualityHelper", true)) or false
+        xDTaraZ.Look.Quality = helper
+    end
+    if not (helper and quality) then return nil end
+    local ok, color = pcall(helper.GetQualityConfig, helper.TextQualityColor, quality, nil)
+    return ok and typeof(color) == "Color3" and color or nil
+end
+
+---Gives an item dropdown the game's pictures and rarity colours.
+function xDTaraZ.Look.Decorate(dropdown)
+    if not (dropdown and dropdown.SetImages) then return end
+    local index, images, colors = xDTaraZ.Look.Index(), {}, {}
+    for _, label in ipairs(dropdown.Values or {}) do
+        local cfg = index[label]
+        if not cfg then continue end
+        images[label] = cfg.tex or cfg.texhd
+        colors[label] = xDTaraZ.Look.Color(cfg.quality)
+    end
+    dropdown:SetImages(images, colors)
+end
+
 xDTaraZ.UI = { Labels = {} }
 local Library, T
 
@@ -2360,7 +2451,7 @@ function xDTaraZ.UI.BuildCombat(window)
     local priorities = { "Crosshair", "Distance", "Health" }
 
     local silent = tab:AddLeftGroupbox(T("Silent Aim", "ไซเลนต์เอม"), "bomb", "OP")
-    silent:AddToggle("SilentAim", { Text = T("Silent aim", "ไซเลนต์เอม"), Description = T("Your shots hit the target in the FOV", "กระสุนวิ่งเข้าเป้าในวง FOV"), Risky = true })
+    silent:AddToggle("SilentAim", { Text = T("Silent aim", "ไซเลนต์เอม"), Description = T("Your shots hit the target in the FOV", "กระสุนวิ่งเข้าเป้าในวง FOV") })
         :AddKeyPicker("SilentAimKey", { Default = "None", Mode = "Toggle" })
     silent:AddSlider("SilentHitChance", { Text = T("Hit chance", "โอกาสโดน"), Min = 1, Max = 100, Default = 100, Rounding = 0, Suffix = "%" })
     silent:AddSlider("SilentHeadChance", { Text = T("Headshot chance", "โอกาสโดนหัว"), Min = 0, Max = 100, Default = 100, Rounding = 0, Suffix = "%" })
@@ -2371,7 +2462,7 @@ function xDTaraZ.UI.BuildCombat(window)
     Library.Compat.NeedCap("SilentAim", "Namecall")
 
     local rage = tab:AddLeftGroupbox(T("Ragebot", "เรจบอท"), "bomb")
-    rage:AddToggle("Ragebot", { Text = T("Ragebot", "เรจบอท"), Description = T("Shoots every enemy in sight on its own", "ยิงศัตรูทุกตัวที่มองเห็นเอง"), Risky = true })
+    rage:AddToggle("Ragebot", { Text = T("Ragebot", "เรจบอท"), Description = T("Shoots every enemy in sight on its own", "ยิงศัตรูทุกตัวที่มองเห็นเอง") })
         :AddKeyPicker("RagebotKey", { Default = "None", Mode = "Toggle" })
     rage:AddSlider("RageMaxDistance", { Text = T("Max distance", "ระยะสูงสุด"), Min = 50, Max = 2000, Default = 1000, Suffix = "m" })
     Library.Compat.NeedCap("Ragebot", "Namecall")
@@ -2401,7 +2492,7 @@ function xDTaraZ.UI.BuildSurvival(window)
     local tab = window:AddTab(T("Survival", "เอาตัวรอด"), "heart", T("Hunt, healing, respawn and gun mods", "ล่าศัตรู ฮีล เกิดใหม่ และม็อดปืน"))
 
     local hunt = tab:AddLeftGroupbox(T("Hunt", "ล่าศัตรู"), "zap")
-    hunt:AddToggle("Hunt", { Text = T("Hunt", "ล่าศัตรู"), Description = T("Warps to the closest enemy whenever nobody is in sight", "วาร์ปไปหาศัตรูที่ใกล้สุดเมื่อไม่เห็นใคร"), Risky = true })
+    hunt:AddToggle("Hunt", { Text = T("Hunt", "ล่าศัตรู"), Description = T("Warps to the closest enemy whenever nobody is in sight", "วาร์ปไปหาศัตรูที่ใกล้สุดเมื่อไม่เห็นใคร") })
     hunt:AddDropdown("HuntMode", { Text = T("Position", "ตำแหน่ง"), Values = { "Behind", "Above", "Front" }, Default = "Behind" })
     hunt:AddSlider("HuntDistance", { Text = T("Distance", "ระยะห่าง"), Min = 0, Max = 60, Default = 15, Rounding = 0, Suffix = "m" })
     hunt:AddSlider("HuntHeight", { Text = T("Height", "ความสูง"), Min = 0, Max = 40, Default = 10, Rounding = 0, Suffix = "m" })
@@ -2418,10 +2509,10 @@ function xDTaraZ.UI.BuildSurvival(window)
     end) })
 
     local heal = tab:AddRightGroupbox(T("Auto Heal", "ฮีลอัตโนมัติ"), "heart")
-    heal:AddToggle("AutoHeal", { Text = T("Auto heal", "ฮีลอัตโนมัติ"), Description = T("Grabs a med from anywhere on the map when you get hurt", "ดึงยาจากทุกที่ในแมพมาใช้เมื่อเลือดลด"), Risky = true })
+    heal:AddToggle("AutoHeal", { Text = T("Auto heal", "ฮีลอัตโนมัติ"), Description = T("Grabs a med from anywhere on the map when you get hurt", "ดึงยาจากทุกที่ในแมพมาใช้เมื่อเลือดลด") })
     heal:AddSlider("HealAt", { Text = T("Heal below", "ฮีลเมื่อเลือดต่ำกว่า"), Min = 10, Max = 99, Default = 70, Rounding = 0, Suffix = "%" })
     local meds = xDTaraZ.Heal.Names()
-    heal:AddDropdown("HealMeds", { Text = T("Meds to use", "ยาที่ใช้"), Values = meds, Default = meds, Multi = true, AllowNull = true })
+    xDTaraZ.Look.Decorate(heal:AddDropdown("HealMeds", { Text = T("Meds to use", "ยาที่ใช้"), Values = meds, Default = meds, Multi = true, AllowNull = true }))
     heal:AddButton({ Text = T("Heal Now", "ฮีลตอนนี้"), Style = "Success", Func = xDTaraZ.UI.Detach(function()
         if not xDTaraZ.Heal.Now() then Library:Notify("Heal", "No med on the map or HP is full", 3, "Info") end
     end) })
@@ -2442,27 +2533,27 @@ function xDTaraZ.UI.BuildLoot(window)
     local tab = window:AddTab(T("Loot", "ของดรอป"), "coin", T("Gear, valuables and air drops from anywhere", "ของ ของมีค่า และแอร์ดรอปจากทุกที่"))
 
     local gear = tab:AddLeftGroupbox(T("Best Gear", "ของดีที่สุด"), "star")
-    gear:AddToggle("AutoGear", { Text = T("Auto loot best gear", "เก็บของดีสุดอัตโนมัติ"), Description = T("Grabs better guns and armor from any crate on the map", "ดึงปืนและเกราะที่ดีกว่าจากกล่องทุกใบในแมพ"), Risky = true })
+    gear:AddToggle("AutoGear", { Text = T("Auto loot best gear", "เก็บของดีสุดอัตโนมัติ"), Description = T("Grabs better guns and armor from any crate on the map", "ดึงปืนและเกราะที่ดีกว่าจากกล่องทุกใบในแมพ") })
     local gearLabels = xDTaraZ.Loot.SlotLabels()
     gear:AddDropdown("LootGear", { Text = T("Gear types", "ประเภทของ"), Values = gearLabels, Default = gearLabels, Multi = true, AllowNull = true })
-    gear:AddToggle("AutoAmmo", { Text = T("Auto ammo", "กระสุนอัตโนมัติ"), Description = T("Takes ammo for your guns from anywhere on the map", "ดึงกระสุนที่ตรงกับปืนจากทุกที่ในแมพ"), Risky = true })
+    gear:AddToggle("AutoAmmo", { Text = T("Auto ammo", "กระสุนอัตโนมัติ"), Description = T("Takes ammo for your guns from anywhere on the map", "ดึงกระสุนที่ตรงกับปืนจากทุกที่ในแมพ") })
     gear:AddDropdown("GearScore", { Text = T("Rank guns by", "จัดอันดับปืนตาม"), Values = { "Damage per second", "Damage per shot", "Rarity" }, Default = "Damage per second" })
     gear:AddButton({ Text = T("Loot Best Now", "เก็บของดีสุดตอนนี้"), Style = "Primary", Func = xDTaraZ.UI.Detach(function()
         xDTaraZ.UI.Report("Loot", xDTaraZ.Loot.TakeUpgrades(), "Took %d upgrades", "Nothing better on the map")
     end) })
 
     local money = tab:AddRightGroupbox(T("Valuables", "ของมีค่า"), "coin")
-    money:AddToggle("AutoValuables", { Text = T("Auto loot valuables", "เก็บของมีค่าอัตโนมัติ"), Description = T("Takes ore, crystals and gold from every crate on the map", "เก็บแร่ คริสตัล และทองจากกล่องทุกใบในแมพ"), Risky = true })
+    money:AddToggle("AutoValuables", { Text = T("Auto loot valuables", "เก็บของมีค่าอัตโนมัติ"), Description = T("Takes ore, crystals and gold from every crate on the map", "เก็บแร่ คริสตัล และทองจากกล่องทุกใบในแมพ") })
     local currencies, buffs = xDTaraZ.Loot.Kinds()
-    money:AddDropdown("LootCurrency", { Text = T("Valuables to take", "ของมีค่าที่เก็บ"), Values = currencies, Default = currencies, Multi = true, AllowNull = true, Searchable = true })
-    money:AddToggle("AutoBuffs", { Text = T("Auto loot buffs", "เก็บบัฟอัตโนมัติ"), Description = T("Takes damage, fire rate, ammo and health buffs from every crate", "เก็บบัฟดาเมจ ยิงเร็ว กระสุน และเลือดจากกล่องทุกใบ"), Risky = true })
+    xDTaraZ.Look.Decorate(money:AddDropdown("LootCurrency", { Text = T("Valuables to take", "ของมีค่าที่เก็บ"), Values = currencies, Default = currencies, Multi = true, AllowNull = true, Searchable = true }))
+    money:AddToggle("AutoBuffs", { Text = T("Auto loot buffs", "เก็บบัฟอัตโนมัติ"), Description = T("Takes damage, fire rate, ammo and health buffs from every crate", "เก็บบัฟดาเมจ ยิงเร็ว กระสุน และเลือดจากกล่องทุกใบ") })
     money:AddDropdown("LootBuffs", { Text = T("Buffs to take", "บัฟที่เก็บ"), Values = buffs, Default = buffs, Multi = true, AllowNull = true })
     money:AddButton({ Text = T("Loot Valuables Now", "เก็บของมีค่าตอนนี้"), Style = "Primary", Func = xDTaraZ.UI.Detach(function()
         xDTaraZ.UI.Report("Loot", xDTaraZ.Loot.TakeValuables({ Currency = true, Buff = true }), "Took %d items", "No valuables on the map")
     end) })
 
     local drop = tab:AddRightGroupbox(T("Air Drop", "แอร์ดรอป"), "flag")
-    drop:AddToggle("AutoAirDrop", { Text = T("Auto air drop", "แอร์ดรอปอัตโนมัติ"), Description = T("Takes air drop loot from anywhere on the map", "เก็บของในแอร์ดรอปได้จากทุกที่ในแมพ"), Risky = true })
+    drop:AddToggle("AutoAirDrop", { Text = T("Auto air drop", "แอร์ดรอปอัตโนมัติ"), Description = T("Takes air drop loot from anywhere on the map", "เก็บของในแอร์ดรอปได้จากทุกที่ในแมพ") })
     drop:AddButton({ Text = T("Loot Air Drops Now", "เก็บแอร์ดรอปตอนนี้"), Style = "Primary", Func = xDTaraZ.UI.Detach(function()
         xDTaraZ.UI.Report("Air Drop", xDTaraZ.Loot.EmptyAirDrops(), "Took %d items", "Nothing to take")
     end) })
@@ -2486,7 +2577,7 @@ function xDTaraZ.UI.BuildRewards(window)
     for _, box in ipairs(xDTaraZ.Rewards.Boxes()) do
         if not table.find(owned, box[2]) then owned[#owned + 1] = box[2] end
     end
-    boxes:AddDropdown("OpenBoxList", { Text = T("Boxes to open", "กล่องที่เปิด"), Values = owned, Default = owned, Multi = true, AllowNull = true, Searchable = true })
+    xDTaraZ.Look.Decorate(boxes:AddDropdown("OpenBoxList", { Text = T("Boxes to open", "กล่องที่เปิด"), Values = owned, Default = owned, Multi = true, AllowNull = true, Searchable = true }))
     boxes:AddButton({ Text = T("Open Boxes Now", "เปิดกล่องตอนนี้"), Func = function() xDTaraZ.Rewards.Request("Open") end })
 
     local shop = tab:AddRightGroupbox(T("Buy Boxes", "ซื้อกล่อง"), "coin")
@@ -2494,7 +2585,7 @@ function xDTaraZ.UI.BuildRewards(window)
     for _, box in ipairs(xDTaraZ.Rewards.Boxes()) do
         if box[3] > 0 then names[#names + 1] = box[2] end
     end
-    shop:AddDropdown("BuyBox", { Text = T("Box", "กล่อง"), Values = names, Default = names[1] })
+    xDTaraZ.Look.Decorate(shop:AddDropdown("BuyBox", { Text = T("Box", "กล่อง"), Values = names, Default = names[1] }))
     shop:AddSlider("BuyAmount", { Text = T("Amount", "จำนวน"), Min = 1, Max = xDTaraZ.Config.BuyAmountMax, Default = 1, Rounding = 0 })
     shop:AddSlider("KeepGold", { Text = T("Keep gold", "เก็บทองไว้"), Min = 0, Max = 1000000, Default = 50000, Rounding = 0 })
     shop:AddButton({ Text = T("Buy Now", "ซื้อตอนนี้"), Func = function() xDTaraZ.Rewards.Request("Buy") end })
@@ -2523,6 +2614,17 @@ function xDTaraZ.UI.BuildMisc(window)
     move:AddSlider("SpeedValue", { Text = T("Speed", "ความเร็ว"), Min = 16, Max = 120, Default = 40, Rounding = 0 })
     move:AddToggle("InfiniteJump", { Text = T("Infinite jump", "กระโดดไม่จำกัด") })
     move:AddToggle("Noclip", { Text = T("Noclip", "ทะลุกำแพง") }):AddKeyPicker("NoclipKey", { Default = "None", Mode = "Toggle" })
+
+    local others = tab:AddLeftGroupbox(T("Players", "ผู้เล่น"), "oneup")
+    others:AddDropdown("TargetPlayer", { Text = T("Player", "ผู้เล่น"), SpecialType = "Player", AllowNull = true, Searchable = true })
+    others:AddButton({ Text = T("Teleport", "วาร์ปไปหา"), Func = function()
+        if not xDTaraZ.World.TeleportTo(xDTaraZ.Options.TargetPlayer) then
+            Library:Notify(T("Players", "ผู้เล่น"), T("That player isn't in the match", "ผู้เล่นคนนี้ไม่ได้อยู่ในแมตช์"), 4, "Warning")
+        end
+    end })
+    others:AddToggle("Spectate", { Text = T("Spectate", "ส่องผู้เล่น"), Callback = function(on)
+        xDTaraZ.World.Spectate(on and xDTaraZ.Options.TargetPlayer or nil)
+    end })
 
     local fly = tab:AddLeftGroupbox(T("Fly", "บิน"), "star")
     fly:AddToggle("Fly", { Text = T("Fly", "บิน"), Description = T("Space up, Ctrl down", "Space ขึ้น Ctrl ลง"), Callback = function(on)
@@ -2664,7 +2766,7 @@ local function BuildInterface()
         MenuKey = Enum.KeyCode.LeftControl,
         ConfigFolder = xDTaraZ.Config.SaveFolder,
         Language = "Auto",
-        Theme = "Overworld",
+        Theme = "Halloween",
         Intro = xDTaraZ.Config.Intro,
         OnUnlocked = function()
             xDTaraZ.UI.Build()
