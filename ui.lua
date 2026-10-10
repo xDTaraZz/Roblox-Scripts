@@ -1,4 +1,4 @@
--- Mario Hub UI · standalone build 2026-10-04
+-- Mario Hub UI · standalone build 2026-10-10
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
@@ -2081,6 +2081,8 @@ function Container:AddDropdown(idx, info)
         Placeholder = info.Placeholder,
         SpecialType = info.SpecialType,
         Values = info.Values or {},
+        Images = info.Images,
+        Colors = info.Colors,
         Container = self,
     }, Dropdown)
     if dropdown.SpecialType == "Player" then
@@ -2103,6 +2105,7 @@ function Dropdown:Build()
     local field = Draw.Field(self.Row.Control)
     self.Field = field
     self.Display = Draw.Text({ Position = UDim2.fromOffset(10, 0), Size = UDim2.new(1, -44, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, Parent = field }, "Body", Util.TextSize("Label"), "Text")
+    self:EnsureThumb()
     local cap = Draw.Box("Frame", { AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -4, 0.5, 0), Size = UDim2.new(0, 26, 1, -8), Parent = field }, "Accent", "Outline", 6, 2)
     self.Chevron = Draw.Text({ Text = "▼", Size = UDim2.fromScale(1, 1), TextXAlignment = Enum.TextXAlignment.Center, Parent = cap }, "Glyph", 11, "White")
     field.MouseEnter:Connect(function()
@@ -2169,6 +2172,30 @@ function Dropdown:Render()
     local text = #active > 0 and table.concat(active, ", ") or Lang.Resolve(self.Placeholder or Lang.Strings.None)
     self.Display.Text = text
     Theme.Bind(self.Display, { TextColor3 = #active > 0 and "Text" or "Muted" })
+    if self.Thumb then
+        self.Thumb.Image = self.Images[self.Value] or ""
+        local tint = self.Colors and self.Colors[self.Value]
+        if tint then self.ThumbStroke.Color = tint end
+    end
+end
+
+--@param images table? ชื่อ -> asset id
+--@param colors table? ชื่อ -> Color3
+function Dropdown:SetImages(images, colors)
+    self.Images = images
+    self.Colors = colors
+    self:EnsureThumb()
+    self:Render()
+end
+
+function Dropdown:EnsureThumb()
+    if self.Thumb or not self.Images or self.Multi then
+        return
+    end
+    local size = Util.Metric("Box") - 10
+    self.Thumb, self.ThumbStroke = Draw.Thumb(self.Field, nil, nil, size)
+    self.Display.Position = UDim2.fromOffset(size + 12, 0)
+    self.Display.Size = UDim2.new(1, -(size + 46), 1, 0)
 end
 
 function Dropdown:SetValue(value)
@@ -2217,6 +2244,8 @@ function Dropdown:Open()
         Anchor = self.Field,
         Values = self.Values,
         Multi = self.Multi,
+        Images = self.Images,
+        Colors = self.Colors,
         Search = self.Searchable ~= false and (self.Searchable or #self.Values > Config.Dropdown.SearchThreshold),
         IsSelected = function(value)
             return self:IsSelected(value)
@@ -2474,10 +2503,41 @@ function Container:AddSeparatorText(text)
 end
 
 --@return parts ปุ่มแถวที่เลือกได้ (ImGui Selectable) ใช้ร่วมกันทั้ง list, sidebar, popup
+--@param image string? asset id ของรูป
+--@param tint Color3? สีขอบ (เช่นสี rarity) ไม่ใส่ = สีขอบธีม
+function Draw.Thumb(parent, image, tint, size, position)
+    local tile = Draw.Box("ImageLabel", {
+        Name = "Thumb",
+        Image = image or "",
+        ScaleType = Enum.ScaleType.Fit,
+        AnchorPoint = Vector2.new(0, 0.5),
+        Position = position or UDim2.new(0, 4, 0.5, 0),
+        Size = UDim2.fromOffset(size, size),
+        Parent = parent,
+    }, "Element", nil, 6)
+    Draw.Padding(tile, 2)
+    local stroke
+    if tint then
+        stroke = Draw.New("UIStroke", { Thickness = 2, Color = tint, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, LineJoinMode = Enum.LineJoinMode.Round, Parent = tile })
+    else
+        stroke = Draw.Stroke(tile, "Outline", 2, true)
+    end
+    return tile, stroke
+end
+
 function Selectable.Build(text, options)
     options = options or {}
     local button = Draw.Box("TextButton", { Name = "Selectable", BackgroundTransparency = 1 }, "Hover", nil, 8)
-    local label = Draw.Text({ Position = UDim2.fromOffset(10, 0), Size = UDim2.new(1, -36, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, Parent = button }, "Body", Util.TextSize("Label"), "Text", text)
+    local inset = 10
+    if options.Image then
+        local size = Util.Metric("Item") - 6
+        Draw.Thumb(button, options.Image, options.Tint, size)
+        inset = size + 12
+    elseif options.Tint then
+        Draw.Box("Frame", { AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 4, 0.5, 0), Size = UDim2.new(0, 4, 1, -10), BackgroundColor3 = options.Tint, Parent = button }, nil, nil, 2)
+        inset = 14
+    end
+    local label = Draw.Text({ Position = UDim2.fromOffset(inset, 0), Size = UDim2.new(1, -(inset + 26), 1, 0), TextTruncate = Enum.TextTruncate.AtEnd, Parent = button }, "Body", Util.TextSize("Label"), "Text", text)
     local mark = Draw.Text({ Text = options.Multi and "✓" or "★", AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0), Size = UDim2.fromOffset(18, 18), TextXAlignment = Enum.TextXAlignment.Center, TextTransparency = 1, Parent = button }, "Glyph", Util.TextSize("Label"), "OnAccent")
     local parts = { Button = button, Label = label, Mark = mark, Selected = false, Hovered = false }
     function parts.Render(instant)
@@ -2731,7 +2791,8 @@ end
 function Popup.List(options)
     local itemHeight = Util.Metric("Item")
     local searchHeight = options.Search and (Util.Metric("Box") + 6) or 0
-    local width = math.floor(math.max(Config.Dropdown.MinWidth, options.Anchor.AbsoluteSize.X / State.UserScale))
+    local minWidth = options.Images and Config.Dropdown.MinWidth + itemHeight + 60 or Config.Dropdown.MinWidth
+    local width = math.floor(math.max(minWidth, options.Anchor.AbsoluteSize.X / State.UserScale))
     local listHeight = math.max(1, math.min(#options.Values, Config.Dropdown.MaxVisible)) * (itemHeight + 2) + 6
     local card, face, scale = Popup.Card(width, listHeight + searchHeight + 12)
     local scroll = Layout.ScrollFrame({ Position = UDim2.fromOffset(6, 6 + searchHeight), Size = UDim2.new(1, -12, 0, listHeight), Parent = face })
@@ -2747,7 +2808,11 @@ function Popup.List(options)
         list:Clear()
         table.clear(entries)
         for _, value in ipairs(values) do
-            local parts = Selectable.Build(tostring(value), { Multi = options.Multi })
+            local parts = Selectable.Build(tostring(value), {
+                Multi = options.Multi,
+                Image = options.Images and options.Images[value],
+                Tint = options.Colors and options.Colors[value],
+            })
             parts.SetSelected(options.IsSelected(value), true)
             parts.Button.Activated:Connect(function()
                 local shouldClose = options.OnPick(value)
