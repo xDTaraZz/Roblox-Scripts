@@ -3320,17 +3320,20 @@ function Gui.OnInputBegan(input, processed)
         Keybinds.Capture(input)
         return
     end
-    if processed or UserInputService:GetFocusedTextBox() then
+    if UserInputService:GetFocusedTextBox() then
         return
     end
     local name = Util.InputName(input)
     if not name then
         return
     end
-    if name == State.MenuKey and State.Window then
+    if name == State.MenuKey and State.Window and not processed then
         State.Window:Toggle()
     end
-    Keybinds.Dispatch(name, true)
+    -- เกมมักผูกปุ่มเดียวกันไว้ (เช่น E = Use) แล้ว processed เป็น true เสมอ ปุ่มลัดฟีเจอร์ต้องยังทำงาน
+    if input.UserInputType == Enum.UserInputType.Keyboard or not processed then
+        Keybinds.Dispatch(name, true)
+    end
 end
 
 function Gui.OnInputChanged(input)
@@ -4823,7 +4826,7 @@ function Visuals.Render()
             Visuals.Entries[model] = entry
         end
         local color = info.Color or (info.Friendly and settings.FriendColor or settings.EnemyColor)
-        Visuals.Chams(entry, model, color, settings.Chams)
+        Visuals.Chams(entry, info.Adornee or model, color, settings.Chams and (info.Adornee ~= false))
 
         local top, onTop = cam:WorldToViewportPoint(root.Position + Vector3.new(0, 3, 0))
         local bottom, onBottom = cam:WorldToViewportPoint(root.Position - Vector3.new(0, 3.5, 0))
