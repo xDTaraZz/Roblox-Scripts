@@ -3386,7 +3386,7 @@ local function BuildInterface()
         MenuKey = Enum.KeyCode.LeftControl,
         ConfigFolder = Config.SaveFolder,
         Language = "Auto",
-        Theme = "Overworld",
+        Theme = "Halloween",
         OnUnlocked = function()
             BuildTabs()
             xDTaraZ.Util.Try(xDTaraZ.Scheduler.Boot)
