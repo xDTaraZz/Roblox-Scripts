@@ -168,7 +168,15 @@ xDTaraZ.Config = {
     RefireGap = 0.12,
     TriggerRay = 2000,
     SilentFocusTime = 1,
+    SeeThrough = { "Characters", "Debris", "ThirdPersonWeaponStash" },
     EspCacheMax = 256,
+    SoundSelfRange = 6,
+    GhostSnap = 45,
+    LeadExtra = 0.02,
+    LeadMaxSpeed = 60,
+    SpreadMethods = { "getTrueSpread", "getSpreadForConfig", "getMovementSpreadForConfig", "getBaseSpreadForConfig", "getBaseSpread" },
+    SoundMaxMarks = 24,
+    SoundColor = Color3.fromRGB(255, 196, 64),
     RedeemGap = 1.1,
     RebuyGap = 0.25,
     AlertTries = 20,
@@ -227,9 +235,8 @@ xDTaraZ.State = {
     Redirected = 0,
     Bought = {},
     LightSaved = nil,
-    Hidden = setmetatable({}, { __mode = "k" }),
-    SmokeScanned = false,
     FovSaved = nil,
+    ViewSaved = nil,
     Hooks = {},
     TriggerWarned = false,
     HopAt = 0,
@@ -257,6 +264,7 @@ xDTaraZ.Options = {
     SilentShowFov = false,
     SilentVisible = true,
     SilentMaxDistance = 2000,
+    SilentPredict = false,
     Triggerbot = false,
     TriggerDelay = 0,
     TriggerHitChance = 100,
@@ -268,6 +276,9 @@ xDTaraZ.Options = {
     Fullbright = false,
     NoFlash = false,
     NoSmoke = false,
+    SoundEsp = false,
+    SoundEspLife = 3,
+    EspMemory = 5,
     CameraFov = false,
     CameraFovValue = 100,
     InfiniteJump = false,
@@ -420,6 +431,9 @@ do
     xDTaraZ.GameLib.Camera = xDTaraZ.GameLib.Require(find(controllers, "CameraController", "ModuleScript", "Controllers"))
     xDTaraZ.GameLib.WeaponFolder = find(custom, "Weapons", "Folder", "Custom")
     xDTaraZ.GameLib.Rarities = xDTaraZ.GameLib.Require(find(custom, "Rarities", "ModuleScript", "GameStats"))
+    local vfx = ReplicatedStorage:FindFirstChild("Components") and ReplicatedStorage.Components:FindFirstChild("VFXLibary", true)
+    xDTaraZ.GameLib.Smoke = xDTaraZ.GameLib.Require(find(vfx, "CreateVoxelSmoke", "ModuleScript", "VFXLibary"))
+    xDTaraZ.GameLib.Flash = xDTaraZ.GameLib.Require(find(vfx, "FlashEffect", "ModuleScript", "VFXLibary"))
 end
 
 xDTaraZ.Weapons = {}
@@ -460,11 +474,13 @@ function xDTaraZ.Player.Equipped()
     return xDTaraZ.Util.Decode(LocalPlayer:GetAttribute("CurrentEquipped"))
 end
 
-xDTaraZ.Target = {}
+xDTaraZ.Target = { Motion = setmetatable({}, { __mode = "k" }) }
 
 local losParams = RaycastParams.new()
 losParams.FilterType = Enum.RaycastFilterType.Exclude
 local losFilter = table.create(3)
+local wallParams = RaycastParams.new()
+wallParams.FilterType = Enum.RaycastFilterType.Exclude
 
 function xDTaraZ.Target.Candidates()
     local list = {}
@@ -499,9 +515,42 @@ end
 function xDTaraZ.Target.IsEnemy(model)
     if tostring(model:GetAttribute("Dead")) == "true" then return false end
     if not xDTaraZ.Target.Owner(model) and model:GetAttribute("Health") == nil then return false end
+    if xDTaraZ.Target.FreeForAll() then return true end
     local mine = xDTaraZ.Target.MyTeam()
-    if mine == nil then return tostring(Workspace:GetAttribute("Gamemode")):find("Deathmatch") ~= nil end
+    if mine == nil then return false end
     return xDTaraZ.Target.TeamOf(model) ~= mine
+end
+
+---Samples every enemy's head each frame so shots can lead a moving target.
+function xDTaraZ.Target.Track()
+    local motion, now = xDTaraZ.Target.Motion, osClock()
+    for _, model in ipairs(xDTaraZ.Target.Candidates()) do
+        local head = model:FindFirstChild("Head")
+        if not head then continue end
+        local last = motion[head]
+        if last and now > last.Time then
+            local step = (head.Position - last.Pos) / (now - last.Time)
+            last.Vel = last.Vel and last.Vel:Lerp(step, 0.5) or step
+            last.Pos, last.Time = head.Position, now
+        else
+            motion[head] = { Pos = head.Position, Time = now, Vel = Vector3.zero }
+        end
+    end
+end
+
+---@return Vector3  where the part will be once the shot reaches the server
+function xDTaraZ.Target.Lead(part)
+    if not xDTaraZ.Options.SilentPredict then return part.Position end
+    local track = xDTaraZ.Target.Motion[part] or xDTaraZ.Target.Motion[part.Parent and part.Parent:FindFirstChild("Head")]
+    local vel = track and track.Vel or Vector3.zero
+    if vel.Magnitude > xDTaraZ.Config.LeadMaxSpeed then return part.Position end
+    local ok, ping = pcall(LocalPlayer.GetNetworkPing, LocalPlayer)
+    return part.Position + vel * ((ok and ping or 0.05) + xDTaraZ.Config.LeadExtra)
+end
+
+---@return boolean  true in Deathmatch, where the team picker is only cosmetic
+function xDTaraZ.Target.FreeForAll()
+    return tostring(Workspace:GetAttribute("Gamemode")):find("Deathmatch") ~= nil
 end
 
 function xDTaraZ.Target.Part(model, bone)
@@ -513,9 +562,13 @@ function xDTaraZ.Target.Part(model, bone)
 end
 
 function xDTaraZ.Target.Visible(from, model, point)
-    losFilter[1], losFilter[2], losFilter[3] = xDTaraZ.Player.Character(), model, Workspace.CurrentCamera
-    losParams.FilterDescendantsInstances = losFilter
-    return Workspace:Raycast(from, point - from, losParams) == nil
+    local skip = { Workspace.CurrentCamera, model }
+    for _, name in ipairs(xDTaraZ.Config.SeeThrough) do
+        local folder = Workspace:FindFirstChild(name)
+        if folder then skip[#skip + 1] = folder end
+    end
+    wallParams.FilterDescendantsInstances = skip
+    return Workspace:Raycast(from, point - from, wallParams) == nil
 end
 
 ---@param cfg table  { Bone, Fov?, Visible, MaxDistance, Priority }  Fov nil = whole map
@@ -635,26 +688,54 @@ function xDTaraZ.Silent.Aim()
     return part
 end
 
----The server checks bullets against where you really look, so the camera turns to the target for the one call that fires and turns back before the frame is drawn.
+---The server checks bullets against where you really look, so each new bullet turns the camera to the target and the view goes back as the shot is sent, before anything is drawn.
 function xDTaraZ.Silent.InstallHook()
     local gun = xDTaraZ.Guns.FindClass()
-    if not gun then return end
-    local original
-    original = xDTaraZ.Util.Hook("Shoot", gun.shoot, function(self, ...)
-        local state = xDTaraZ.State
-        state.LastShot = osClock()
-        state.Shots += 1
-        local ok, part = pcall(xDTaraZ.Silent.Aim)
-        local cam = Workspace.CurrentCamera
-        if not (ok and part and cam) then return original(self, ...) end
-        local saved = cam.CFrame
-        cam.CFrame = cframeLookAt(saved.Position, part.Position)
-        local result = table.pack(pcall(original, self, ...))
-        cam.CFrame = saved
-        state.Redirected += 1
-        if not result[1] then error(result[2], 0) end
-        return table.unpack(result, 2, result.n)
+    if gun then
+        local original
+        original = xDTaraZ.Util.Hook("Shoot", gun.shoot, function(...)
+            local state = xDTaraZ.State
+            state.LastShot = osClock()
+            state.Shots += 1
+            return original(...)
+        end)
+    end
+    local bullet = xDTaraZ.Guns.FindBullet()
+    if bullet and type(bullet.create) == "function" then
+        local create
+        create = xDTaraZ.Util.Hook("Bullet", bullet.create, function(...)
+            xDTaraZ.Silent.Flick()
+            return create(...)
+        end)
+    end
+    xDTaraZ.Guns.HookSpread()
+
+    local net = xDTaraZ.GameLib.Net
+    local packet = net and net.Inventory and net.Inventory.ShootWeapon
+    if not packet then return end
+    local send
+    send = xDTaraZ.Util.Hook("Send", packet.Send, function(...)
+        xDTaraZ.Silent.RestoreView()
+        return send(...)
     end)
+end
+
+---Turns the camera onto the silent aim target for this bullet.
+function xDTaraZ.Silent.Flick()
+    local ok, part = pcall(xDTaraZ.Silent.Aim)
+    local cam, state = Workspace.CurrentCamera, xDTaraZ.State
+    if not (ok and part and cam) then return end
+    state.ViewSaved = state.ViewSaved or cam.CFrame
+    cam.CFrame = cframeLookAt(cam.CFrame.Position, xDTaraZ.Target.Lead(part))
+    state.Redirected += 1
+end
+
+---Puts your view back before the game's camera runs, so silent aim never moves what you see.
+function xDTaraZ.Silent.RestoreView()
+    local state, cam = xDTaraZ.State, Workspace.CurrentCamera
+    if not state.ViewSaved then return end
+    if cam then cam.CFrame = state.ViewSaved end
+    state.ViewSaved = nil
 end
 
 xDTaraZ.Trigger = {}
@@ -774,6 +855,7 @@ function xDTaraZ.Combat.Step()
         xDTaraZ.Trigger.Fire(false)
         return
     end
+    if o.SilentAim or o.Ragebot then xDTaraZ.Target.Track() end
     xDTaraZ.Aimbot.Step()
     local rage = xDTaraZ.Rage.Step()
     xDTaraZ.Trigger.Fire(rage or xDTaraZ.Trigger.Wanted())
@@ -789,6 +871,7 @@ function xDTaraZ.Combat.Rest()
 end
 
 function xDTaraZ.Combat.Start()
+    RunService:BindToRenderStep("xDTaraZView", Enum.RenderPriority.First.Value, xDTaraZ.Silent.RestoreView)
     RunService:BindToRenderStep("xDTaraZAim", xDTaraZ.Config.AimRenderPriority, xDTaraZ.Aimbot.Lock)
     xDTaraZ:Connect(RunService.Heartbeat, function()
         local ok, err = pcall(xDTaraZ.Combat.Step)
@@ -803,6 +886,7 @@ end
 function xDTaraZ.Combat.Unload()
     xDTaraZ.Trigger.Fire(false)
     pcall(RunService.UnbindFromRenderStep, RunService, "xDTaraZAim")
+    pcall(RunService.UnbindFromRenderStep, RunService, "xDTaraZView")
     for key, circle in pairs(xDTaraZ.Combat.Circles) do
         xDTaraZ.Combat.Circles[key] = nil
         if circle.Frame then
@@ -822,11 +906,18 @@ xDTaraZ.Guns = { Signature = nil, Warned = false }
 function xDTaraZ.Guns.HookKick()
     local cam = xDTaraZ.GameLib.Camera
     if not cam then return end
-    local kick
+    local kick, aim, rotation
     kick = xDTaraZ.Util.Hook("Kick", cam.weaponKick, function(...)
-        local o = xDTaraZ.Options
-        if o.NoRecoil then return end
+        if xDTaraZ.Options.NoRecoil then return end
         return kick(...)
+    end)
+    aim = xDTaraZ.Util.Hook("Recoil", cam.setWeaponRecoil, function(...)
+        if xDTaraZ.Options.NoRecoil then return end
+        return aim(...)
+    end)
+    rotation = xDTaraZ.Util.Hook("KickRotation", cam.getWeaponKickRotation, function(...)
+        if xDTaraZ.Options.NoRecoil then return Vector3.zero end
+        return rotation(...)
     end)
 end
 
@@ -879,17 +970,31 @@ function xDTaraZ.Guns.FindClass()
     return nil
 end
 
-function xDTaraZ.Guns.HookSpread()
-    local class = xDTaraZ.Guns.FindClass()
-    if not class then return end
-    local spread
-    spread = xDTaraZ.Util.Hook("Spread", class.getSpread, function(self, ...)
-        if xDTaraZ.Options.NoSpread then return 0 end
-        return spread(self, ...)
-    end)
+---@return table?  the bullet class that rolls spread for every shot
+function xDTaraZ.Guns.FindBullet()
+    if not xDTaraZ.Caps.Gc or not xDTaraZ.Caps.HookFunction then return nil end
+    for _, entry in ipairs(getgc(true)) do
+        if type(entry) == "table" and rawget(entry, "getTrueSpread") and rawget(entry, "getSpreadForConfig") then return entry end
+    end
+    return nil
 end
 
-xDTaraZ.Esp = { Count = 0, Decoded = {}, CacheSize = 0 }
+---Every spread roll the bullet class makes returns 0 with No Spread, and while a silent aim shot is being built.
+function xDTaraZ.Guns.HookSpread()
+    local bullet = xDTaraZ.Guns.FindBullet()
+    if not bullet then return end
+    for _, method in ipairs(xDTaraZ.Config.SpreadMethods) do
+        if type(bullet[method]) ~= "function" then continue end
+        local original
+        original = xDTaraZ.Util.Hook("Spread:" .. method, bullet[method], function(...)
+            local value = original(...)
+            if type(value) == "number" and (xDTaraZ.Options.NoSpread or xDTaraZ.State.ViewSaved) then return 0 end
+            return value
+        end)
+    end
+end
+
+xDTaraZ.Esp = { Count = 0, Decoded = {}, CacheSize = 0, Ghosts = {}, Folder = nil }
 
 ---@return table?  JSON attribute decoded once per distinct raw string
 function xDTaraZ.Esp.Attr(owner, key)
@@ -924,30 +1029,215 @@ function xDTaraZ.Esp.Focus()
     return state.AimTarget or silent or state.RageTarget
 end
 
+---@return table  one lasting stand-in per player, so a body that blinks in and out of view never rebuilds its box
+function xDTaraZ.Esp.Ghost(name)
+    local esp = xDTaraZ.Esp
+    local ghost = esp.Ghosts[name]
+    if ghost and ghost.Model.Parent then return ghost end
+    if not (esp.Folder and esp.Folder.Parent) then
+        esp.Folder = Instance.new("Folder")
+        esp.Folder.Name = "xDTaraZGhosts"
+        esp.Folder.Parent = Workspace.CurrentCamera
+    end
+    local model = Instance.new("Model")
+    model.Name = name
+    local root = Instance.new("Part")
+    root.Name, root.Size, root.Transparency = "HumanoidRootPart", Vector3.new(2, 2, 1), 1
+    root.Anchored, root.CanCollide, root.CanQuery, root.CanTouch = true, false, false, false
+    root.Parent = model
+    model.PrimaryPart = root
+    model.Parent = esp.Folder
+    ghost = { Model = model, Root = root, Seen = 0, Heard = 0 }
+    esp.Ghosts[name] = ghost
+    return ghost
+end
+
+---@return table  Library.Visuals row for one player, live body or last known spot
+function xDTaraZ.Esp.Row(ghost, model, owner, mine, focus)
+    local equipped = owner and xDTaraZ.Esp.Attr(owner, "CurrentEquipped")
+    local label = owner and owner.DisplayName or ghost.Model.Name
+    if equipped and equipped.Name then label = label .. " [" .. equipped.Name .. "]" end
+    local live = model and model:FindFirstChild("HumanoidRootPart")
+    if not live then label = label .. " ?" end
+    return {
+        Model = ghost.Model,
+        Root = live or ghost.Root,
+        Adornee = model or false,
+        Name = label .. xDTaraZ.Esp.Flags(owner),
+        Health = tonumber(owner and owner:GetAttribute("Health")) or tonumber(model and model:GetAttribute("Health")) or 100,
+        MaxHealth = tonumber(model and model:GetAttribute("MaxHealth")) or 100,
+        Friendly = ghost.Friendly,
+        Color = model ~= nil and model == focus and xDTaraZ.Config.EspFocusColor or nil,
+    }
+end
+
 ---@return table[]  targets in the shape Library.Visuals expects; bots count as enemies
 function xDTaraZ.Esp.Targets()
+    local esp, now = xDTaraZ.Esp, osClock()
     local list = {}
     local mine = xDTaraZ.Target.MyTeam()
+    local ffa = xDTaraZ.Target.FreeForAll()
     local focus = xDTaraZ.Esp.Focus()
+    pcall(xDTaraZ.Sound.Install)
+    local live = {}
     for _, model in ipairs(xDTaraZ.Target.Candidates()) do
-        if tostring(model:GetAttribute("Dead")) == "true" then continue end
-        local owner = xDTaraZ.Target.Owner(model)
-        local equipped = owner and xDTaraZ.Esp.Attr(owner, "CurrentEquipped")
-        local label = owner and owner.DisplayName or model.Name
-        if equipped and equipped.Name then label = label .. " [" .. equipped.Name .. "]" end
-
-        list[#list + 1] = {
-            Model = model,
-            Name = label .. xDTaraZ.Esp.Flags(owner),
-            Health = tonumber(owner and owner:GetAttribute("Health")) or tonumber(model:GetAttribute("Health")) or 100,
-            MaxHealth = tonumber(model:GetAttribute("MaxHealth")) or 100,
-            Friendly = mine ~= nil and xDTaraZ.Target.TeamOf(model) == mine,
-            Root = model:FindFirstChild("HumanoidRootPart"),
-            Color = model == focus and xDTaraZ.Config.EspFocusColor or nil,
-        }
+        if xDTaraZ.Esp.IsDead(model, xDTaraZ.Target.Owner(model)) then
+            xDTaraZ.Esp.Forget(model.Name)
+            continue
+        end
+        local hrp = model:FindFirstChild("HumanoidRootPart")
+        if not hrp then continue end
+        local ghost = esp.Ghost(model.Name)
+        ghost.Root.CFrame, ghost.Seen = hrp.CFrame, now
+        ghost.Friendly = not ffa and mine ~= nil and xDTaraZ.Target.TeamOf(model) == mine
+        live[model.Name] = true
+        list[#list + 1] = esp.Row(ghost, model, xDTaraZ.Target.Owner(model), mine, focus)
     end
-    xDTaraZ.Esp.Count = #list
+    local memory = xDTaraZ.Options.EspMemory
+    for name, ghost in pairs(esp.Ghosts) do
+        if live[name] then continue end
+        local owner = Players:FindFirstChild(name)
+        if owner and xDTaraZ.Esp.IsDead(nil, owner) then
+            xDTaraZ.Esp.Forget(name)
+            continue
+        end
+        local gone = not ghost.Model.Parent or (not owner and now - ghost.Seen > memory)
+        if gone or now - math.max(ghost.Seen, ghost.Heard) > memory then
+            if gone and not owner then
+                ghost.Model:Destroy()
+                esp.Ghosts[name] = nil
+            end
+            continue
+        end
+        list[#list + 1] = esp.Row(ghost, nil, owner, mine, focus)
+    end
+    esp.Count = #list
     return list
+end
+
+---@return boolean  true once a player or bot is dead, by body flag or 0 health
+function xDTaraZ.Esp.IsDead(model, owner)
+    if model and (tostring(model:GetAttribute("Dead")) == "true" or (tonumber(model:GetAttribute("Health")) or 1) <= 0) then return true end
+    if owner and (owner:GetAttribute("Dead") == true or (tonumber(owner:GetAttribute("Health")) or 1) <= 0) then return true end
+    return false
+end
+
+---Drops the remembered spot of someone who died, so no box stays where they fell.
+function xDTaraZ.Esp.Forget(name)
+    local ghost = xDTaraZ.Esp.Ghosts[name]
+    if ghost then ghost.Seen, ghost.Heard = 0, 0 end
+end
+
+---Moves the stand-in of the hidden enemy closest to a footstep or shot, so hidden players keep a box.
+function xDTaraZ.Esp.Hear(pos, weapon)
+    local esp, now = xDTaraZ.Esp, osClock()
+    local best, bestDist = nil, xDTaraZ.Config.GhostSnap
+    for name, ghost in pairs(esp.Ghosts) do
+        if ghost.Friendly or now - ghost.Seen < 0.3 then continue end
+        local owner = Players:FindFirstChild(name)
+        local equipped = owner and xDTaraZ.Esp.Attr(owner, "CurrentEquipped")
+        if weapon and equipped and equipped.Name and equipped.Name ~= weapon then continue end
+        local dist = (ghost.Root.Position - pos).Magnitude
+        if dist < bestDist then best, bestDist = ghost, dist end
+    end
+    if not best then return end
+    best.Root.CFrame = CFrame.new(pos + Vector3.new(0, 2.5, 0))
+    best.Heard = now
+end
+
+xDTaraZ.Sound = { Marks = {}, Entry = nil, Original = nil, Folder = nil }
+
+---Hooks into the game's own sound listener: every footstep and shot of every player arrives with its position, even behind walls.
+function xDTaraZ.Sound.Install()
+    local sound = xDTaraZ.Sound
+    if sound.Entry then return true end
+    local net = xDTaraZ.GameLib.Net
+    local packet = net and net.Sound and net.Sound.ReplicateSound
+    if not (packet and xDTaraZ.Caps.Upvalues) then return false end
+    local ok, listeners = pcall(function() return getupvalues(packet.Listen)[1] end)
+    if not ok or type(listeners) ~= "table" then return false end
+    for _, entry in ipairs(listeners) do
+        if type(entry) == "table" and type(entry.callback) == "function" then
+            sound.Entry, sound.Original = entry, entry.callback
+            entry.callback = function(info, ...)
+                xDTaraZ.Util.Try("sound esp", xDTaraZ.Sound.Heard, info)
+                return sound.Original(info, ...)
+            end
+            return true
+        end
+    end
+    return false
+end
+
+function xDTaraZ.Sound.Uninstall()
+    local sound = xDTaraZ.Sound
+    if sound.Entry then sound.Entry.callback = sound.Original end
+    sound.Entry, sound.Original = nil, nil
+    for _, mark in ipairs(sound.Marks) do mark.Gui:Destroy() end
+    table.clear(sound.Marks)
+end
+
+---@return boolean  true when the sound came from you or a teammate you can see
+function xDTaraZ.Sound.Friendly(pos)
+    local range = xDTaraZ.Config.SoundSelfRange
+    local me = xDTaraZ.Player.Character()
+    if me and (me:GetPivot().Position - pos).Magnitude < range then return true end
+    if xDTaraZ.Target.FreeForAll() then return false end
+    for _, model in ipairs(xDTaraZ.Target.Candidates()) do
+        if not xDTaraZ.Target.IsEnemy(model) and (model:GetPivot().Position - pos).Magnitude < range then return true end
+    end
+    return false
+end
+
+function xDTaraZ.Sound.Heard(info)
+    if type(info) ~= "table" or typeof(info.Position) ~= "Vector3" then return end
+    local floor = info.Class == "FloorSounds"
+    if not floor and info.Name ~= "Shoot" then return end
+    if xDTaraZ.Sound.Friendly(info.Position) then return end
+    xDTaraZ.Esp.Hear(info.Position, not floor and tostring(info.Class) or nil)
+    if xDTaraZ.Options.SoundEsp then xDTaraZ.Sound.Mark(info.Position, floor and "Steps" or tostring(info.Class)) end
+end
+
+function xDTaraZ.Sound.Mark(pos, label)
+    local sound = xDTaraZ.Sound
+    if not (sound.Folder and sound.Folder.Parent) then
+        sound.Folder = Instance.new("Folder")
+        sound.Folder.Name = "xDTaraZSounds"
+        sound.Folder.Parent = Workspace.Terrain
+    end
+    if #sound.Marks >= xDTaraZ.Config.SoundMaxMarks then
+        table.remove(sound.Marks, 1).Gui:Destroy()
+    end
+    local holder = Instance.new("Attachment")
+    holder.WorldPosition = pos
+    local gui = Instance.new("BillboardGui")
+    gui.AlwaysOnTop, gui.Size, gui.LightInfluence = true, UDim2.fromOffset(120, 34), 0
+    local text = Instance.new("TextLabel")
+    text.BackgroundTransparency, text.Size, text.Font, text.TextSize = 1, UDim2.fromScale(1, 1), Enum.Font.GothamBold, 13
+    text.TextColor3, text.TextStrokeTransparency = xDTaraZ.Config.SoundColor, 0.3
+    text.Parent = gui
+    gui.Parent = holder
+    holder.Parent = Workspace.Terrain
+    gui.Adornee = holder
+    sound.Marks[#sound.Marks + 1] = { Gui = holder, Text = text, Label = label, Born = osClock() }
+end
+
+---Fades markers and keeps their distance fresh.
+function xDTaraZ.Sound.Step()
+    local sound, life = xDTaraZ.Sound, xDTaraZ.Options.SoundEspLife
+    local cam = Workspace.CurrentCamera
+    for index = #sound.Marks, 1, -1 do
+        local mark = sound.Marks[index]
+        local age = osClock() - mark.Born
+        if age > life or not xDTaraZ.Options.SoundEsp then
+            mark.Gui:Destroy()
+            table.remove(sound.Marks, index)
+        else
+            local dist = cam and math.floor((mark.Gui.WorldPosition - cam.CFrame.Position).Magnitude) or 0
+            mark.Text.Text = ("%s\n%dm"):format(mark.Label, dist)
+            mark.Text.TextTransparency = age / life * 0.8
+        end
+    end
 end
 
 xDTaraZ.World = {}
@@ -962,59 +1252,27 @@ function xDTaraZ.World.Step()
         Lighting.Brightness, Lighting.ClockTime, Lighting.FogEnd, Lighting.GlobalShadows, Lighting.Ambient = table.unpack(state.LightSaved)
         state.LightSaved = nil
     end
-    if opts.NoFlash then xDTaraZ.World.ClearFlash() else xDTaraZ.World.Restore("Flash") end
-    if opts.NoSmoke and not state.SmokeScanned then
-        state.SmokeScanned = true
-        local debris = Workspace:FindFirstChild("Debris")
-        for _, inst in ipairs(debris and debris:GetDescendants() or {}) do xDTaraZ.World.OnDescendant(inst) end
-    elseif not opts.NoSmoke and state.SmokeScanned then
-        state.SmokeScanned = false
-        xDTaraZ.World.Restore("Smoke")
-    end
 end
 
----Hides one effect and remembers how it looked, so turning the feature off puts it back.
-function xDTaraZ.World.Hide(inst, kind)
-    local hidden = xDTaraZ.State.Hidden
-    if hidden[inst] then return end
-    if inst:IsA("BasePart") then
-        hidden[inst] = { kind, "LocalTransparencyModifier", inst.LocalTransparencyModifier }
-        inst.LocalTransparencyModifier = 1
-    else
-        hidden[inst] = { kind, "Enabled", inst.Enabled }
-        inst.Enabled = false
+---No Flash and No Smoke stop the game from making the effect at all, and clear what is already on screen.
+function xDTaraZ.World.HookEffects()
+    local smoke, flash = xDTaraZ.GameLib.Smoke, xDTaraZ.GameLib.Flash
+    if smoke and type(smoke.Create) == "function" then
+        local create
+        create = xDTaraZ.Util.Hook("Smoke", smoke.Create, function(...)
+            if xDTaraZ.Options.NoSmoke then return nil end
+            return create(...)
+        end)
     end
-end
-
-function xDTaraZ.World.Restore(kind)
-    local hidden = xDTaraZ.State.Hidden
-    for inst, saved in pairs(hidden) do
-        if saved[1] ~= kind then continue end
-        hidden[inst] = nil
-        if inst.Parent then pcall(function() inst[saved[2]] = saved[3] end) end
+    if flash and type(flash.Flash) == "function" then
+        local blind
+        blind = xDTaraZ.Util.Hook("Flash", flash.Flash, function(...)
+            if xDTaraZ.Options.NoFlash then return nil end
+            return blind(...)
+        end)
     end
-end
-
-function xDTaraZ.World.ClearFlash()
-    for _, effect in ipairs(Lighting:GetChildren()) do
-        if effect.Name:lower():find("flash") and effect:IsA("PostEffect") and effect.Enabled then xDTaraZ.World.Hide(effect, "Flash") end
-    end
-    local gui = LocalPlayer:FindFirstChild("PlayerGui")
-    if not gui then return end
-    for _, screen in ipairs(gui:GetChildren()) do
-        if screen:IsA("ScreenGui") and screen.Name:lower():find("flash") and screen.Enabled then xDTaraZ.World.Hide(screen, "Flash") end
-    end
-end
-
-function xDTaraZ.World.OnDescendant(inst)
-    if not xDTaraZ.Options.NoSmoke then return end
-    local effect = inst:IsA("ParticleEmitter") or inst:IsA("Smoke")
-    if not (effect or inst:IsA("BasePart")) then return end
-    local debris = Workspace:FindFirstChild("Debris")
-    if not effect and not (debris and inst:IsDescendantOf(debris)) then return end
-    local owner = inst:FindFirstAncestorOfClass("Model") or inst.Parent
-    local name = (owner and owner.Name or ""):lower() .. inst.Name:lower()
-    if name:find("smoke") or (not effect and name:find("voxel")) then xDTaraZ.World.Hide(inst, "Smoke") end
+    if xDTaraZ.Options.NoSmoke and smoke then pcall(smoke.DestroyAll) end
+    if xDTaraZ.Options.NoFlash and flash then pcall(flash.CancelFlash) end
 end
 
 function xDTaraZ.World.OnIdled()
@@ -1526,8 +1784,8 @@ function xDTaraZ.UI.BuildAimbot(window)
 
     local main = tab:AddLeftGroupbox(T("Aimbot", "เล็งอัตโนมัติ"), "crosshair")
     main:AddToggle("Aimbot", { Text = T("Aimbot", "เล็งอัตโนมัติ"), Description = T("Locks your view onto the enemy in the FOV", "ล็อคกล้องไปที่ศัตรูในวง FOV") })
-        :AddKeyPicker("AimbotKey", { Default = "E", Mode = "Hold" })
-    xDTaraZ.UI.AddKeyMode(main, "Aimbot", "AimbotKey", "Hold")
+        :AddKeyPicker("AimbotKey", { Default = "E", Mode = "Toggle" })
+    xDTaraZ.UI.AddKeyMode(main, "Aimbot", "AimbotKey", "Toggle")
     main:AddSlider("AimbotSmooth", { Text = T("Smoothness", "ความนุ่ม"), Description = T("1 = instant snap", "1 = หันทันที"), Min = 1, Max = 20, Default = 1, Rounding = 0 })
     main:AddCheckbox("AimbotSticky", { Text = T("Sticky target", "ล็อคเป้าเดิม"), Description = T("Keeps the same enemy until it is lost", "ไม่สลับเป้าจนกว่าเป้าเดิมจะหลุด"), Default = true })
 
@@ -1556,6 +1814,7 @@ function xDTaraZ.UI.BuildSilent(window)
     target:AddSlider("SilentFov", { Text = T("FOV", "ขนาดวง"), Min = 20, Max = 1000, Default = 220, Suffix = "px" })
     target:AddToggle("SilentShowFov", { Text = T("Show FOV circle", "แสดงวง FOV") })
     target:AddSlider("SilentMaxDistance", { Text = T("Max distance", "ระยะสูงสุด"), Min = 50, Max = 3000, Default = 2000, Suffix = "m" })
+    target:AddCheckbox("SilentPredict", { Text = T("Lead moving targets", "ยิงดักคนที่วิ่ง"), Default = false })
 end
 
 function xDTaraZ.UI.BuildTrigger(window)
@@ -1596,6 +1855,12 @@ function xDTaraZ.UI.BuildVisuals(window)
     world:AddToggle("Fullbright", { Text = T("Fullbright", "สว่างทั้งแมพ") })
     world:AddToggle("NoFlash", { Text = T("No flash", "กันแฟลช"), Description = T("Flashbangs do not blind you", "แฟลชไม่ทำให้ตาบอด") })
     world:AddToggle("NoSmoke", { Text = T("No smoke", "ไม่มีควัน"), Description = T("See through smoke grenades", "มองทะลุควัน") })
+
+    local heard = tab:AddLeftGroupbox(T("Hidden Enemies", "ศัตรูหลังกำแพง"), "eye")
+    xDTaraZ.UI.NamedToggle(heard, "SoundEsp", { Text = T("Sound ESP", "ESP จากเสียง"), Description = T("Shows where enemies walk and shoot, even behind walls", "โชว์จุดที่ศัตรูเดินและยิง แม้อยู่หลังกำแพง") })
+    heard:AddSlider("SoundEspLife", { Text = T("Show for", "แสดงนาน"), Min = 1, Max = 8, Default = 3, Rounding = 0, Suffix = "s" })
+    heard:AddSlider("EspMemory", { Text = T("Keep hidden enemies", "จำศัตรูที่หลบ"), Description = T("ESP keeps a box where an enemy was last seen or heard", "ESP ค้างกล่องไว้ที่ที่เห็นหรือได้ยินศัตรูล่าสุด"), Min = 0, Max = 15, Default = 5, Rounding = 0, Suffix = "s" })
+    Library.Compat.NeedCap("SoundEsp", "Upvalues")
 
     local cam = tab:AddRightGroupbox(T("Camera", "กล้อง"), "eye")
     xDTaraZ.UI.NamedToggle(cam, "CameraFov", { Text = T("Custom FOV", "ปรับมุมมอง") })
@@ -1762,7 +2027,10 @@ function xDTaraZ.UI.HookOnDemand()
         NoRecoil = xDTaraZ.Guns.HookKick,
         CameraFov = xDTaraZ.Guns.BindFov,
         NoSpread = xDTaraZ.Guns.HookSpread,
+        NoSmoke = xDTaraZ.World.HookEffects,
+        NoFlash = xDTaraZ.World.HookEffects,
         AutoRebuy = xDTaraZ.Economy.HookBuys,
+        SoundEsp = xDTaraZ.Sound.Install,
     }
     for idx, install in pairs(installers) do
         local toggle = Library.Options[idx]
@@ -1834,16 +2102,18 @@ function xDTaraZ.Boot()
     xDTaraZ:Connect(RunService.Heartbeat, xDTaraZ.World.HopStep)
     xDTaraZ:Connect(UserInputService.InputBegan, function(input, processed) xDTaraZ.World.OnSpace(input, true, processed) end)
     xDTaraZ:Connect(UserInputService.InputEnded, function(input) xDTaraZ.World.OnSpace(input, false) end)
-    xDTaraZ:Connect(Workspace.DescendantAdded, xDTaraZ.World.OnDescendant)
 
-    xDTaraZ.Scheduler.Every("World", 0.2, xDTaraZ.World.Step, { "Fullbright", "NoFlash", "NoSmoke" }, xDTaraZ.World.Step)
+    xDTaraZ.Scheduler.Every("World", 0.2, xDTaraZ.World.Step, { "Fullbright" }, xDTaraZ.World.Step)
     xDTaraZ.Scheduler.Every("Auto Rebuy", 0.5, xDTaraZ.Economy.Tick, { "AutoRebuy" })
+    xDTaraZ.Scheduler.Every("Sound ESP", 0.1, xDTaraZ.Sound.Step, { "SoundEsp" }, xDTaraZ.Sound.Step)
     xDTaraZ.Scheduler.Every("Skin Changer", 0.15, xDTaraZ.Skins.Step, { "SkinChanger" }, xDTaraZ.Skins.Step)
     xDTaraZ.Util.Try("scheduler", xDTaraZ.Scheduler.Boot)
 end
 
 function xDTaraZ:Unload()
     self.State.Alive = false
+    pcall(xDTaraZ.Sound.Uninstall)
+    if xDTaraZ.Esp.Folder then pcall(function() xDTaraZ.Esp.Folder:Destroy() end) end
     xDTaraZ.Combat.Unload()
     for _, key in ipairs({ "NoRecoil", "NoSpread", "Fullbright", "CameraFov", "BunnyHop", "SkinChanger" }) do
         xDTaraZ.Options[key] = false
