@@ -29,7 +29,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 | Game | Highlights |
 |:--|:--|
 | **[+1 TNT Mining](#-1-tnt-mining)** | Smart auto mine, instant collect, sell anywhere, Kaitun |
-| **[Loot To Forge](#%EF%B8%8F-loot-to-forge)** | Max gear, spawn items, dupe inventory, auto index, invincible, tower farm, Kaitun |
+| **[Loot To Forge](#%EF%B8%8F-loot-to-forge)** | Max gear, spawn items, free Token Shop passes, auto race roll, boss hop, Kaitun |
 | **[Open Sea For Animals](#-open-sea-for-animals)** | Loot every wave from your base, auto hatch, sell filters, Kaitun |
 | **[Murder Mystery 2](#-murder-mystery-2)** | Silent aim, auto shoot, kill all, coin farm, role ESP, auto win |
 | **[Driving Empire](#-driving-empire)** | Auto ATM farm, auto drive, playtime rewards, teleport, ESP |
@@ -74,14 +74,18 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 - **Spawn Items**: any ore or enchant rune, any amount
 - **Dupe Whole Inventory**: one click adds to every stack you own
 - **Add Season Coins**: type an amount, get it in minutes
+- **Spawn Race Rolls, Season Tickets and Tokens**
+- **Auto Token Shop**: every pass and pack in the Token Shop for free
 - **Spawn Gear**: pick any weapon, armor or hat and get it
 - **Potions**: unlimited Power and Damage potions, buffs for about a year
 - **Kill Aura**, **Kill Ore Boss**, **Invincible**, keep ore on death
 - **Auto Farm Tower** on one ticket: rare stones and season coins
 - **Auto Season**: daily ticket, spins, pass rewards and shop
+- **Auto Roll Race**: rolls in the background until you get the races you pick, refills rolls by itself
 - **Auto World Boss**: joins, kills and takes the reward card
-- **Boss Server Hop**: hops to servers where the boss is up and kills it
-- Auto sell, auto equip, auto train, click, rebirth, upgrades, best race slot, race roll
+- **Boss Server Hop**: hops to servers where the boss is up, waits if it spawns within your set time, opens the rewards before moving on
+- Auto sell, auto equip, auto train, click, rebirth, upgrades, best race slot
+- Item pictures in every item list, hop to the emptiest server, save and return position
 - **Kaitun**: does all of the above at once
 
 </details>
