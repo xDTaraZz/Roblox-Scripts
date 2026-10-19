@@ -499,6 +499,10 @@ function GameLib.Require(module)
 end
 
 do
+    local carryFolder = Shared and (Shared:FindFirstChild("Blocks") or Shared:FindFirstChild("Books"))
+    if not carryFolder and Shared then
+        carryFolder = Shared:WaitForChild("Blocks", 2) or Shared:WaitForChild("Books", 2)
+    end
     local modules = {
         Pyramid = Wait(SharedConfig, "PyramidConfig"),
         EggConfig = SharedConfig:FindFirstChild("EggConfig"),
@@ -515,7 +519,7 @@ do
         Completion = Wait(SharedConfig, "PyramidCompletionConfig"),
         GymAccess = Wait(Wait(Shared, "Gym"), "GymAccess"),
         Runtime = Wait(Wait(Shared, "Placement"), "PyramidRuntime"),
-        CarryState = Wait(Wait(Shared, "Books"), "CarryState"),
+        CarryState = carryFolder and (carryFolder:FindFirstChild("CarryState") or Wait(carryFolder, "CarryState")),
         Regions = Wait(Shared, "RegionRegistry"),
         Knit = Wait(Wait(ReplicatedStorage, "Packages"), "Knit"),
         Progression = Wait(Wait(Shared, "Stats"), "StatProgression"),
@@ -1560,7 +1564,7 @@ function xDTaraZ.Farm.PlaceBatch(slots)
                 pending -= 1
                 return
             end
-            local callOk, ok, carryState, placedUnits = pcall(GameLib.Place.InvokeServer, GameLib.Place, slot.layer, slot.slotIndex, slot.generation, slot.extraSlots)
+            local callOk, ok, carryState, placedUnits = pcall(GameLib.Place.InvokeServer, GameLib.Place, slot.layer, slot.slotIndex, slot.generation, slot.extraSlots or {})
             if not State.Alive then return end
             if callOk and ok == true then
                 State.Placed = (State.Placed or 0) + 1
@@ -1594,7 +1598,7 @@ end
 function xDTaraZ.Farm.Deliver()
     local _, _, hrp = xDTaraZ:Character()
     if not hrp then return false, "Character not ready" end
-    local before, why = State.Placed, "Pyramid refused blocks"
+    local before, why = State.Placed or 0, "Pyramid refused blocks"
     local passes = 0
     local maxPasses = State.Opt.InsaneInstant and 64 or Config.PlaceRetries
 
@@ -1640,7 +1644,7 @@ function xDTaraZ.Farm.Deliver()
         if xDTaraZ.Farm.PlaceBatch(slots) <= 0 or State.Placed == lastPlaced then break end
     end
 
-    if State.Placed == before then return false, why end
+    if (State.Placed or 0) == before then return false, why end
     xDTaraZ.Farm.Progress()
     return true
 end
