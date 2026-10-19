@@ -42,7 +42,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 | **[BloxStrike](#-bloxstrike)** | Silent aim, aimbot, triggerbot, gun mods, skin changer, bunny hop, ESP |
 | **[+1 Stone Skipping](#-1-stone-skipping)** | Smart Kaitun, auto throw and train, best stones, auto rebirth, fast hatch, redeem codes |
 | **[Break and Steal an Egg](#-break-and-steal-an-egg)** | Instant steal, break eggs in any zone, upgrades-only filter, auto upgrades, bat troll, Kaitun |
-| **[Build the Pyramid!](#-build-the-pyramid)** | Smart Progression, faster auto farm, pets and hatching, full ESP, skip cutscenes |
+| **[Build the Pyramid!](#-build-the-pyramid)** | Insane instant farm engine, Halloween world, RakNet acceleration, multi-tier pool, pets & OP exploits |
 
 ---
 
@@ -357,19 +357,22 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 <details>
 <summary><b>Features</b></summary>
 
+- **Insane Instant Farm [OP]**: continuous high-speed refill, instant parallel placement (15,000+ blocks/s), zero-delay micro-teleports
+- **Network Acceleration [OP]**: RakNet raw packet integration, remote quarry refills and wire-speed bursts
 - **Smart Progression**: works toward coin, pyramid, Strength and Speed goals with a session limit and coin reserve
-- **Auto Farm**, separate Auto Pickup and Auto Place, placement strategy, pacing and stop targets
+- **Halloween World & Cursed Egg**: Candy Corn upgrades, Jack NPC auto-buy, Sun Shrine, Event Sign-Up, Halloween portal travel
+- **Auto Farm**: separate Auto Pickup and Auto Place, placement strategy, pacing and stop targets
 - **Auto Train Strength and Speed** at the best unlocked gym, training targets, Balanced mode and Train While Waiting
-- **Auto Pool** trains both stats when a completed pyramid unlocks it; Exit returns safely
-- **Auto Upgrade**: selected upgrades, level caps, best value, cheapest first or custom order, coin reserve and Buy Now
-- **Pets**: auto hatch, owned hatch modes, session budget, count and pet stop targets, equip best, equip, unequip, lock and unlock
-- **ESP** for players, quarry, pyramid, pool, gyms and eggs, with distance and display controls
-- **Spectate**, Auto Skip Cutscene and Skip Now
-- Separate bank resource controls, free gifts, codes and live farm status
-- Teleport to the quarry, pyramid, pool, gyms and players; return after farming, training or hatching
+- **Waters of Nu Pool**: multi-tier pool detection (Basic, Silver, Gold, Void, Haunted, Cursed) with safe return
+- **Auto Upgrade**: dual-currency support (Coins & Candy Corn), level caps, best value scoring, custom order and coin reserve
+- **Pet Suite**: auto hatch, native Equip Best, auto-delete unlocked pets, auto-lock rares, individual pet management
+- **OP Exploits**: Instant Proximity Prompts (0s hold duration), Anti-Hazard / Godmode, Fast Hold Interaction (60/s)
+- **ESP**: players, quarry, pyramid, pool, gyms, eggs, event sign, sun god and Jack NPC with distance and display controls
+- **Spectate**, Auto Skip Cutscene and 1-Click Complete Tutorial
+- Separate bank resource controls, free gifts, secret codes and live farm status
+- Teleport to all POIs, worlds and players; return after farming, training or hatching
 - Speed, fly, noclip, infinite jump, anti AFK, FPS boost, disable 3D rendering, rejoin and server hop
 - English / Thai UI, saved settings and mobile menu controls
-- Active automation starts off. Triple hatch requires ownership; upgrades and hatching require enough coins.
 
 </details>
 

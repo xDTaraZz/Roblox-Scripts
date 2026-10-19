@@ -139,6 +139,7 @@ local GuiService = game:GetService("GuiService")
 local VirtualUser = game:GetService("VirtualUser")
 local Lighting = game:GetService("Lighting")
 local Workspace = game:GetService("Workspace")
+local ProximityPromptService = game:GetService("ProximityPromptService")
 
 local LocalPlayer = Players.LocalPlayer
 local osClock = os.clock
@@ -160,7 +161,7 @@ xDTaraZ.Platform = {
 xDTaraZ.Config = {
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
-        { "2026-10-19", "Halloween, OP Exploits & Ultra Farm\n• OP Exploits: Instant Prompts, Anti-Hazard Godmode & Max Sim Radius\n• Ultra Farm: 60/s native limit throughput with parallel pipelining\n• Fast Interact: 60/s hold burst hook on all manual actions\n• RakNet Optimization: Potassium raw packet integration\n• Halloween & Cursed Egg: Auto hatch & Jack character auto-equip" },
+        { "2026-10-19", "Halloween, Pipelined Farm Engine & Multi-Tier Pool\n• Auto Farm: Low-overhead pipelined batch pickup & multi-slot placement\n• Network Acceleration [OP]: RakNet Insane Instant Farm, Remote Quarry Refill & Wire-Speed Packet Burst\n• Halloween & Economy: Dual-currency upgrades (Candy Corn & Coins) with icons, Secret Codes\n• Waters of Nu: Multi-tier detection (Basic, Silver, Gold, Void, Haunted, Cursed)\n• Pet Suite: Native Equip Best, Exclusive-safe Auto-Delete & Auto-Lock Rares\n• World Travel & POIs: Halloween Portal, Sun Shrine, Event Sign, Jack NPC\n• OP Exploits: Zero-lag PromptShown Instant Prompts, Anti-Hazard & Fast Hold" },
         { "2026-10-13", "Smart Progression and faster Auto Farm\nPets, hatching limits and full ESP\nAuto Skip Cutscene and Spectate\nFixed pool training, respawn and camera recovery\nImproved upgrade guards, rejoin and cleanup" },
     },
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
@@ -208,7 +209,7 @@ if type(body) == "string" then loadstring(body)() end]],
     EngineRadiusLimit = 15000,
     HoverHeight = 6,
     StandHeight = 3,
-    QuarrySpot = vector3New(-234, -16, 38),
+    QuarrySpot = vector3New(-234.75, -6.5, 38.25),
     BenchRange = 12,
     BenchRetry = 2,
     StandRadius = 4,
@@ -224,11 +225,11 @@ if type(body) == "string" then loadstring(body)() end]],
     GiftInterval = 30,
     BoostInterval = 30,
     FlyKeys = { Up = Enum.KeyCode.Space, Down = Enum.KeyCode.Q },
-    AutoOptions = { "AutoFarm", "AutoPickup", "AutoPlace", "AutoStrength", "AutoSpeed", "AutoPool", "AutoUpgrade", "AutoGift", "TrainWhileWaiting", "AutoProgression" },
+    AutoOptions = { "AutoFarm", "InsaneInstant", "AutoPickup", "AutoPlace", "AutoStrength", "AutoSpeed", "AutoPool", "AutoUpgrade", "AutoGift", "TrainWhileWaiting", "AutoProgression" },
     CodeFinal = { Redeemed = true, AlreadyRedeemed = true, Expired = true, FullyClaimed = true },
     CodeLabels = { Redeemed = "redeemed", AlreadyRedeemed = "already used", Expired = "expired", FullyClaimed = "fully claimed", InvalidCode = "invalid", NoReply = "no reply" },
-    SlowRequests = { UpgradeNow = true, CodesNow = true, GiftNow = true, Hop = true, PetsBestNow = true, PetsRefresh = true, PetEquipNow = true, PetUnequipNow = true, PetLockNow = true, PetUnlockNow = true, BlocksNow = true, SecondsNow = true },
-    ExtraCodes = { "SUNGOD", "SORRYFORUPDATEBUG", "FREECODE", "WELCOME", "DEADBYMELOL", "UPDATE15", "PYRAMID1500" },
+    SlowRequests = { UpgradeNow = true, CodesNow = true, GiftNow = true, Hop = true, PetsBestNow = true, PetsRefresh = true, PetEquipNow = true, PetUnequipNow = true, PetLockNow = true, PetUnlockNow = true, PetUnequipAllNow = true, PetDeleteUnlockedNow = true, BlocksNow = true, SecondsNow = true, TpSunGod = true, TpEventSign = true, SignUpEventNow = true, RaknetCycleNow = true },
+    ExtraCodes = { "HALLOWEEN", "PETS", "SORRYFORDELAY", "SUNGOD", "SORRYFORUPDATEBUG", "FREECODE", "WELCOME", "DEADBYMELOL", "UPDATE15", "PYRAMID1500" },
 }
 
 xDTaraZ.State = {
@@ -247,7 +248,9 @@ xDTaraZ.State = {
     CycleLog = {},
     BlockLog = {},
     FarmSamples = {},
+    Placed = 0,
     BlocksPlaced = 0,
+    FarmWait = 0,
     CodeDone = {},
     UpgradeGain = {},
     BankRefused = {},
@@ -261,17 +264,19 @@ xDTaraZ.State = {
     CandyCornGained = 0,
     Opt = {
         AutoFarm = false,
-        FarmMode = "Normal",
-        PreferredTier = "Auto",
+        RemoteQuarry = false,
+        PacketBurst = false,
+        InsaneInstant = false,
         InstantPrompts = false,
         AntiHazard = false,
-        MaxSimRadius = false,
         FastInteract = false,
-        RaknetOptimizer = false,
         AutoPickup = false,
         AutoPlace = false,
         AutoHatch = false,
         AutoEquipPets = false,
+        AutoLockRares = false,
+        AutoDeletePets = false,
+        AutoDeleteFilter = "Common & Uncommon",
         PetEgg = "Basic",
         PetHatchAmount = "Best Owned",
         PetKeepCoins = 0,
@@ -289,7 +294,6 @@ xDTaraZ.State = {
         TargetSpeed = 0,
         AutoGift = false,
         AutoBuyJack = false,
-        AutoHalloweenFarm = false,
         UpgradeMax = {},
         PlaceReach = 30,
         FarmBatchCap = 64,
@@ -300,6 +304,7 @@ xDTaraZ.State = {
         AutoUpgrade = false,
         Upgrades = {},
         UpgradeOrder = "Best Value",
+        UpgradeCurrency = "Auto",
         KeepCoins = 0,
         AutoStrength = false,
         AutoSpeed = false,
@@ -499,8 +504,12 @@ do
         EggConfig = SharedConfig:FindFirstChild("EggConfig"),
         PetConfig = SharedConfig:FindFirstChild("PetConfig"),
         PetPresentation = SharedConfig:FindFirstChild("PetPresentationConfig"),
+        PlaceConfig = SharedConfig:FindFirstChild("PlaceConfig"),
+        PortalConfig = SharedConfig:FindFirstChild("PortalConfig"),
+        JackConfig = SharedConfig:FindFirstChild("JackConfig"),
         Carry = Wait(SharedConfig, "CarryConfig"),
         Upgrades = Wait(SharedConfig, "UpgradeCatalog"),
+        UpgradeLevels = Shared:FindFirstChild("Upgrades") and Shared.Upgrades:FindFirstChild("UpgradeLevels"),
         Gym = Wait(SharedConfig, "GymConfig"),
         Codes = Wait(SharedConfig, "CodesConfig"),
         Completion = Wait(SharedConfig, "PyramidCompletionConfig"),
@@ -512,9 +521,7 @@ do
         Progression = Wait(Wait(Shared, "Stats"), "StatProgression"),
         PlacementRange = Shared:FindFirstChild("Placement") and Shared.Placement:FindFirstChild("PlacementRange"),
         CharacterAccess = Shared:FindFirstChild("CharacterAccess"),
-        CharacterConfig = SharedConfig:FindFirstChild("CharacterConfig"),
         PyramidFallPhysics = Shared:FindFirstChild("Movement") and Shared.Movement:FindFirstChild("PyramidFallPhysics"),
-        PyramidHazardConfig = SharedConfig:FindFirstChild("PyramidHazardConfig"),
     }
     for key, module in pairs(modules) do
         GameLib[key] = GameLib.Require(module)
@@ -532,6 +539,8 @@ GameLib.PetEquipBest = Remote("PetService", "RF", "EquipBest")
 GameLib.PetEquip = Remote("PetService", "RF", "Equip")
 GameLib.PetUnequip = Remote("PetService", "RF", "Unequip")
 GameLib.PetSetLocked = Remote("PetService", "RF", "SetLocked")
+GameLib.PetDelete = Remote("PetService", "RF", "DeletePets")
+GameLib.PetUnequipAll = Remote("PetService", "RF", "UnequipAll")
 
 GameLib.Pickup = Remote("BlockService", "RF", "Pickup")
 GameLib.CarryChanged = Remote("BlockService", "RE", "CarryStateChanged")
@@ -548,23 +557,20 @@ GameLib.GiftStep = Remote("FreeGiftService", "RF", "MarkStep")
 GameLib.GiftState = Remote("FreeGiftService", "RF", "GetState")
 GameLib.GiftChanged = Remote("FreeGiftService", "RE", "StateChanged")
 GameLib.BoostState = Remote("ServerBoostService", "RF", "GetState")
-GameLib.RequestTierPick = Remote("PyramidService", "RF", "RequestTierPick")
 GameLib.ShopPurchase = Remote("ShopService", "RF", "RequestPassPurchase")
 GameLib.EquipCharacter = Remote("ShopService", "RF", "EquipCharacter")
-GameLib.FallDied = Remote("PyramidHazardService", "RE", "FallDied")
 GameLib.TutorialComplete = Remote("TutorialService", "RF", "Complete")
 GameLib.TutorialSkip = Remote("TutorialService", "RF", "Skip")
 GameLib.SettingsSet = Remote("SettingsService", "RF", "Set")
-GameLib.SettingsGetAll = Remote("SettingsService", "RF", "GetAll")
 GameLib.PyramidState = Remote("PyramidService", "RF", "GetState")
-GameLib.PyramidCapacity = Remote("PyramidService", "RF", "GetRemainingCapacity")
-
 
 xDTaraZ.UpgradeByName = {}
 xDTaraZ.UpgradeNames = {}
+xDTaraZ.UpgradeImages = {}
 do
     for _, upgrade in ipairs(GameLib.Upgrades and GameLib.Upgrades.Upgrades or {}) do
         xDTaraZ.UpgradeByName[upgrade.DisplayName] = upgrade
+        xDTaraZ.UpgradeImages[upgrade.DisplayName] = upgrade.Icon
         table.insert(xDTaraZ.UpgradeNames, upgrade.DisplayName)
     end
 end
@@ -596,15 +602,14 @@ xDTaraZ.Gate = {
     },
 }
 
----@return string?  first game module or remote the option needs that was not found
 xDTaraZ.Gate.Needs.AutoProgression = { "Pyramid", "Carry", "CarryState", "Runtime", "Regions", "Upgrades", "Pickup", "Place", "Gym", "GymAccess", "StartBench", "StopBench" }
 xDTaraZ.Gate.Needs.AutoHatch = { "EggConfig", "PetConfig", "PetHatch", "Knit" }
 xDTaraZ.Gate.Needs.AutoEquipPets = { "PetConfig", "PetEquipBest", "Knit" }
 xDTaraZ.Gate.Needs.AutoPickup = xDTaraZ.Gate.Needs.AutoFarm
 xDTaraZ.Gate.Needs.AutoPlace = xDTaraZ.Gate.Needs.AutoFarm
 xDTaraZ.Gate.Needs.AutoBuyJack = { "ShopPurchase", "EquipCharacter" }
-xDTaraZ.Gate.Needs.AutoPickTier = { "RequestTierPick" }
 
+---@return string?  first game module or remote the option needs that was not found
 function xDTaraZ.Gate.Missing(idx)
     for _, key in ipairs(xDTaraZ.Gate.Needs[idx] or {}) do
         if GameLib[key] == nil then return key end
@@ -673,16 +678,23 @@ function xDTaraZ.Game.Capacity()
 end
 
 function xDTaraZ.Game.Carried()
+    local cap = xDTaraZ.Game.Capacity()
+    if State.CarrySnapshot then
+        if cap > 0 and State.CarrySnapshot.count > cap then
+            State.CarrySnapshot = nil
+        else
+            return State.CarrySnapshot.count
+        end
+    end
     if GameLib.CarryState then
         local ok, native = pcall(GameLib.CarryState.read, LocalPlayer)
         if ok and type(native) == "table" and tonumber(native.count) then
-            local revision = tonumber(native.revision) or 0
-            if not State.CarrySnapshot or revision >= State.CarrySnapshot.revision then
-                State.CarrySnapshot = { revision = revision, count = tonumber(native.count) }
+            local count = tonumber(native.count) or 0
+            if cap <= 0 or count <= cap then
+                return count
             end
         end
     end
-    if State.CarrySnapshot then return State.CarrySnapshot.count end
     return tonumber(xDTaraZ.Game.Attr("CarriedCount")) or 0
 end
 
@@ -695,7 +707,10 @@ function xDTaraZ.Game.CandyCorn()
 end
 
 function xDTaraZ.Game.World()
-    if Workspace:FindFirstChild("MainPlacePortalArea") or game.PlaceId == 95412364107708 then
+    if GameLib.PlaceConfig and type(GameLib.PlaceConfig.World) == "string" then
+        return GameLib.PlaceConfig.World
+    end
+    if Workspace:FindFirstChild("MainPlacePortalArea") then
         return "Halloween"
     end
     return "Main"
@@ -721,6 +736,29 @@ function xDTaraZ.Game.Completed()
     return endsAt > Workspace:GetServerTimeNow()
 end
 
+---@return number?, string?  seconds remaining until next pyramid reset and active tierId
+function xDTaraZ.Game.ResetCountdown()
+    local model = xDTaraZ.Game.Model()
+    local tierId = model and (model:GetAttribute("PyramidTierId") or model:GetAttribute("TierId"))
+    if model and GameLib.Completion then
+        local endsAt = tonumber(model:GetAttribute(GameLib.Completion.CompletionEndsAtAttribute))
+        if endsAt and endsAt > Workspace:GetServerTimeNow() then
+            return math.max(math.ceil(endsAt - Workspace:GetServerTimeNow()), 0), tierId
+        end
+    end
+    local now = osClock()
+    if State.PyramidStateCache and now < State.PyramidStateNext then
+        return State.PyramidStateCache, State.PyramidTierCache or tierId
+    end
+    State.PyramidStateNext = now + 2
+    if not GameLib.PyramidState then return nil, tierId end
+    local ok, res = pcall(GameLib.PyramidState.InvokeServer, GameLib.PyramidState)
+    local secs = ok and type(res) == "table" and tonumber(res.resetInSeconds) or nil
+    State.PyramidStateCache = secs and math.max(math.ceil(secs), 0) or nil
+    State.PyramidTierCache = ok and type(res) == "table" and res.tierId or tierId
+    return State.PyramidStateCache, State.PyramidTierCache
+end
+
 ---@param carryState any  "revision:count:..." string from a Pickup/Place reply
 ---@return number?         blocks held, nil when the reply carries no state
 function xDTaraZ.Game.ReadCarry(carryState)
@@ -729,9 +767,14 @@ function xDTaraZ.Game.ReadCarry(carryState)
     if not ok or type(decoded) ~= "table" then return nil end
     local count, revision = tonumber(decoded.count), tonumber(decoded.revision)
     if not count or count < 0 or not revision then return nil end
-    if not State.CarrySnapshot or revision >= State.CarrySnapshot.revision then
+    local cap = xDTaraZ.Game.Capacity()
+    if cap > 0 and count > cap then return nil end
+    if not State.CarrySnapshot or revision >= State.CarrySnapshot.revision or (count == 0 and revision ~= State.CarrySnapshot.revision) then
         State.CarrySnapshot = { revision = revision, count = count }
         State.CarryConfirmed = true
+        if GameLib.CarryState.observe then
+            pcall(GameLib.CarryState.observe, LocalPlayer, carryState)
+        end
     end
     return count
 end
@@ -765,142 +808,65 @@ function xDTaraZ.Game.WatchStats()
     if not ok then warn("[BuildThePyramid] stats:", err) end
 end
 
-function xDTaraZ.Game.PyramidState()
-    if not GameLib.PyramidState then return nil end
-    local ok, res = pcall(function() return GameLib.PyramidState:InvokeServer() end)
-    return ok and type(res) == "table" and res or nil
-end
-
 xDTaraZ.Exploits = {
     OriginalPromptDurations = {},
     PromptConn = nil,
     HazardConn = nil,
-    SimConn = nil,
-    OriginalCharacterLook = nil,
-    OriginalHoldBurst = nil,
-    OriginalHoldInterval = nil,
-    OriginalHoldDelay = nil,
+    OriginalFastHooks = nil,
     OriginalHazardStart = nil,
-    OriginalCinematicPlay = nil,
-    RaknetLive = false,
-    RaknetPackets = 0,
-    RaknetSendHook = nil,
+}
+
+local FAST_INTERACT_LOOK = {
+    instafillRepeatInterval = 0,
+    instafillRepeatDelay = 0,
+    instafillActionsPerFrame = 60,
+    placeDistanceMultiplier = 8,
+    completionMultiplier = 4,
 }
 
 function xDTaraZ.Exploits.SetInstantPrompts(enabled)
     local fn = setproximitypromptduration
+    local function Apply(prompt)
+        if not (prompt and prompt:IsA("ProximityPrompt")) then return end
+        if xDTaraZ.Exploits.OriginalPromptDurations[prompt] == nil then
+            xDTaraZ.Exploits.OriginalPromptDurations[prompt] = prompt.HoldDuration
+        end
+        if fn then
+            pcall(fn, prompt, 0)
+        else
+            pcall(function() prompt.HoldDuration = 0 end)
+        end
+    end
     if enabled then
-        local function Apply(prompt)
-            if prompt and prompt:IsA("ProximityPrompt") then
-                if xDTaraZ.Exploits.OriginalPromptDurations[prompt] == nil then
-                    xDTaraZ.Exploits.OriginalPromptDurations[prompt] = prompt.HoldDuration
-                end
-                if fn then
-                    pcall(fn, prompt, 0)
-                else
-                    pcall(function() prompt.HoldDuration = 0 end)
-                end
+        for _, folderName in ipairs({ "HalloweenPortalArea", "MainPlacePortalArea", "SunGod", "EventSign", "JackArea", "Quarry" }) do
+            local folder = Workspace:FindFirstChild(folderName)
+            if folder then
+                for _, desc in ipairs(folder:GetDescendants()) do Apply(desc) end
             end
         end
-        for _, desc in ipairs(Workspace:GetDescendants()) do
-            Apply(desc)
-        end
         if not xDTaraZ.Exploits.PromptConn then
-            xDTaraZ.Exploits.PromptConn = Workspace.DescendantAdded:Connect(function(desc)
-                if State.Alive and State.Opt.InstantPrompts then
-                    Apply(desc)
-                end
+            xDTaraZ.Exploits.PromptConn = ProximityPromptService.PromptShown:Connect(function(prompt)
+                if State.Alive and State.Opt.InstantPrompts then Apply(prompt) end
             end)
             table.insert(State.Connections, xDTaraZ.Exploits.PromptConn)
         end
-    else
-        if xDTaraZ.Exploits.PromptConn then
-            xDTaraZ.Exploits.PromptConn:Disconnect()
-            xDTaraZ.Exploits.PromptConn = nil
-        end
-        for prompt, orig in pairs(xDTaraZ.Exploits.OriginalPromptDurations) do
-            if prompt and prompt.Parent then
-                if fn then
-                    pcall(fn, prompt, orig)
-                else
-                    pcall(function() prompt.HoldDuration = orig end)
-                end
-            end
-        end
-        table.clear(xDTaraZ.Exploits.OriginalPromptDurations)
+        return
     end
-end
-
-function xDTaraZ.Exploits.SetMaxSimRadius(enabled)
-    local setSim = setsimulationradius
-    if enabled then
-        if not setSim then return end
-        if not xDTaraZ.Exploits.SimConn then
-            xDTaraZ.Exploits.SimConn = RunService.Stepped:Connect(function()
-                if not State.Alive or not State.Opt.MaxSimRadius then return end
-                pcall(setSim, 1e9, 1e9)
-                local setHidden = sethiddenproperty
-                if setHidden then
-                    pcall(setHidden, LocalPlayer, "SimulationRadius", 1e9)
-                    pcall(setHidden, LocalPlayer, "MaxSimulationRadius", 1e9)
-                end
-            end)
-            table.insert(State.Connections, xDTaraZ.Exploits.SimConn)
-        end
-    else
-        if xDTaraZ.Exploits.SimConn then
-            xDTaraZ.Exploits.SimConn:Disconnect()
-            xDTaraZ.Exploits.SimConn = nil
-        end
-        if setSim then
-            pcall(setSim, 100, 100)
+    if xDTaraZ.Exploits.PromptConn then
+        xDTaraZ.Exploits.PromptConn:Disconnect()
+        xDTaraZ.Exploits.PromptConn = nil
+    end
+    for prompt, orig in pairs(xDTaraZ.Exploits.OriginalPromptDurations) do
+        if prompt and prompt.Parent then
+            if fn then pcall(fn, prompt, orig) else pcall(function() prompt.HoldDuration = orig end) end
         end
     end
+    table.clear(xDTaraZ.Exploits.OriginalPromptDurations)
 end
 
 function xDTaraZ.Exploits.SetAntiHazard(enabled)
     local fallPhysics = GameLib.PyramidFallPhysics
-    if enabled then
-        if fallPhysics and type(fallPhysics) == "table" and type(fallPhysics.start) == "function" then
-            if not xDTaraZ.Exploits.OriginalHazardStart then
-                xDTaraZ.Exploits.OriginalHazardStart = fallPhysics.start
-                pcall(function()
-                    if setreadonly then setreadonly(fallPhysics, false) end
-                    fallPhysics.start = function(char, hum, hrp, janitor)
-                        if State.Alive and State.Opt.AntiHazard and char == LocalPlayer.Character then
-                            return
-                        end
-                        if xDTaraZ.Exploits.OriginalHazardStart then
-                            return xDTaraZ.Exploits.OriginalHazardStart(char, hum, hrp, janitor)
-                        end
-                    end
-                end)
-            end
-        end
-
-        if not xDTaraZ.Exploits.HazardConn then
-            xDTaraZ.Exploits.HazardConn = RunService.Heartbeat:Connect(function()
-                if not State.Alive or not State.Opt.AntiHazard then return end
-                local char = LocalPlayer.Character
-                if not char then return end
-                if char:GetAttribute("PyramidFallId") then
-                    pcall(function() char:SetAttribute("PyramidFallId", nil) end)
-                end
-                local hrp = char:FindFirstChild("HumanoidRootPart")
-                local hum = char:FindFirstChildOfClass("Humanoid")
-                if hrp and hrp.Position.Y < -80 then
-                    hrp.AssemblyLinearVelocity = Vector3.zero
-                    local safeSpot = Config.QuarrySpot or vector3New(-234, -16, 38)
-                    hrp.CFrame = CFrame.new(safeSpot + vector3New(0, 5, 0))
-                    if hum then
-                        hum.PlatformStand = false
-                        hum.Sit = false
-                    end
-                end
-            end)
-            table.insert(State.Connections, xDTaraZ.Exploits.HazardConn)
-        end
-    else
+    if not enabled then
         if xDTaraZ.Exploits.HazardConn then
             xDTaraZ.Exploits.HazardConn:Disconnect()
             xDTaraZ.Exploits.HazardConn = nil
@@ -912,151 +878,194 @@ function xDTaraZ.Exploits.SetAntiHazard(enabled)
             end)
             xDTaraZ.Exploits.OriginalHazardStart = nil
         end
+        return
     end
+    if fallPhysics and type(fallPhysics.start) == "function" and not xDTaraZ.Exploits.OriginalHazardStart then
+        xDTaraZ.Exploits.OriginalHazardStart = fallPhysics.start
+        pcall(function()
+            if setreadonly then setreadonly(fallPhysics, false) end
+            fallPhysics.start = function(char, hum, hrp, janitor)
+                if State.Alive and State.Opt.AntiHazard and char == LocalPlayer.Character then return nil end
+                return xDTaraZ.Exploits.OriginalHazardStart and xDTaraZ.Exploits.OriginalHazardStart(char, hum, hrp, janitor)
+            end
+        end)
+    end
+    if xDTaraZ.Exploits.HazardConn then return end
+    xDTaraZ.Exploits.HazardConn = RunService.Heartbeat:Connect(function()
+        if not (State.Alive and State.Opt.AntiHazard) then return end
+        local char, hum, hrp = xDTaraZ:Character()
+        if not (char and hrp) then return end
+        if char:GetAttribute("PyramidFallId") then pcall(char.SetAttribute, char, "PyramidFallId", nil) end
+        if hrp.Position.Y >= -50 then return end
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+        local safeSpot = (xDTaraZ.Move and xDTaraZ.Move.QuarrySpot and xDTaraZ.Move.QuarrySpot()) or Config.QuarrySpot
+        char:PivotTo(CFrame.new(safeSpot + vector3New(0, 3, 0)))
+        if hum then
+            hum.PlatformStand = false
+            hum.Sit = false
+        end
+    end)
+    table.insert(State.Connections, xDTaraZ.Exploits.HazardConn)
 end
 
 function xDTaraZ.Exploits.SetFastInteract(enabled)
     local charAccess = GameLib.CharacterAccess
     if not (charAccess and type(charAccess) == "table") then return end
-    if enabled then
-        if not xDTaraZ.Exploits.OriginalHoldBurst and type(charAccess.holdRepeatBurst) == "function" then
-            xDTaraZ.Exploits.OriginalHoldBurst = charAccess.holdRepeatBurst
-            charAccess.holdRepeatBurst = function(player)
-                if State.Alive and State.Opt.FastInteract then
-                    return 60
-                end
-                return xDTaraZ.Exploits.OriginalHoldBurst(player)
+    pcall(function()
+        if setreadonly then setreadonly(charAccess, false) end
+        if not enabled then
+            for name, orig in pairs(xDTaraZ.Exploits.OriginalFastHooks or {}) do
+                charAccess[name] = orig
+            end
+            xDTaraZ.Exploits.OriginalFastHooks = nil
+            return
+        end
+        if xDTaraZ.Exploits.OriginalFastHooks then return end
+        local origBurst = charAccess.holdRepeatBurst
+        local origInterval = charAccess.holdRepeatInterval
+        local origDelay = charAccess.holdRepeatDelay
+        local origLook = charAccess.look
+        local saved = {
+            holdRepeatBurst = origBurst,
+            holdRepeatInterval = origInterval,
+            holdRepeatDelay = origDelay,
+            look = origLook,
+        }
+        local overrides = {
+            holdRepeatBurst = function(player)
+                return (State.Alive and State.Opt.FastInteract) and 60 or (origBurst and origBurst(player))
+            end,
+            holdRepeatInterval = function(player, interval)
+                return (State.Alive and State.Opt.FastInteract) and 0 or (origInterval and origInterval(player, interval))
+            end,
+            holdRepeatDelay = function(player, delay)
+                return (State.Alive and State.Opt.FastInteract) and 0 or (origDelay and origDelay(player, delay))
+            end,
+            look = function(player)
+                return (State.Alive and State.Opt.FastInteract) and FAST_INTERACT_LOOK or (origLook and origLook(player))
+            end,
+        }
+        for name, fn in pairs(overrides) do
+            if type(saved[name]) == "function" then
+                charAccess[name] = fn
             end
         end
-        if not xDTaraZ.Exploits.OriginalHoldInterval and type(charAccess.holdRepeatInterval) == "function" then
-            xDTaraZ.Exploits.OriginalHoldInterval = charAccess.holdRepeatInterval
-            charAccess.holdRepeatInterval = function(player, interval)
-                if State.Alive and State.Opt.FastInteract then
-                    return 0
-                end
-                return xDTaraZ.Exploits.OriginalHoldInterval(player, interval)
-            end
-        end
-        if not xDTaraZ.Exploits.OriginalHoldDelay and type(charAccess.holdRepeatDelay) == "function" then
-            xDTaraZ.Exploits.OriginalHoldDelay = charAccess.holdRepeatDelay
-            charAccess.holdRepeatDelay = function(player, delay)
-                if State.Alive and State.Opt.FastInteract then
-                    return 0
-                end
-                return xDTaraZ.Exploits.OriginalHoldDelay(player, delay)
-            end
-        end
-        if not xDTaraZ.Exploits.OriginalCharacterLook and type(charAccess.look) == "function" then
-            xDTaraZ.Exploits.OriginalCharacterLook = charAccess.look
-            charAccess.look = function(player)
-                if State.Alive and State.Opt.FastInteract then
-                    return {
-                        instafillRepeatInterval = 0,
-                        instafillRepeatDelay = 0,
-                        instafillActionsPerFrame = 60,
-                        placeDistanceMultiplier = 8,
-                        completionMultiplier = 4,
-                    }
-                end
-                return xDTaraZ.Exploits.OriginalCharacterLook(player)
-            end
-        end
-    else
-        if xDTaraZ.Exploits.OriginalHoldBurst then
-            charAccess.holdRepeatBurst = xDTaraZ.Exploits.OriginalHoldBurst
-            xDTaraZ.Exploits.OriginalHoldBurst = nil
-        end
-        if xDTaraZ.Exploits.OriginalHoldInterval then
-            charAccess.holdRepeatInterval = xDTaraZ.Exploits.OriginalHoldInterval
-            xDTaraZ.Exploits.OriginalHoldInterval = nil
-        end
-        if xDTaraZ.Exploits.OriginalHoldDelay then
-            charAccess.holdRepeatDelay = xDTaraZ.Exploits.OriginalHoldDelay
-            xDTaraZ.Exploits.OriginalHoldDelay = nil
-        end
-        if xDTaraZ.Exploits.OriginalCharacterLook then
-            charAccess.look = xDTaraZ.Exploits.OriginalCharacterLook
-            xDTaraZ.Exploits.OriginalCharacterLook = nil
-        end
-    end
-end
-
-function xDTaraZ.Exploits.SetRaknetOptimizer(enabled)
-    local rk = raknet
-    if not (rk and type(rk.add_send_hook) == "function") then return end
-    if enabled then
-        if not xDTaraZ.Exploits.RaknetSendHook then
-            xDTaraZ.Exploits.RaknetSendHook = rk.add_send_hook(function(packet)
-                if State.Alive and State.Opt.RaknetOptimizer then
-                    xDTaraZ.Exploits.RaknetPackets += 1
-                end
-            end)
-        end
-        xDTaraZ.Exploits.RaknetLive = true
-    else
-        if xDTaraZ.Exploits.RaknetSendHook and type(rk.remove_send_hook) == "function" then
-            pcall(rk.remove_send_hook, xDTaraZ.Exploits.RaknetSendHook)
-            xDTaraZ.Exploits.RaknetSendHook = nil
-        end
-        xDTaraZ.Exploits.RaknetLive = false
-    end
+        xDTaraZ.Exploits.OriginalFastHooks = saved
+    end)
 end
 
 function xDTaraZ.Exploits.CompleteTutorial()
     if GameLib.TutorialComplete then
-        local ok, res = pcall(function() return GameLib.TutorialComplete:InvokeServer() end)
+        local ok, res = xDTaraZ:Invoke(GameLib.TutorialComplete)
         if ok and type(res) == "table" and res.ok then
-            xDTaraZ:Notify("Tutorial completed! (Step 6 reached)")
+            xDTaraZ:Notify("Tutorial completed!")
             return true
         end
     end
     if GameLib.TutorialSkip then
-        local ok, res = pcall(function() return GameLib.TutorialSkip:InvokeServer() end)
+        local ok, res = xDTaraZ:Invoke(GameLib.TutorialSkip)
         if ok and type(res) == "table" and res.ok then
             xDTaraZ:Notify("Tutorial skipped!")
             return true
         end
     end
+    xDTaraZ:Notify("Tutorial already completed or unavailable")
     return false
 end
 
-function xDTaraZ.Exploits.HookCinematic(enabled)
-    if GameLib.SettingsSet then
-        pcall(function() GameLib.SettingsSet:InvokeServer("completionCutscene", not enabled) end)
-    end
-    local cinematic = GameLib.Cinematic
-    if not (cinematic and type(cinematic) == "table") then return end
-    if enabled then
-        if not xDTaraZ.Exploits.OriginalCinematicPlay and type(cinematic.Play) == "function" then
-            xDTaraZ.Exploits.OriginalCinematicPlay = cinematic.Play
-            cinematic.Play = function(self, ...)
-                if State.Alive and State.Opt.AutoSkipCutscene then
-                    return
-                end
-                return xDTaraZ.Exploits.OriginalCinematicPlay(self, ...)
-            end
-        end
-        if cinematic._playing and type(cinematic.Stop) == "function" then
-            pcall(cinematic.Stop, cinematic)
-        end
-    else
-        if xDTaraZ.Exploits.OriginalCinematicPlay then
-            cinematic.Play = xDTaraZ.Exploits.OriginalCinematicPlay
-            xDTaraZ.Exploits.OriginalCinematicPlay = nil
-        end
-    end
+xDTaraZ.Raknet = {}
+
+function xDTaraZ.Raknet.Available()
+    return type(raknet) == "table"
+        and type(raknet.add_send_hook) == "function"
+        and type(raknet.remove_send_hook) == "function"
+        and type(raknet.add_receive_hook) == "function"
+        and type(raknet.remove_receive_hook) == "function"
+        and type(raknet.send) == "function"
 end
 
-function xDTaraZ.Exploits.SkipCutscene()
-    xDTaraZ.Exploits.HookCinematic(true)
-    local cinematic = GameLib.Cinematic
-    if cinematic and type(cinematic.Stop) == "function" then
-        pcall(cinematic.Stop, cinematic)
+function xDTaraZ.Raknet.RemoveSendHook()
+    if xDTaraZ.Raknet.SendHook and xDTaraZ.Raknet.Available() then
+        pcall(raknet.remove_send_hook, xDTaraZ.Raknet.SendHook)
     end
-    if cinematic and type(cinematic.ExitWithTransition) == "function" then
-        pcall(cinematic.ExitWithTransition, cinematic)
+    xDTaraZ.Raknet.SendHook = nil
+end
+
+function xDTaraZ.Raknet.RemoveRecvHook()
+    if xDTaraZ.Raknet.RecvHook and xDTaraZ.Raknet.Available() then
+        pcall(raknet.remove_receive_hook, xDTaraZ.Raknet.RecvHook)
     end
-    xDTaraZ:Notify("Cutscene skipped")
+    xDTaraZ.Raknet.RecvHook = nil
+end
+
+function xDTaraZ.Raknet.Stop()
+    xDTaraZ.Raknet.RemoveSendHook()
+    xDTaraZ.Raknet.RemoveRecvHook()
+end
+
+function xDTaraZ.Raknet.EnsureQuarryPhysics()
+    if not xDTaraZ.Raknet.Available() then return false end
+    local char, _, hrp = xDTaraZ:Character()
+    if not (char and hrp) then return false end
+    if State.QuarryPhysBuf and State.QuarryPhysChar == char then return true end
+    State.QuarryPhysBuf = nil
+    if not xDTaraZ.Move.To(xDTaraZ.Move.QuarrySpot()) then return false end
+    local function CaptureHook(pkt)
+        if pkt.PacketId ~= 161 or State.QuarryPhysBuf then return end
+        State.QuarryPhysBuf = pkt.AsBuffer
+        State.QuarryPriority = pkt.Priority
+        State.QuarryReliability = pkt.Reliability
+        State.QuarryChannel = pkt.OrderingChannel
+        State.QuarryPhysChar = char
+    end
+    xDTaraZ.Raknet.RemoveSendHook()
+    xDTaraZ.Raknet.SendHook = CaptureHook
+    pcall(raknet.add_send_hook, CaptureHook)
+    hrp.AssemblyLinearVelocity = vector3New(0, 0.05, 0)
+    local deadline = osClock() + 0.35
+    while not State.QuarryPhysBuf and osClock() < deadline and State.Alive do
+        task.wait()
+    end
+    xDTaraZ.Raknet.RemoveSendHook()
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    return State.QuarryPhysBuf ~= nil
+end
+
+function xDTaraZ.Raknet.BeginQuarrySpoof()
+    if not (xDTaraZ.Raknet.Available() and State.QuarryPhysBuf) then return false end
+    local _, _, hrp = xDTaraZ:Character()
+    if not hrp then return false end
+    local function SpoofHook(pkt)
+        if pkt.PacketId ~= 161 or not State.QuarryPhysBuf then return end
+        local cur = pkt.AsBuffer
+        local qBuf = State.QuarryPhysBuf
+        local len = buffer.len(qBuf)
+        local out = buffer.create(len)
+        buffer.copy(out, 0, qBuf, 0, len)
+        if buffer.len(cur) >= 4 and len >= 4 then
+            buffer.writeu8(out, 1, buffer.readu8(cur, 1))
+            buffer.writeu8(out, 2, buffer.readu8(cur, 2))
+            buffer.writeu8(out, 3, buffer.readu8(cur, 3))
+        end
+        pkt:SetData(out)
+    end
+    xDTaraZ.Raknet.RemoveSendHook()
+    xDTaraZ.Raknet.SendHook = SpoofHook
+    if not pcall(raknet.add_send_hook, SpoofHook) then
+        xDTaraZ.Raknet.SendHook = nil
+        return false
+    end
+    pcall(raknet.send, State.QuarryPhysBuf, State.QuarryPriority or 1, State.QuarryReliability or 0, State.QuarryChannel or 0)
+    return true
+end
+
+function xDTaraZ.Raknet.EndQuarrySpoof(standFrame)
+    xDTaraZ.Raknet.RemoveSendHook()
+    local _, _, hrp = xDTaraZ:Character()
+    if not (hrp and standFrame) then return end
+    hrp.CFrame = standFrame
+    hrp.AssemblyLinearVelocity = Vector3.zero
 end
 
 xDTaraZ.Move = {}
@@ -1093,15 +1102,26 @@ end
 
 ---@param stream boolean?  ask the engine to load the destination first (far targets only)
 function xDTaraZ.Move.To(pos, stream)
-    if not State.Alive or (not State.ManualMove and State.ActiveEpoch ~= nil and State.ActiveEpoch ~= State.WorkEpoch) then return false end
-    local _, _, hrp = xDTaraZ:Character()
-    if not hrp then return false end
+    local manual = State.ManualMove or State.FarmManual
+    if not State.Alive or (not manual and State.ActiveEpoch ~= nil and State.ActiveEpoch ~= State.WorkEpoch) then return false end
+    local char, _, hrp = xDTaraZ:Character()
+    if not hrp or not char then return false end
     if stream and (hrp.Position - pos).Magnitude > Config.StreamDistance then xDTaraZ.Move.Stream(pos) end
-    if not State.Alive or (not State.ManualMove and State.ActiveEpoch ~= nil and State.ActiveEpoch ~= State.WorkEpoch) then return false end
+    if not State.Alive or (not manual and State.ActiveEpoch ~= nil and State.ActiveEpoch ~= State.WorkEpoch) then return false end
     hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
     local freezeCamera = (hrp.Position - pos).Magnitude > Config.CameraShieldJump
     if freezeCamera then xDTaraZ.Move.FreezeCamera() end
-    hrp.CFrame = CFrame.new(pos) * hrp.CFrame.Rotation
+    char:PivotTo(CFrame.new(pos) * hrp.CFrame.Rotation)
+    return true
+end
+
+function xDTaraZ.Move.Pivot(pos)
+    local char, _, hrp = xDTaraZ:Character()
+    if not (char and hrp) then return false end
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.AssemblyAngularVelocity = Vector3.zero
+    char:PivotTo(CFrame.new(pos) * hrp.CFrame.Rotation)
     return true
 end
 
@@ -1112,11 +1132,12 @@ end
 
 ---@param frame CFrame  local restoration also works while unloading
 function xDTaraZ.Move.Restore(frame)
-    local _, _, root = xDTaraZ:Character()
-    if not root then return false end
+    local char, _, root = xDTaraZ:Character()
+    if not root or not char then return false end
     if (root.Position - frame.Position).Magnitude > Config.CameraShieldJump then xDTaraZ.Move.FreezeCamera() end
     root.AssemblyLinearVelocity = Vector3.zero
-    root.CFrame = frame
+    root.AssemblyAngularVelocity = Vector3.zero
+    char:PivotTo(frame)
     return true
 end
 
@@ -1126,7 +1147,7 @@ function xDTaraZ.Move.QuarrySpot(jitter)
     if not (region and region:IsA("BasePart")) then return Config.QuarrySpot end
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
-    params.FilterDescendantsInstances = { LocalPlayer.Character, region, Workspace:FindFirstChild(GameLib.Pyramid.QuarryFolderName) }
+    params.FilterDescendantsInstances = { LocalPlayer.Character, region }
 
     local top = region.Position + vector3New(0, region.Size.Y / 2, 0)
     if jitter then
@@ -1152,6 +1173,14 @@ end
 function xDTaraZ.Move.PoolSpot()
     if not GameLib.Completion then return nil end
     local display = Workspace:FindFirstChild(GameLib.Completion.CompletedDisplayName)
+    if not display then
+        for _, child in ipairs(Workspace:GetChildren()) do
+            if child.Name:find("^Completed.*Pyramid$") then
+                display = child
+                break
+            end
+        end
+    end
     local hitbox = display and display:FindFirstChild(GameLib.Completion.PoolHitboxName)
     if not hitbox or not hitbox:IsA("BasePart") then return nil end
     if State.PoolPart == hitbox and State.PoolSpot and osClock() < (State.PoolRayNext or 0) then return State.PoolSpot end
@@ -1169,46 +1198,69 @@ function xDTaraZ.Move.PoolSpot()
     return spot
 end
 
-function xDTaraZ.Move.HalloweenPortal()
-    local area = Workspace:FindFirstChild("HalloweenPortalArea")
-    local portal = area and area:FindFirstChild("HalloweenPortal")
-    local promptPart = portal and portal:FindFirstChild("ProximityPromptPart")
-    local prompt = promptPart and promptPart:FindFirstChild("PortalPrompt")
+function xDTaraZ.Move.JackSpot()
+    local jackArea = Workspace:FindFirstChild("JackArea")
+    local jackModel = jackArea and jackArea:FindFirstChild("Jack")
+    local torso = jackModel and (jackModel:FindFirstChild("Torso") or jackModel:FindFirstChild("HumanoidRootPart") or jackModel:FindFirstChildWhichIsA("BasePart"))
+    return torso and torso.Position + vector3New(0, Config.StandHeight, 0)
+end
+
+function xDTaraZ.Move.EggsSpot()
+    local folder = Workspace:FindFirstChild(GameLib.EggConfig and GameLib.EggConfig.WorldFolderName or "EggsArea")
+    local part = folder and (folder:FindFirstChildWhichIsA("BasePart", true))
+    return part and part.Position + vector3New(0, Config.StandHeight, 0)
+end
+
+function xDTaraZ.Move.SunGodSpot()
+    local sg = Workspace:FindFirstChild("SunGod")
+    local prompt = sg and sg:FindFirstChildWhichIsA("ProximityPrompt", true)
+    local part = prompt and prompt.Parent or (sg and sg:FindFirstChildWhichIsA("BasePart", true))
+    return part and part.Position + vector3New(0, Config.StandHeight, 0)
+end
+
+function xDTaraZ.Move.EventSignSpot()
+    local es = Workspace:FindFirstChild("EventSign")
+    local part = es and (es:FindFirstChild("PromptPart") or es:FindFirstChildWhichIsA("BasePart", true))
+    return part and part.Position + vector3New(0, Config.StandHeight, 0)
+end
+
+function xDTaraZ.Move.TravelWorld(targetWorld)
+    local portalCfg = GameLib.PortalConfig
+    local placeCfg = GameLib.PlaceConfig
+    local isHalloween = targetWorld == "Halloween"
+    local areaName = isHalloween and (portalCfg and portalCfg.HalloweenAreaName or "HalloweenPortalArea")
+        or (portalCfg and portalCfg.MainPlaceAreaName or "MainPlacePortalArea")
+    local modelName = isHalloween and (portalCfg and portalCfg.HalloweenModelName or "HalloweenPortal")
+        or (portalCfg and portalCfg.MainPlaceModelName or "MainPlacePortal")
+    local placeId = isHalloween and (placeCfg and placeCfg.HalloweenPlaceId or 95412364107708)
+        or (placeCfg and placeCfg.MainPlaceId or 123720558354386)
+    if xDTaraZ.Game.World() == targetWorld then
+        xDTaraZ:Notify("Already in " .. targetWorld .. " World!")
+        return true
+    end
+    xDTaraZ.Util.QueueReload()
+    local area = Workspace:FindFirstChild(areaName)
+    local portal = area and area:FindFirstChild(modelName)
+    local promptPart = portal and portal:FindFirstChild(portalCfg and portalCfg.PromptPartName or "ProximityPromptPart")
+    local prompt = promptPart and promptPart:FindFirstChild(portalCfg and portalCfg.PromptName or "PortalPrompt")
     if promptPart and prompt then
         xDTaraZ.Move.To(promptPart.Position + vector3New(0, Config.StandHeight, 0), true)
         task.wait(0.2)
         if typeof(fireproximityprompt) == "function" then
             fireproximityprompt(prompt)
+            return true
         end
-        return true
     end
-    if game.PlaceId == 95412364107708 or Workspace:FindFirstChild("MainPlacePortalArea") then
-        xDTaraZ:Notify("Already in Halloween World!")
-        return true
-    end
-    TeleportService:Teleport(95412364107708, LocalPlayer)
+    TeleportService:Teleport(placeId, LocalPlayer)
     return true
 end
 
+function xDTaraZ.Move.HalloweenPortal()
+    return xDTaraZ.Move.TravelWorld("Halloween")
+end
+
 function xDTaraZ.Move.MainPortal()
-    local area = Workspace:FindFirstChild("MainPlacePortalArea")
-    local portal = area and area:FindFirstChild("MainPlacePortal")
-    local promptPart = portal and portal:FindFirstChild("ProximityPromptPart")
-    local prompt = promptPart and promptPart:FindFirstChild("PortalPrompt")
-    if promptPart and prompt then
-        xDTaraZ.Move.To(promptPart.Position + vector3New(0, Config.StandHeight, 0), true)
-        task.wait(0.2)
-        if typeof(fireproximityprompt) == "function" then
-            fireproximityprompt(prompt)
-        end
-        return true
-    end
-    if game.PlaceId == 123720558354386 or Workspace:FindFirstChild("HalloweenPortalArea") then
-        xDTaraZ:Notify("Already in Main World!")
-        return true
-    end
-    TeleportService:Teleport(123720558354386, LocalPlayer)
-    return true
+    return xDTaraZ.Move.TravelWorld("Main")
 end
 
 function xDTaraZ.Move.Frame()
@@ -1240,7 +1292,11 @@ function xDTaraZ.Move.Frame()
     local typing = UserInputService:GetFocusedTextBox() ~= nil
     if not typing and (UserInputService:IsKeyDown(Config.FlyKeys.Up) or hum.Jump) then lift += 1 end
     if not typing and UserInputService:IsKeyDown(Config.FlyKeys.Down) then lift -= 1 end
-    if State.Opt.FlyVertical == "Up" then lift = 1 elseif State.Opt.FlyVertical == "Down" then lift = -1 end
+    if State.Opt.FlyVertical == "Up" then
+        lift = 1
+    elseif State.Opt.FlyVertical == "Down" then
+        lift = -1
+    end
 
     hum.PlatformStand = true
     hrp.AssemblyLinearVelocity = (dir + vector3New(0, lift, 0)) * State.Opt.FlySpeed
@@ -1274,7 +1330,7 @@ xDTaraZ.Farm = {}
 
 function xDTaraZ.Farm.Enabled()
     local opt = State.Opt
-    return opt.AutoFarm or opt.AutoPickup or opt.AutoPlace or State.FarmManual or State.ProgressionFarm
+    return opt.AutoFarm or opt.InsaneInstant or opt.AutoPickup or opt.AutoPlace or State.FarmManual or State.ProgressionFarm
 end
 
 function xDTaraZ.Farm.Cancelled()
@@ -1313,78 +1369,42 @@ function xDTaraZ.Farm.Park()
     xDTaraZ.Move.To(xDTaraZ.Move.QuarrySpot())
 end
 
-function xDTaraZ.Farm.PickTier(tierId)
-    if not GameLib.RequestTierPick then return false, "RequestTierPick unavailable" end
-    local ok, reply = xDTaraZ:Invoke(GameLib.RequestTierPick, tierId)
-    if ok == true or (type(reply) == "table" and reply.ok) then
-        xDTaraZ:Notify(("Pyramid tier picked: %s"):format(tierId))
-        return true
-    else
-        local reason = type(reply) == "table" and tostring(reply.reason) or tostring(reply)
-        return false, reason
-    end
-end
-
-function xDTaraZ.Farm.AutoPickTier()
-    if not GameLib.RequestTierPick then return end
-    local pref = State.Opt.PreferredTier
-    if not pref or pref == "None" then return end
-    local target = pref
-    if target == "Auto" then
-        if xDTaraZ.Game.World() == "Halloween" then
-            target = "Cursed"
-        else
-            target = "Void"
-        end
-    end
-    xDTaraZ.Farm.PickTier(target)
-end
-
----@param calls number  pickups fired at once; the server stops granting at capacity
----@return number, number  blocks carried after the batch, calls that were refused or never answered
-function xDTaraZ.Farm.GrabBatch(region, calls, carried)
-    if xDTaraZ.Farm.Cancelled() then return carried, 0 end
-    local isUltra = State.Opt.FarmMode == "Ultra (60/s)"
-    local maxCalls = isUltra and 60 or math.min(State.Opt.FarmBatchCap, Config.MaxBatch)
-    calls = math.min(calls, maxCalls)
-    local token = {}
-    State.GrabToken = token
-    local pending, failed = calls, 0
-    for _ = 1, calls do
-        task.spawn(function()
-            if xDTaraZ.Farm.Cancelled() then
-                pending -= 1
-                return
-            end
-            local ok, carryState = xDTaraZ:Invoke(GameLib.Pickup, region)
-            if not State.Alive or State.GrabToken ~= token or xDTaraZ.Farm.Cancelled() then return end
-            if ok == true then
-                carried = math.max(carried, xDTaraZ.Game.ReadCarry(carryState) or carried)
-            else
-                failed += 1
-            end
-            pending -= 1
-        end)
-    end
-
-    local timeout = isUltra and 1 or Config.PickupTimeout
-    local deadline = osClock() + timeout
-    while pending > 0 and osClock() < deadline and not xDTaraZ.Farm.Cancelled() do task.wait() end
-    if State.Alive then State.GrabToken = nil end
-    return carried, failed + pending
-end
-
----@param calls number  pickups needed to fill up; only the refused ones are fired again
----@return number       blocks carried after every round
-function xDTaraZ.Farm.GrabAll(region, calls)
+---@return number  blocks carried after the sweep
+function xDTaraZ.Farm.Grab(region)
+    if xDTaraZ.Farm.Cancelled() or not GameLib.Pickup then return xDTaraZ.Game.Carried() end
     local start = xDTaraZ.Game.Carried()
     local carried, cap = start, xDTaraZ.Game.Capacity()
-    for _ = 0, Config.PickupRetries do
-        if calls <= 0 or carried >= cap or xDTaraZ.Farm.Cancelled() then break end
-        carried = xDTaraZ.Farm.GrabBatch(region, calls, carried)
-        local grant = 1 + xDTaraZ.Game.UpgradeLevel(GameLib.Upgrades.ById.bulkPickup)
-        calls = math.ceil((cap - carried) / grant)
-        if calls > 0 then task.wait() end
+    local isInsane = State.Opt.InsaneInstant or State.Opt.PacketBurst
+    local batchLimit = isInsane and 128 or Config.MaxBatch
+    local maxCalls = math.min(State.Opt.FarmBatchCap or batchLimit, batchLimit)
+    local grant = 1 + xDTaraZ.Game.UpgradeLevel(GameLib.Upgrades.ById.bulkPickup)
+
+    for _ = 0, (isInsane and 1 or Config.PickupRetries) do
+        if carried >= cap or xDTaraZ.Farm.Cancelled() then break end
+        local needed = math.clamp(math.ceil((cap - carried) / grant), 1, maxCalls)
+        local token = {}
+        State.GrabToken = token
+        local pending = needed
+        for _ = 1, needed do
+            task.spawn(function()
+                if xDTaraZ.Farm.Cancelled() then
+                    pending -= 1
+                    return
+                end
+                local callOk, ok, carryState = pcall(GameLib.Pickup.InvokeServer, GameLib.Pickup, region)
+                if not State.Alive or State.GrabToken ~= token or xDTaraZ.Farm.Cancelled() then return end
+                if callOk and ok == true then
+                    carried = math.max(carried, xDTaraZ.Game.ReadCarry(carryState) or carried)
+                end
+                pending -= 1
+            end)
+        end
+        local deadline = osClock() + Config.PickupTimeout
+        while pending > 0 and osClock() < deadline and carried < cap and not xDTaraZ.Farm.Cancelled() do
+            task.wait()
+        end
+        if State.Alive then State.GrabToken = nil end
+        if carried >= cap then break end
     end
 
     if carried > start and not xDTaraZ.Farm.Cancelled() then
@@ -1394,18 +1414,50 @@ function xDTaraZ.Farm.GrabAll(region, calls)
     return carried
 end
 
+function xDTaraZ.Farm.GrabAll(region)
+    return xDTaraZ.Farm.Grab(region)
+end
+
+function xDTaraZ.Farm.GrabBatch(region)
+    return xDTaraZ.Farm.Grab(region)
+end
+
 ---@return boolean, string?  holding at least one block, else why not
 function xDTaraZ.Farm.Gather()
+    xDTaraZ.Farm.Wake()
     if xDTaraZ.Game.Benching() then xDTaraZ:Invoke(GameLib.StopBench) end
     local cap = xDTaraZ.Game.Capacity()
     if xDTaraZ.Game.Carried() >= cap then return true end
 
     State.Status = "Picking up blocks"
-    if not xDTaraZ.Move.To(xDTaraZ.Move.QuarrySpot(State.Backoff ~= nil)) then return false, "Character not ready" end
-
+    local _, _, hrp = xDTaraZ:Character()
+    if not hrp then return false, "Character not ready" end
     local region = GameLib.Regions.getPart("Quarry")
-    local grant = 1 + xDTaraZ.Game.UpgradeLevel(GameLib.Upgrades.ById.bulkPickup)
-    local carried = xDTaraZ.Farm.GrabAll(region, math.ceil((cap - xDTaraZ.Game.Carried()) / grant))
+
+    if State.Opt.RemoteQuarry and xDTaraZ.Raknet.Available() and State.Backoff == nil then
+        local standFrame = hrp.CFrame
+        if xDTaraZ.Raknet.EnsureQuarryPhysics() then
+            if (hrp.Position - standFrame.Position).Magnitude > 2 then
+                hrp.CFrame = standFrame
+                task.wait(0.05)
+            end
+            if xDTaraZ.Raknet.BeginQuarrySpoof() then
+                local remoteCarried = xDTaraZ.Farm.Grab(region)
+                xDTaraZ.Raknet.EndQuarrySpoof(standFrame)
+                if remoteCarried > 0 then return true end
+                State.QuarryPhysBuf = nil
+            end
+        end
+    end
+
+    local wasInQuarry = GameLib.Regions and GameLib.Regions.isWithin("Quarry", hrp.Position)
+    if not xDTaraZ.Move.To(xDTaraZ.Move.QuarrySpot(State.Backoff ~= nil)) then return false, "Character not ready" end
+    if not wasInQuarry and not State.Opt.InsaneInstant and (State.Opt.FarmSettle or 0) > 0 then
+        task.wait(math.min(State.Opt.FarmSettle, Config.SettleDelay))
+    end
+    if xDTaraZ.Farm.Cancelled() then return false, "Stopped" end
+
+    local carried = xDTaraZ.Farm.Grab(region)
     if carried > 0 then return true end
 
     State.Carry = nil
@@ -1451,6 +1503,7 @@ function xDTaraZ.Farm.Slots(origin, count, radius)
     local budget = xDTaraZ.Game.Carried()
     local units = 1 + xDTaraZ.Game.UpgradeLevel(GameLib.Upgrades.ById.bulkPlace)
     local nativeRange = GameLib.PlacementRange and GameLib.PlacementRange.forPlayer(LocalPlayer, GameLib.Pyramid.PlaceDistance) or State.Opt.PlaceReach
+    local maxReach = math.max(State.Opt.PlaceReach, nativeRange - 4)
     local occupancy = {}
     local function Skip(layer, index)
         if rejected[layer .. ":" .. index] or reserved[layer .. ":" .. index] then return true end
@@ -1469,7 +1522,7 @@ function xDTaraZ.Farm.Slots(origin, count, radius)
         if not slot then break end
         local flat = vector3New(slot.position.X - origin.X, 0, slot.position.Z - origin.Z)
         local col, row = geometry.fromSlotIndex(slot.layer, slot.slotIndex)
-        if col and row and flat.Magnitude <= State.Opt.PlaceReach then
+        if col and row and flat.Magnitude <= maxReach then
             reserved[slot.layer .. ":" .. slot.slotIndex] = true
             local layer = context and context.model:FindFirstChild(GameLib.Pyramid.LayerPrefix .. slot.layer)
             local extras = {}
@@ -1496,7 +1549,8 @@ end
 
 ---@return number  blocks still carried
 function xDTaraZ.Farm.PlaceBatch(slots)
-    local pending, left, known = #slots, xDTaraZ.Game.Carried(), false
+    if not GameLib.Place then return xDTaraZ.Game.Carried() end
+    local pending, left, known, batchPlaced = #slots, xDTaraZ.Game.Carried(), false, 0
     local before, confirmed = left, State.CarryConfirmed
     local token = {}
     State.PlaceToken = token
@@ -1506,11 +1560,12 @@ function xDTaraZ.Farm.PlaceBatch(slots)
                 pending -= 1
                 return
             end
-            local ok, carryState = xDTaraZ:Invoke(GameLib.Place, slot.layer, slot.slotIndex, slot.generation, slot.extraSlots)
+            local callOk, ok, carryState, placedUnits = pcall(GameLib.Place.InvokeServer, GameLib.Place, slot.layer, slot.slotIndex, slot.generation, slot.extraSlots)
             if not State.Alive then return end
-            if ok == true then
-                State.Placed += 1
+            if callOk and ok == true then
+                State.Placed = (State.Placed or 0) + 1
                 State.LastSlot = slot.position
+                batchPlaced += (tonumber(placedUnits) or 1)
             end
             if State.PlaceToken ~= token then return end
             local count = xDTaraZ.Game.ReadCarry(carryState)
@@ -1519,14 +1574,14 @@ function xDTaraZ.Farm.PlaceBatch(slots)
         end)
     end
 
-    local isUltra = State.Opt.FarmMode == "Ultra (60/s)"
-    local timeout = isUltra and 1 or Config.PlaceTimeout
-    local deadline = osClock() + timeout
-    while pending > 0 and osClock() < deadline and not xDTaraZ.Farm.Cancelled() do task.wait() end
+    local deadline = osClock() + Config.PlaceTimeout
+    while pending > 0 and osClock() < deadline and not (known and left <= 0) and not (batchPlaced >= before) and not xDTaraZ.Farm.Cancelled() do
+        task.wait()
+    end
     if State.Alive then State.PlaceToken = nil end
     if State.Alive then State.Carry = known and left or nil end
-    if confirmed and known and State.Alive and not xDTaraZ.Farm.Cancelled() then
-        local blocks = math.max(before - left, 0)
+    if State.Alive and not xDTaraZ.Farm.Cancelled() then
+        local blocks = (confirmed and known) and math.max(before - left, 0) or math.min(batchPlaced, before)
         if blocks > 0 then
             State.BlocksPlaced += blocks
             table.insert(State.BlockLog, { osClock(), blocks })
@@ -1540,8 +1595,11 @@ function xDTaraZ.Farm.Deliver()
     local _, _, hrp = xDTaraZ:Character()
     if not hrp then return false, "Character not ready" end
     local before, why = State.Placed, "Pyramid refused blocks"
+    local passes = 0
+    local maxPasses = State.Opt.InsaneInstant and 64 or Config.PlaceRetries
 
-    for _ = 1, Config.PlaceRetries do
+    while passes < maxPasses do
+        passes += 1
         local carried = xDTaraZ.Game.Carried()
         if carried <= 0 or not (State.Alive and xDTaraZ.Farm.Enabled()) then return true end
         local first = xDTaraZ.Farm.FirstSlot(hrp.Position)
@@ -1552,23 +1610,34 @@ function xDTaraZ.Farm.Deliver()
 
         State.Status = ("Placing on layer %d"):format(first.layer)
         local stand = first.position + vector3New(0, Config.HoverHeight, 0)
-        xDTaraZ.Move.To(stand)
+        if (hrp.Position - stand).Magnitude <= 80 then
+            xDTaraZ.Move.Pivot(stand)
+        else
+            xDTaraZ.Move.To(stand)
+        end
         local arrived = osClock()
 
-        local reach = math.ceil(State.Opt.PlaceReach / GameLib.Pyramid.BlockSize)
-        local isUltra = State.Opt.FarmMode == "Ultra (60/s)"
-        local isTurbo = isUltra or State.Opt.FarmMode == "Turbo"
-        local maxBatch = isUltra and 60 or (isTurbo and Config.MaxBatch or math.min(carried, State.Opt.FarmBatchCap, Config.MaxBatch))
+        local nativeRange = GameLib.PlacementRange and GameLib.PlacementRange.forPlayer(LocalPlayer, GameLib.Pyramid.PlaceDistance) or State.Opt.PlaceReach
+        local maxReach = math.max(State.Opt.PlaceReach, nativeRange - 4)
+        local reach = math.ceil(maxReach / GameLib.Pyramid.BlockSize)
+        local batchLimit = State.Opt.InsaneInstant and 128 or Config.MaxBatch
+        local maxBatch = math.min(carried, State.Opt.InsaneInstant and 128 or (State.Opt.FarmBatchCap or batchLimit), batchLimit)
         local slots = xDTaraZ.Farm.Slots(stand, maxBatch, reach)
-        local settleTime = isUltra and 0 or (isTurbo and 0.02 or State.Opt.FarmSettle)
-        local remaining = settleTime - (osClock() - arrived)
+        local settle = State.Opt.InsaneInstant and 0 or (State.Opt.FarmSettle or 0)
+        local remaining = settle - (osClock() - arrived)
         if remaining > 0 then task.wait(remaining) end
         if xDTaraZ.Farm.Cancelled() then return false, "Stopped" end
-        if #slots == 0 then
-            why = "No free slot on the pyramid"
-            break
+        local context = GameLib.Runtime and GameLib.Runtime.getContext(Workspace)
+        if context and context.model then
+            local liveGen = context.model:GetAttribute(GameLib.Pyramid.PlacementGenerationAttribute)
+            if liveGen then
+                for _, s in ipairs(slots) do
+                    s.generation = liveGen
+                end
+            end
         end
-        if xDTaraZ.Farm.PlaceBatch(slots) <= 0 then break end
+        local lastPlaced = State.Placed
+        if xDTaraZ.Farm.PlaceBatch(slots) <= 0 or State.Placed == lastPlaced then break end
     end
 
     if State.Placed == before then return false, why end
@@ -1591,29 +1660,48 @@ end
 function xDTaraZ.Farm.Step()
     local target = not State.ProgressionFarm and xDTaraZ.Farm.TargetReached()
     if target then
-        xDTaraZ.Scheduler.Finish({ "AutoFarm", "AutoPickup", "AutoPlace" }, "Farm", target)
+        xDTaraZ.Scheduler.Finish({ "AutoFarm", "InsaneInstant", "AutoPickup", "AutoPlace" }, "Farm", target)
         return false
     end
-    if not (State.Opt.AutoFarm or State.ProgressionFarm) then
+    if State.Opt.InsaneInstant and xDTaraZ.Raknet.Available() then
+        State.Opt.RemoteQuarry = true
+        State.Opt.PacketBurst = true
+    end
+    if not (State.Opt.AutoFarm or State.Opt.InsaneInstant or State.ProgressionFarm) then
         if State.Opt.AutoPlace and xDTaraZ.Game.Carried() > 0 then return xDTaraZ.Farm.Deliver() end
         if State.Opt.AutoPickup then return xDTaraZ.Farm.Gather() end
         return false
     end
-    if osClock() < State.FarmWait then return false end
-    if not GameLib.Runtime.getCurrentLayer(Workspace) then
+    if not State.Opt.InsaneInstant and osClock() < State.FarmWait then return false end
+    local currentLayer = GameLib.Runtime.getCurrentLayer(Workspace)
+    if not currentLayer then
         xDTaraZ.Farm.Progress()
-        local pyrState = xDTaraZ.Game.PyramidState and xDTaraZ.Game.PyramidState()
-        if pyrState and tonumber(pyrState.resetInSeconds) then
-            State.Waiting = ("Resetting in %ds (%s)"):format(math.max(math.floor(pyrState.resetInSeconds), 0), pyrState.tierId or "Pyramid")
+        State.CurrentLayer = nil
+        State.LastSlot = nil
+        local resetSeconds, tierId = xDTaraZ.Game.ResetCountdown()
+        if resetSeconds then
+            State.Waiting = ("Resetting in %ds (%s)"):format(resetSeconds, tierId or "Pyramid")
         else
             State.Waiting = "Waiting for the next pyramid"
         end
-        xDTaraZ.Farm.AutoPickTier()
-        xDTaraZ.Farm.Park()
+        if not State.Opt.TrainWhileWaiting then
+            xDTaraZ.Farm.Park()
+        end
         return false
     end
 
-    State.Waiting, State.Parked = nil, false
+    if State.CurrentLayer ~= currentLayer then
+        State.CurrentLayer = currentLayer
+        State.LastSlot = nil
+        xDTaraZ.Farm.Progress()
+    end
+
+    if State.Waiting then
+        if xDTaraZ.Game.Benching() and xDTaraZ.Train and xDTaraZ.Train.Leave then
+            xDTaraZ.Train.Leave()
+        end
+        State.Waiting, State.Parked = nil, false
+    end
     if not State.FarmOrigin then
         local _, _, hrp = xDTaraZ:Character()
         State.FarmOrigin = hrp and hrp.CFrame
@@ -1644,6 +1732,7 @@ function xDTaraZ.Farm.Step()
 end
 
 function xDTaraZ.Farm.Stop()
+    xDTaraZ.Raknet.Stop()
     State.GrabToken, State.PlaceToken, State.Carry = nil, nil, nil
     local origin = State.FarmOrigin
     State.FarmOrigin, State.Waiting, State.Parked, State.FarmWait = nil, nil, false, 0
@@ -1657,8 +1746,23 @@ function xDTaraZ.Farm.Now(place)
     State.FarmManual = true
     local ok, result = pcall(place and xDTaraZ.Farm.Deliver or xDTaraZ.Farm.Gather)
     State.FarmManual = nil
+    xDTaraZ.Raknet.Stop()
     if not ok then error(result, 0) end
     return result
+end
+
+function xDTaraZ.Farm.CycleNow()
+    State.FarmManual = true
+    local okGather, held = pcall(xDTaraZ.Farm.Gather)
+    local okDeliver, placed = false, false
+    if okGather and held then
+        okDeliver, placed = pcall(xDTaraZ.Farm.Deliver)
+    end
+    State.FarmManual = nil
+    xDTaraZ.Raknet.Stop()
+    if not okGather then error(held, 0) end
+    if not okDeliver and held then error(placed, 0) end
+    return placed
 end
 
 xDTaraZ.Train = {}
@@ -1786,7 +1890,7 @@ function xDTaraZ.Train.Strength(chosen)
 end
 
 function xDTaraZ.Train.Speed(chosen)
-    local _, _, origin = xDTaraZ:Character()
+    local _, hum, origin = xDTaraZ:Character()
     if not State.TrainingOrigin and origin then State.TrainingOrigin = origin.CFrame end
     local folder, mult = xDTaraZ.Train.Pick((GameLib.Gym and GameLib.Gym.TreadmillStations or {}), "SpeedMultiplier", chosen or State.Opt.TreadmillStation)
     State.TrainingPool = nil
@@ -1796,6 +1900,7 @@ function xDTaraZ.Train.Speed(chosen)
     if xDTaraZ.Game.Benching() then xDTaraZ:Invoke(GameLib.StopBench) end
     State.Status = ("Treadmill x%d"):format(mult)
     if not xDTaraZ.Move.Near(hitbox.Position) then xDTaraZ.Move.To(hitbox.Position) end
+    if hum then hum:Move(hitbox.CFrame.LookVector, false) end
     return true
 end
 
@@ -1896,7 +2001,10 @@ function xDTaraZ.Pets.Init()
         if not State.Alive then return false end
         local prop = GameLib.Knit.GetService("PetService").Inventory
         local conn = prop:Observe(xDTaraZ.Pets.Accept)
-        if not State.Alive then conn:Disconnect() return false end
+        if not State.Alive then
+            conn:Disconnect()
+            return false
+        end
         table.insert(State.Connections, conn)
         xDTaraZ.Pets.Property = prop
         xDTaraZ.Pets.Accept(prop:Get())
@@ -1980,12 +2088,44 @@ function xDTaraZ.Pets.Call(key, remote, ...)
     return result == true, reason or result
 end
 
+function xDTaraZ.Pets.CanHatch()
+    local opt = State.Opt
+    local egg, amount = xDTaraZ.Pets.Egg(), xDTaraZ.Pets.Amount()
+    if not egg then return nil, nil, nil, "Choose an available egg" end
+    if not amount then return nil, nil, nil, "Triple hatching is not owned" end
+    local cost = egg.Price * amount
+    local count = tonumber(xDTaraZ.Pets.Inventory.OwnedCount) or 0
+    if count + amount > GameLib.PetConfig.MaxOwned then return nil, nil, nil, "Pet inventory full" end
+    if opt.PetSessionMax > 0 and xDTaraZ.Pets.SessionCount + amount > opt.PetSessionMax then return nil, nil, nil, "Hatch limit reached" end
+    if opt.PetHatchBudget > 0 and xDTaraZ.Pets.SessionSpent + cost > opt.PetHatchBudget then return nil, nil, nil, "Hatch budget reached" end
+    if egg.Currency == "CandyCorn" then
+        if xDTaraZ.Game.CandyCorn() - (opt.PetKeepCandyCorn or 0) < cost then return nil, nil, nil, "Candy Corn reserve reached" end
+    else
+        if xDTaraZ.Game.Coins() - math.max(opt.KeepCoins or 0, opt.PetKeepCoins or 0) < cost then return nil, nil, nil, "Coin reserve reached" end
+    end
+    local curWorld = xDTaraZ.Game.World()
+    if egg.World and egg.World ~= curWorld then
+        return nil, nil, nil, egg.World == "Halloween" and "Requires Halloween World" or "Requires Main World"
+    end
+    return egg, amount, cost
+end
+
+function xDTaraZ.Pets.BuyPart(egg)
+    local folder = Workspace:FindFirstChild(GameLib.EggConfig.WorldFolderName)
+    local display = folder and folder:FindFirstChild(egg.DisplayModel)
+    local buy = display and (display:FindFirstChild("BuyPart", true) or display:FindFirstChildWhichIsA("BasePart", true))
+    return buy and buy:IsA("BasePart") and buy or nil
+end
+
 function xDTaraZ.Pets.Step(manual)
     local opt = State.Opt
     if xDTaraZ.Pets.ReturnPending then return xDTaraZ.Pets.Return() end
     if not manual and not opt.AutoHatch then return false end
     local ready, reason = xDTaraZ.Pets.Init()
-    if not ready then xDTaraZ.Pets.Stop(reason) return false end
+    if not ready then
+        xDTaraZ.Pets.Stop(reason)
+        return false
+    end
     if not xDTaraZ.Pets.Inventory or LocalPlayer:GetAttribute("DataReady") ~= true then return not manual end
     if not xDTaraZ.Pets.Seen then
         xDTaraZ.Pets.Seen = {}
@@ -1993,36 +2133,17 @@ function xDTaraZ.Pets.Step(manual)
     end
     if xDTaraZ.Pets.TargetReached() then return false end
     if osClock() < xDTaraZ.Pets.NextHatch or State.Inflight.PetHatch then return not manual end
-    local egg, amount = xDTaraZ.Pets.Egg(), xDTaraZ.Pets.Amount()
-    if not egg then xDTaraZ.Pets.Stop("Choose an available egg") return false end
-    if not amount then xDTaraZ.Pets.Stop("Triple hatching is not owned") return false end
-    local cost = egg.Price * amount
-    local count = tonumber(xDTaraZ.Pets.Inventory.OwnedCount) or 0
-    if count + amount > GameLib.PetConfig.MaxOwned then xDTaraZ.Pets.Stop("Pet inventory full") return false end
-    if opt.PetSessionMax > 0 and xDTaraZ.Pets.SessionCount + amount > opt.PetSessionMax then xDTaraZ.Pets.Stop("Hatch limit reached") return false end
-    if opt.PetHatchBudget > 0 and xDTaraZ.Pets.SessionSpent + cost > opt.PetHatchBudget then xDTaraZ.Pets.Stop("Hatch budget reached") return false end
-    if egg.Currency == "CandyCorn" then
-        if xDTaraZ.Game.CandyCorn() - (opt.PetKeepCandyCorn or 0) < cost then
-            xDTaraZ.Pets.Stop("Candy Corn reserve reached") return false
-        end
-    else
-        if xDTaraZ.Game.Coins() - math.max(opt.KeepCoins or 0, opt.PetKeepCoins or 0) < cost then
-            xDTaraZ.Pets.Stop("Coin reserve reached") return false
-        end
+
+    local egg, amount, cost, err = xDTaraZ.Pets.CanHatch()
+    if not egg then
+        xDTaraZ.Pets.Stop(err)
+        return false
     end
-    if egg.World and egg.World ~= xDTaraZ.Game.World() then
-        if egg.World == "Halloween" then
-            xDTaraZ.Pets.Stop("Requires Halloween World")
-            return false
-        elseif egg.World == "Main" then
-            xDTaraZ.Pets.Stop("Requires Main World")
-            return false
-        end
+    local buy = xDTaraZ.Pets.BuyPart(egg)
+    if not buy then
+        xDTaraZ.Pets.Stop("Egg area unavailable")
+        return false
     end
-    local folder = Workspace:FindFirstChild(GameLib.EggConfig.WorldFolderName)
-    local display = folder and folder:FindFirstChild(egg.DisplayModel)
-    local buy = display and (display:FindFirstChild("BuyPart", true) or display:FindFirstChildWhichIsA("BasePart", true))
-    if not buy or not buy:IsA("BasePart") then xDTaraZ.Pets.Stop("Egg area unavailable") return false end
     local _, _, root = xDTaraZ:Character()
     if not root then return false end
     if not xDTaraZ.Pets.Origin then xDTaraZ.Pets.Origin = root.Position end
@@ -2033,7 +2154,7 @@ function xDTaraZ.Pets.Step(manual)
     end
     if not State.Alive or (not manual and not opt.AutoHatch) then return false end
     State.Status = "Hatching " .. egg.DisplayName
-    if State.Buying or State.EconomyBusy then return not manual end
+    if State.EconomyBusy then return not manual end
     State.EconomyBusy = true
     local ok, reply = xDTaraZ.Pets.Call("PetHatch", GameLib.PetHatch, opt.PetEgg, amount)
     State.EconomyBusy = nil
@@ -2044,6 +2165,9 @@ function xDTaraZ.Pets.Step(manual)
         xDTaraZ.Pets.HatchFailures = 0
         xDTaraZ.Pets.SessionCount += amount
         xDTaraZ.Pets.SessionSpent += cost
+        xDTaraZ.Pets.AutoLockCheck()
+        xDTaraZ.Pets.AutoDeleteCheck()
+        if State.Opt.AutoEquipPets then xDTaraZ.Pets.EquipBestStep(false) end
         if manual then xDTaraZ.Pets.Stop("Hatch completed") end
     elseif reply == "RateLimited" or reply == "TooFar" then
         xDTaraZ.Pets.HatchFailures = (xDTaraZ.Pets.HatchFailures or 0) + 1
@@ -2058,7 +2182,10 @@ function xDTaraZ.Pets.SelectedAction(action)
     if not xDTaraZ.Pets.Init() then return end
     local uid = xDTaraZ.Pets.SelectedUid
     local owned = uid and xDTaraZ.Pets.Inventory and xDTaraZ.Pets.Inventory.Owned[uid]
-    if not owned then xDTaraZ.Pets.LastReply = "Choose an owned pet" return end
+    if not owned then
+        xDTaraZ.Pets.LastReply = "Choose an owned pet"
+        return
+    end
     local remote = GameLib["Pet" .. action]
     local ok, reason
     if action == "Lock" or action == "Unlock" then
@@ -2068,6 +2195,88 @@ function xDTaraZ.Pets.SelectedAction(action)
     end
     xDTaraZ.Pets.LastReply = tostring(reason or (ok and "Pet updated" or "Pet action failed"))
     if ok then xDTaraZ.Pets.EquippedSignature = nil end
+end
+
+function xDTaraZ.Pets.UnequipAll()
+    if not xDTaraZ.Pets.Init() then return end
+    local ok, reason = xDTaraZ.Pets.Call("PetUnequipAll", GameLib.PetUnequipAll)
+    xDTaraZ.Pets.LastReply = tostring(reason or (ok and "All pets unequipped" or "Unequip failed"))
+    if ok then
+        xDTaraZ.Pets.EquippedSignature = nil
+        xDTaraZ:Notify("All pets unequipped")
+    end
+end
+
+function xDTaraZ.Pets.DeletableUids()
+    local inv = xDTaraZ.Pets.Inventory
+    local cfg = GameLib.PetConfig
+    if not (inv and cfg and cfg.ById and cfg.RarityRank) then return {} end
+    local filter = State.Opt.AutoDeleteFilter or "Common & Uncommon"
+    if filter == "None" then return {} end
+    local minRank = cfg.RarityRank.Common or 2
+    local maxRank = cfg.RarityRank.Uncommon or 3
+    if filter == "Up to Rare" then maxRank = cfg.RarityRank.Rare or 4
+    elseif filter == "Up to Epic" then maxRank = cfg.RarityRank.Epic or 5 end
+
+    local equipped = {}
+    for _, uid in ipairs(inv.Equipped or {}) do equipped[uid] = true end
+    local toDelete = {}
+    for uid, pet in pairs(inv.Owned or {}) do
+        if equipped[uid] or pet.Locked == true then continue end
+        local def = cfg.ById[pet.PetId]
+        if not def or def.Rarity == "Exclusive" then continue end
+        local rank = cfg.RarityRank[def.Rarity]
+        if rank and rank >= minRank and rank <= maxRank then
+            table.insert(toDelete, uid)
+        end
+    end
+    return toDelete
+end
+
+function xDTaraZ.Pets.DeleteUnlocked()
+    if not xDTaraZ.Pets.Init() or not xDTaraZ.Pets.Inventory then return end
+    local toDelete = xDTaraZ.Pets.DeletableUids()
+    if #toDelete == 0 then
+        xDTaraZ:Notify("No unlocked pets matching delete filter")
+        return
+    end
+    local ok, reason = xDTaraZ.Pets.Call("PetDelete", GameLib.PetDelete, toDelete)
+    xDTaraZ.Pets.LastReply = tostring(reason or (ok and ("Deleted %d pets"):format(#toDelete) or "Delete failed"))
+    if ok then
+        xDTaraZ:Notify(("Deleted %d unlocked pets"):format(#toDelete))
+        xDTaraZ.Pets.Refresh()
+    end
+end
+
+function xDTaraZ.Pets.AutoLockCheck()
+    if not (State.Opt.AutoLockRares and xDTaraZ.Pets.Inventory) then return end
+    local cfg = GameLib.PetConfig
+    if not (cfg and cfg.ById and cfg.RarityRank) then return end
+    local minRareRank = cfg.RarityRank.Legendary or 6
+    local lockedCount = 0
+    for uid, pet in pairs(xDTaraZ.Pets.Inventory.Owned or {}) do
+        if pet.Locked == true then continue end
+        local def = cfg.ById[pet.PetId]
+        local rank = def and cfg.RarityRank[def.Rarity] or 0
+        if not (def and (def.Rarity == "Exclusive" or rank >= minRareRank)) then continue end
+        local ok = xDTaraZ.Pets.Call("PetLockRare", GameLib.PetSetLocked, uid, true)
+        if ok then
+            pet.Locked = true
+            lockedCount += 1
+        end
+    end
+    if lockedCount > 0 then
+        xDTaraZ.Pets.Revision += 1
+        xDTaraZ:Notify(("Auto-locked %d rare pet(s)!"):format(lockedCount))
+    end
+end
+
+function xDTaraZ.Pets.AutoDeleteCheck()
+    if not State.Opt.AutoDeletePets or not xDTaraZ.Pets.Inventory then return end
+    local toDelete = xDTaraZ.Pets.DeletableUids()
+    if #toDelete > 0 then
+        xDTaraZ.Pets.Call("PetDelete", GameLib.PetDelete, toDelete)
+    end
 end
 
 function xDTaraZ.Pets.HatchNow()
@@ -2088,44 +2297,29 @@ end
 function xDTaraZ.Pets.EquipBestStep(manual)
     if not manual and not State.Opt.AutoEquipPets then return end
     if not xDTaraZ.Pets.Init() or not xDTaraZ.Pets.Inventory then return end
-    local ids = {}
-    for uid in pairs(xDTaraZ.Pets.Inventory.Owned) do ids[#ids + 1] = tostring(uid) end
-    table.sort(ids)
-    local equipped = table.clone(xDTaraZ.Pets.Inventory.Equipped or {})
-    table.sort(equipped)
-    local signature = tostring(xDTaraZ.Pets.Inventory.Access and xDTaraZ.Pets.Inventory.Access.Slots) .. ":" .. table.concat(ids, ",") .. ":" .. table.concat(equipped, ",")
-    if not manual and xDTaraZ.Pets.EquippedSignature == signature then return end
     if State.Inflight.PetEquipBest then return end
     local ok, reason = xDTaraZ.Pets.Call("PetEquipBest", GameLib.PetEquipBest)
-    if ok then xDTaraZ.Pets.EquippedSignature = signature end
+    if ok then
+        xDTaraZ.Pets.EquippedSignature = nil
+        if manual then xDTaraZ:Notify("Best pets equipped!") end
+    else
+        if manual then xDTaraZ:Notify("Equip failed: " .. tostring(reason)) end
+    end
     xDTaraZ.Pets.LastReply = tostring(reason or (ok and "Best pets equipped" or "Equip failed"))
 end
 
 function xDTaraZ.Pets.Status()
     local inv = xDTaraZ.Pets.Inventory
     if not inv then return xDTaraZ.Pets.StopReason or "Inventory not loaded" end
-    return string.format("Pets %d/%d | Equipped %d/%d | Coins x%.2f\nSession %d eggs | %d coins\n%s",
+    return string.format("Pets %d/%d | Equipped %d/%d | Coins x%.2f\nSession %d eggs | %d spent\n%s",
         tonumber(inv.OwnedCount) or 0, GameLib.PetConfig.MaxOwned, #(inv.Equipped or {}),
         tonumber(inv.Access and inv.Access.Slots) or 0, tonumber(inv.Boosts and inv.Boosts.Coins) or 1,
         xDTaraZ.Pets.SessionCount, xDTaraZ.Pets.SessionSpent, xDTaraZ.Pets.StopReason or xDTaraZ.Pets.LastReply or "Ready")
 end
 
-function xDTaraZ.Pets.Build(window, T, Library)
-    local opt = State.Opt
-    local tab = window:AddTab(T("Pets & Eggs", "สัตว์เลี้ยงและไข่"), "star", T("Hatch eggs and manage your pet team", "เปิดไข่และจัดทีมสัตว์เลี้ยง"))
+local function BuildHatchSettings(tab, T, opt, Queue, Library)
     local hatch = tab:AddLeftGroupbox(T("Hatching", "เปิดไข่"), "star")
     local rules = tab:AddRightGroupbox(T("Hatch Limits", "เงื่อนไขเปิดไข่"), "coin")
-    local team = tab:AddLeftGroupbox(T("Pet Team", "ทีมสัตว์เลี้ยง"), "mushroom")
-    local ownedBox = tab:AddRightGroupbox(T("Owned Pets", "สัตว์เลี้ยงในกระเป๋า"), "star")
-    local info = tab:AddLeftGroupbox(T("Pet Status", "สถานะสัตว์เลี้ยง"), "info")
-
-    local function Queue(name)
-        return function()
-            if not State.Alive then return end
-            if xDTaraZ.Tasks.Commands[name] then State.WorkEpoch += 1 end
-            State.Requests[name] = true
-        end
-    end
     local function Number(key, text)
         rules:AddInput(key, { Text = text, Default = tostring(opt[key] or 0), Numeric = true, Finished = true,
             Callback = function(value)
@@ -2155,12 +2349,10 @@ function xDTaraZ.Pets.Build(window, T, Library)
         end
     end
     hatch:AddDropdown("PetEgg", { Text = T("Egg", "ไข่"), Values = eggValues, Default = 1,
-        Images = eggImages, Colors = eggColors,
-        Callback = function(value) opt.PetEgg = eggIds[value] end,
+        Images = eggImages, Colors = eggColors, Callback = function(value) opt.PetEgg = eggIds[value] end,
     })
     hatch:AddDropdown("PetHatchAmount", { Text = T("Eggs Per Hatch", "จำนวนไข่ต่อครั้ง"),
-        Values = { "Best Owned", "1", "3" }, Default = 1,
-        Callback = function(value) opt.PetHatchAmount = value or "Best Owned" end,
+        Values = { "Best Owned", "1", "3" }, Default = 1, Callback = function(value) opt.PetHatchAmount = value or "Best Owned" end,
     })
     hatch:AddToggle("AutoHatch", { Text = T("Auto Hatch", "เปิดไข่อัตโนมัติ"), Default = false,
         Description = T("Uses coins/candy corn. Pauses farming while hatching.", "ใช้เหรียญ/แคนดี้คอร์น หยุดฟาร์มชั่วคราวระหว่างเปิดไข่"),
@@ -2171,15 +2363,20 @@ function xDTaraZ.Pets.Build(window, T, Library)
                 return
             end
             opt.AutoHatch = value == true
-            if value then xDTaraZ.Pets.Begin() xDTaraZ.Scheduler.Resume("AutoHatch")
-            else xDTaraZ.Pets.Stop(xDTaraZ.Pets.StopReason or "Stopped") State.WorkEpoch += 1 end
+            if value then
+                xDTaraZ.Pets.Begin()
+                xDTaraZ.Scheduler.Resume("AutoHatch")
+            else
+                xDTaraZ.Pets.Stop(xDTaraZ.Pets.StopReason or "Stopped")
+                State.WorkEpoch += 1
+            end
         end,
     })
     hatch:AddButton({ Text = T("Hatch Now", "เปิดไข่เดี๋ยวนี้"), Func = Queue("PetsNow") })
     hatch:AddButton({ Text = T("Stop Hatching", "หยุดเปิดไข่"), Func = Queue("PetsStop") })
     Number("PetKeepCoins", T("Keep Coins", "สำรองเหรียญ"))
     Number("PetKeepCandyCorn", T("Keep Candy Corn", "สำรองแคนดี้คอร์น"))
-    Number("PetHatchBudget", T("Session Coin Budget (0 = unlimited)", "งบเหรียญต่อรอบ (0 = ไม่จำกัด)"))
+    Number("PetHatchBudget", T("Session Currency Budget (0 = unlimited)", "งบต่อรอบ (0 = ไม่จำกัด)"))
     Number("PetSessionMax", T("Session Egg Limit (0 = unlimited)", "จำนวนไข่สูงสุดต่อรอบ (0 = ไม่จำกัด)"))
     local rarities = { "None" }
     for _, rarity in ipairs(GameLib.PetConfig and GameLib.PetConfig.RarityOrder or {}) do rarities[#rarities + 1] = rarity end
@@ -2190,13 +2387,9 @@ function xDTaraZ.Pets.Build(window, T, Library)
     local petValues, petIds, petImages, petColors = { "None" }, { None = "None" }, {}, {}
     local petOrder = {}
     if GameLib.PetConfig then
-        if GameLib.PetConfig.Order then
-            for _, id in ipairs(GameLib.PetConfig.Order) do table.insert(petOrder, id) end
-        end
+        if GameLib.PetConfig.Order then for _, id in ipairs(GameLib.PetConfig.Order) do table.insert(petOrder, id) end end
         for id in pairs(GameLib.PetConfig.ById or {}) do
-            if not table.find(petOrder, id) then
-                table.insert(petOrder, id)
-            end
+            if not table.find(petOrder, id) then table.insert(petOrder, id) end
         end
     end
     for _, id in ipairs(petOrder) do
@@ -2215,10 +2408,30 @@ function xDTaraZ.Pets.Build(window, T, Library)
     rules:AddToggle("PetReturnOnStop", { Text = T("Return When Finished", "กลับจุดเดิมเมื่อเสร็จ"), Default = false,
         Callback = function(value) opt.PetReturnOnStop = value == true end,
     })
+end
+
+local function BuildTeamSettings(tab, T, opt, Queue)
+    local team = tab:AddLeftGroupbox(T("Pet Team", "ทีมสัตว์เลี้ยง"), "mushroom")
+    local ownedBox = tab:AddRightGroupbox(T("Owned Pets", "สัตว์เลี้ยงในกระเป๋า"), "star")
+    local info = tab:AddLeftGroupbox(T("Pet Status", "สถานะสัตว์เลี้ยง"), "info")
     team:AddToggle("AutoEquipPets", { Text = T("Auto Equip Best", "ใส่ตัวที่ดีที่สุดอัตโนมัติ"), Default = false,
         Callback = function(value) opt.AutoEquipPets = value == true end,
     })
+    team:AddToggle("AutoLockRares", { Text = T("Auto Lock Rares", "ล็อกสัตว์หายากอัตโนมัติ"), Default = false,
+        Description = T("Automatically locks Legendary, Mythic, Secret and Exclusive pets", "ล็อกสัตว์ระดับ Legendary, Mythic, Secret และ Exclusive อัตโนมัติ"),
+        Callback = function(value) opt.AutoLockRares = value == true end,
+    })
+    team:AddToggle("AutoDeletePets", { Text = T("Auto Delete Pets", "ลบสัตว์เลี้ยงอัตโนมัติ"), Default = false,
+        Description = T("Deletes unlocked junk pets based on filter", "ลบสัตว์เลี้ยงที่ไม่ล็อกตามเงื่อนไขที่เลือก"),
+        Callback = function(value) opt.AutoDeletePets = value == true end,
+    })
+    team:AddDropdown("AutoDeleteFilter", { Text = T("Delete Filter", "ระดับที่ลบ"),
+        Values = { "Common & Uncommon", "Up to Rare", "Up to Epic", "None" }, Default = 1,
+        Callback = function(value) opt.AutoDeleteFilter = value or "Common & Uncommon" end,
+    })
     team:AddButton({ Text = T("Equip Best Now", "ใส่ตัวดีที่สุดเดี๋ยวนี้"), Func = Queue("PetsBestNow") })
+    team:AddButton({ Text = T("Unequip All Pets", "ถอดสัตว์เลี้ยงทั้งหมด"), Func = Queue("PetUnequipAllNow") })
+    team:AddButton({ Text = T("Delete Filtered Pets", "ลบสัตว์ตามตัวกรองทันที"), Func = Queue("PetDeleteUnlockedNow") })
     team:AddButton({ Text = T("Refresh Inventory", "รีเฟรชกระเป๋า"), Func = Queue("PetsRefresh") })
     xDTaraZ.Pets.StatusLabel = info:AddLabel(xDTaraZ.Pets.Status())
     xDTaraZ.Pets.OwnedDropdown = ownedBox:AddDropdown("PetOwned", { Text = T("Owned Pet", "สัตว์เลี้ยงในกระเป๋า"),
@@ -2228,6 +2441,14 @@ function xDTaraZ.Pets.Build(window, T, Library)
     ownedBox:AddButton({ Text = T("Unequip Selected", "ถอดตัวที่เลือก"), Func = Queue("PetUnequipNow") })
     ownedBox:AddButton({ Text = T("Lock Selected", "ล็อกตัวที่เลือก"), Func = Queue("PetLockNow") })
     ownedBox:AddButton({ Text = T("Unlock Selected", "ปลดล็อกตัวที่เลือก"), Func = Queue("PetUnlockNow") })
+end
+
+function xDTaraZ.Pets.Build(window, T, Library)
+    local opt = State.Opt
+    local tab = window:AddTab(T("Pets & Eggs", "สัตว์เลี้ยงและไข่"), "star", T("Hatch eggs and manage your pet team", "เปิดไข่และจัดทีมสัตว์เลี้ยง"))
+    local Queue = xDTaraZ.Scheduler.Action
+    BuildHatchSettings(tab, T, opt, Queue, Library)
+    BuildTeamSettings(tab, T, opt, Queue)
     xDTaraZ.Pets.UIRevision = -1
 end
 
@@ -2332,13 +2553,43 @@ end
 
 xDTaraZ.Upgrade = {}
 
----@return number?  cost of the next level, nil when it is not selected, maxed or capped by its Max Level
-function xDTaraZ.Upgrade.NextCost(upgrade)
+function xDTaraZ.Upgrade.CostFor(upgrade, currency)
     if not State.Opt.Upgrades[upgrade.DisplayName] then return nil end
     local level = xDTaraZ.Game.UpgradeLevel(upgrade)
     local cap = State.Opt.UpgradeMax[upgrade.DisplayName] or 0
     if cap > 0 and level >= cap then return nil end
-    return upgrade.Costs[level + 1]
+    if GameLib.UpgradeLevels and type(GameLib.UpgradeLevels.costToNext) == "function" then
+        return GameLib.UpgradeLevels.costToNext(upgrade.Id, level, currency)
+    end
+    local base = upgrade.Costs[level + 1]
+    if not base then return nil end
+    if currency == "CandyCorn" then
+        local ratio = GameLib.Upgrades and GameLib.Upgrades.CandyCornRatio or 2
+        return math.max(1, math.floor(base * ratio + 0.5))
+    end
+    return base
+end
+
+function xDTaraZ.Upgrade.ResolveCurrency()
+    local isHalloween = xDTaraZ.Game.World() == "Halloween"
+    local pref = State.Opt.UpgradeCurrency or "Auto"
+    if pref == "Candy Corn" and isHalloween then return "CandyCorn" end
+    if pref == "Coins" or not isHalloween then return "Coins" end
+    local candyBudget = xDTaraZ.Game.CandyCorn() - (State.Opt.PetKeepCandyCorn or 0)
+    if candyBudget > 0 then return "CandyCorn" end
+    return "Coins"
+end
+
+function xDTaraZ.Upgrade.BudgetFor(currency, extraReserve)
+    if currency == "CandyCorn" then
+        return xDTaraZ.Game.CandyCorn() - (State.Opt.PetKeepCandyCorn or 0)
+    end
+    return xDTaraZ.Game.Coins() - math.max(State.Opt.KeepCoins or 0, extraReserve or 0)
+end
+
+---@return number?  cost of the next level, nil when it is not selected, maxed or capped by its Max Level
+function xDTaraZ.Upgrade.NextCost(upgrade, currency)
+    return xDTaraZ.Upgrade.CostFor(upgrade, currency or "Coins")
 end
 
 ---@return number  measured coins/s gained per coin spent; untried upgrades rank first, cheapest first
@@ -2379,51 +2630,76 @@ function xDTaraZ.Upgrade.Measure()
     State.UpgradeGain[probe.id] = old and (old + gain) / 2 or gain
 end
 
----@param budget number  coins free to spend
----@return table?, number?  best scored upgrade you can afford, nil while saving up for a better one
-function xDTaraZ.Upgrade.PickByValue(budget)
+---@param budget number  currency free to spend
+---@param currency string  "Coins" or "CandyCorn"
+---@param order string?  "Best Value", "In Order", or "Cheapest"
+---@return table?, number?, string?  evaluated upgrade, cost, and currency
+function xDTaraZ.Upgrade.Evaluate(budget, currency, order)
     local best, bestCost, bestScore
     local afford, affordCost, affordScore
+    local cheap, cheapCost
+
     for _, name in ipairs(xDTaraZ.UpgradeNames) do
         local upgrade = xDTaraZ.UpgradeByName[name]
-        local cost = xDTaraZ.Upgrade.NextCost(upgrade)
+        local cost = xDTaraZ.Upgrade.NextCost(upgrade, currency)
         if not cost then continue end
-        local score = xDTaraZ.Upgrade.Score(upgrade, cost)
-        if score <= 0 then continue end
-        if not bestScore or score > bestScore then best, bestCost, bestScore = upgrade, cost, score end
-        if cost <= budget and (not affordScore or score > affordScore) then
-            afford, affordCost, affordScore = upgrade, cost, score
+        if order == "In Order" and cost <= budget then
+            return upgrade, cost, currency
+        end
+        if cost <= budget and (not cheapCost or cost < cheapCost) then
+            cheap, cheapCost = upgrade, cost
+        end
+        if order == "Best Value" then
+            local baseCost = xDTaraZ.Upgrade.NextCost(upgrade, "Coins") or cost
+            local score = xDTaraZ.Upgrade.Score(upgrade, baseCost)
+            if score > 0 then
+                if not bestScore or score > bestScore then best, bestCost, bestScore = upgrade, cost, score end
+                if cost <= budget and (not affordScore or score > affordScore) then
+                    afford, affordCost, affordScore = upgrade, cost, score
+                end
+            end
         end
     end
 
+    if order ~= "Best Value" then return cheap, cheapCost, currency end
     if not best then return nil end
-    if bestCost <= budget then return best, bestCost end
-    local income = State.CoinRate or 0
-    if income > 0 and (bestCost - budget) / income <= Config.SaveSeconds then return nil end
-    return afford, affordCost
+    if bestCost <= budget then return best, bestCost, currency end
+    if currency ~= "CandyCorn" then
+        local income = State.CoinRate or 0
+        if income > 0 and (bestCost - budget) / income <= Config.SaveSeconds then return nil end
+    end
+    if afford then return afford, affordCost, currency end
+    return nil
 end
 
----@return table?, number?  wanted upgrade to buy next by the chosen order, and its cost
-function xDTaraZ.Upgrade.Pick()
-    local budget = xDTaraZ.Game.Coins() - State.Opt.KeepCoins
-    if State.Opt.UpgradeOrder == "Best Value" then return xDTaraZ.Upgrade.PickByValue(budget) end
+function xDTaraZ.Upgrade.PickByValue(budget, currency)
+    return xDTaraZ.Upgrade.Evaluate(budget, currency, "Best Value")
+end
 
-    local pick, pickCost
-    for _, name in ipairs(xDTaraZ.UpgradeNames) do
-        local upgrade = xDTaraZ.UpgradeByName[name]
-        local cost = xDTaraZ.Upgrade.NextCost(upgrade)
-        if not cost or cost > budget then continue end
-        if State.Opt.UpgradeOrder == "In Order" then return upgrade, cost end
-        if not pickCost or cost < pickCost then pick, pickCost = upgrade, cost end
+---@return table?, number?, string?  wanted upgrade to buy next by the chosen order, its cost, and currency
+function xDTaraZ.Upgrade.Pick()
+    local primary = xDTaraZ.Upgrade.ResolveCurrency()
+    local currencies = { primary }
+    if (State.Opt.UpgradeCurrency or "Auto") == "Auto" and primary == "CandyCorn" then
+        currencies[2] = "Coins"
     end
-    return pick, pickCost
+    local order = State.Opt.UpgradeOrder or "Best Value"
+    for _, currency in ipairs(currencies) do
+        local budget = xDTaraZ.Upgrade.BudgetFor(currency)
+        if budget > 0 then
+            local up, cost = xDTaraZ.Upgrade.Evaluate(budget, currency, order)
+            if up then return up, cost, currency end
+        end
+    end
+    return nil
 end
 
 ---@param loud boolean?  tell the player why the server refused
----@return boolean       the level went up or coins were taken
-function xDTaraZ.Upgrade.Buy(upgrade, loud)
-    local level, coins = xDTaraZ.Game.UpgradeLevel(upgrade), xDTaraZ.Game.Coins()
-    local reply = xDTaraZ:Invoke(GameLib.Purchase, upgrade.Id)
+---@return boolean       the level went up or currency was taken
+function xDTaraZ.Upgrade.Buy(upgrade, loud, chosenCurrency)
+    local level, coins, candy = xDTaraZ.Game.UpgradeLevel(upgrade), xDTaraZ.Game.Coins(), xDTaraZ.Game.CandyCorn()
+    local currency = chosenCurrency or xDTaraZ.Upgrade.ResolveCurrency()
+    local reply = xDTaraZ:Invoke(GameLib.Purchase, upgrade.Id, currency)
     if not State.Alive then return false end
     if not (type(reply) == "table" and reply.ok == true) then
         if loud then
@@ -2433,7 +2709,7 @@ function xDTaraZ.Upgrade.Buy(upgrade, loud)
     end
 
     local function Confirmed()
-        return xDTaraZ.Game.UpgradeLevel(upgrade) > level or xDTaraZ.Game.Coins() < coins
+        return xDTaraZ.Game.UpgradeLevel(upgrade) > level or xDTaraZ.Game.Coins() < coins or xDTaraZ.Game.CandyCorn() < candy
     end
     local deadline = osClock() + Config.ConfirmTimeout
     repeat task.wait() until not State.Alive or Confirmed() or osClock() > deadline
@@ -2450,12 +2726,10 @@ end
 
 ---@param buy function  runs alone; a second caller returns at once
 function xDTaraZ.Upgrade.Exclusive(buy)
-    if State.Buying or State.EconomyBusy or State.Inflight.PetHatch then return end
+    if State.EconomyBusy or State.Inflight.PetHatch then return end
     State.EconomyBusy = true
-    State.Buying = true
     local ok, err = pcall(buy)
     State.EconomyBusy = nil
-    if State.Alive then State.Buying = false end
     if not ok then error(err, 0) end
 end
 
@@ -2465,8 +2739,8 @@ function xDTaraZ.Upgrade.Step()
         if State.UpgradeProbe then return end
     end
     xDTaraZ.Upgrade.Exclusive(function()
-        local upgrade = xDTaraZ.Upgrade.Pick()
-        if upgrade then xDTaraZ.Upgrade.Buy(upgrade) end
+        local upgrade, _, currency = xDTaraZ.Upgrade.Pick()
+        if upgrade then xDTaraZ.Upgrade.Buy(upgrade, false, currency) end
     end)
 end
 
@@ -2476,8 +2750,8 @@ function xDTaraZ.Upgrade.Now()
     xDTaraZ.Upgrade.Exclusive(function()
         local bought = 0
         repeat
-            local upgrade = xDTaraZ.Upgrade.Pick()
-            if not (upgrade and State.Alive and xDTaraZ.Upgrade.Buy(upgrade, true)) then break end
+            local upgrade, _, currency = xDTaraZ.Upgrade.Pick()
+            if not (upgrade and State.Alive and xDTaraZ.Upgrade.Buy(upgrade, true, currency)) then break end
             bought += 1
             task.wait(Config.UpgradeGap)
         until bought >= Config.UpgradeBurst
@@ -2527,7 +2801,7 @@ xDTaraZ.Bank = {}
 function xDTaraZ.Bank.Spend(remote, attr, label, reserve)
     local before = tonumber(xDTaraZ.Game.Attr(attr)) or 0
     local refused = State.BankRefused[attr]
-    if before <= 0 or (reserve or 0) > 0 then return false end
+    if before <= 0 or before <= (reserve or 0) then return false end
     if type(refused) == "table" and refused.balance == before and osClock() < refused.retryAt then return false end
 
     local ok, reason = xDTaraZ:Invoke(remote)
@@ -2606,33 +2880,38 @@ function xDTaraZ.Gift.Now()
 end
 
 function xDTaraZ.Tasks.BuyJack()
-    local owns = LocalPlayer:GetAttribute("OwnsPass_jack") == true
+    local jackCfg = GameLib.JackConfig
+    local charId = jackCfg and jackCfg.CharacterId or "jack"
+    local price = jackCfg and jackCfg.Price or 50000000
+    local owns = LocalPlayer:GetAttribute("OwnsPass_" .. charId) == true
     if owns then
         local equipped = LocalPlayer:GetAttribute("EquippedCharacter")
-        if equipped ~= "jack" and GameLib.EquipCharacter then
-            local ok = xDTaraZ:Invoke(GameLib.EquipCharacter, "jack")
-            if ok then xDTaraZ:Notify("Jack equipped!") return true end
+        if equipped ~= charId and GameLib.EquipCharacter then
+            local ok = xDTaraZ:Invoke(GameLib.EquipCharacter, charId)
+            if ok then
+                xDTaraZ:Notify("Jack equipped!")
+                return true
+            end
         else
             xDTaraZ:Notify("Jack is already owned and equipped!")
             return true
         end
     end
     local candy = xDTaraZ.Game.CandyCorn()
-    local price = 50000000
     if candy < price then
-        xDTaraZ:Notify(("Need 50M Candy Corn for Jack (have %s)"):format(xDTaraZ.Format(candy)))
+        xDTaraZ:Notify(("Need %s Candy Corn for Jack (have %s)"):format(xDTaraZ.Format(price), xDTaraZ.Format(candy)))
         return false
     end
     if not GameLib.ShopPurchase then
         xDTaraZ:Notify("Shop remote unavailable")
         return false
     end
-    local ok, reply = xDTaraZ:Invoke(GameLib.ShopPurchase, "jack")
+    local ok, reply = xDTaraZ:Invoke(GameLib.ShopPurchase, charId)
     if ok == true or (type(reply) == "table" and reply.ok) then
         xDTaraZ:Notify("Jack purchased!")
         if GameLib.EquipCharacter then
             task.wait(0.5)
-            xDTaraZ:Invoke(GameLib.EquipCharacter, "jack")
+            xDTaraZ:Invoke(GameLib.EquipCharacter, charId)
         end
         return true
     end
@@ -2642,14 +2921,38 @@ end
 
 function xDTaraZ.Tasks.AutoJack()
     if not State.Opt.AutoBuyJack then return end
-    local owns = LocalPlayer:GetAttribute("OwnsPass_jack") == true
+    local jackCfg = GameLib.JackConfig
+    local charId = jackCfg and jackCfg.CharacterId or "jack"
+    local price = jackCfg and jackCfg.Price or 50000000
+    local owns = LocalPlayer:GetAttribute("OwnsPass_" .. charId) == true
     if not owns then
-        if xDTaraZ.Game.CandyCorn() >= 50000000 then
+        if xDTaraZ.Game.CandyCorn() >= price then
             xDTaraZ.Tasks.BuyJack()
         end
-    elseif LocalPlayer:GetAttribute("EquippedCharacter") ~= "jack" and GameLib.EquipCharacter then
-        xDTaraZ:Invoke(GameLib.EquipCharacter, "jack")
+    elseif LocalPlayer:GetAttribute("EquippedCharacter") ~= charId and GameLib.EquipCharacter then
+        xDTaraZ:Invoke(GameLib.EquipCharacter, charId)
     end
+end
+
+function xDTaraZ.Tasks.SignUpEvent()
+    local es = Workspace:FindFirstChild("EventSign")
+    local prompt = es and es:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt and typeof(fireproximityprompt) == "function" then
+        fireproximityprompt(prompt)
+        xDTaraZ:Notify("Signed up for event!")
+        return true
+    end
+    local service = GameLib.Knit and GameLib.Knit.GetService and GameLib.Knit.GetService("EventSignupService")
+    local rf = service and service.ReservePrompt
+    if rf then
+        local ok = pcall(function() return rf:InvokeServer() end)
+        if ok then
+            xDTaraZ:Notify("Signed up for event!")
+            return true
+        end
+    end
+    xDTaraZ:Notify("Event sign prompt not found")
+    return false
 end
 
 xDTaraZ.Boost = {}
@@ -2692,6 +2995,16 @@ function xDTaraZ.Cutscene.Skip(manual)
     if stopped then State.CutscenesSkipped = (State.CutscenesSkipped or 0) + 1 end
     if manual then xDTaraZ:Notify(stopped and "Cutscene skipped" or "Cutscene is still active") end
     return stopped
+end
+
+function xDTaraZ.Cutscene.SetAutoSkip(enabled)
+    State.Opt.AutoSkipCutscene = enabled == true
+    if enabled then xDTaraZ.Cutscene.Skip(false) end
+    if GameLib.SettingsSet then
+        task.spawn(function()
+            pcall(GameLib.SettingsSet.InvokeServer, GameLib.SettingsSet, "skipPyramidCutscene", enabled == true)
+        end)
+    end
 end
 
 function xDTaraZ.Cutscene.Now()
@@ -2741,6 +3054,24 @@ function xDTaraZ.Teleport.Player()
         return
     end
     xDTaraZ.Move.To(root.Position + vector3New(0, Config.StandHeight, 0), true)
+end
+
+function xDTaraZ.Teleport.SunGod()
+    local spot = xDTaraZ.Move.SunGodSpot()
+    if not spot then
+        xDTaraZ:Notify("Sun God shrine not found")
+        return
+    end
+    xDTaraZ.Move.To(spot, true)
+end
+
+function xDTaraZ.Teleport.EventSign()
+    local spot = xDTaraZ.Move.EventSignSpot()
+    if not spot then
+        xDTaraZ:Notify("Event sign not found")
+        return
+    end
+    xDTaraZ.Move.To(spot, true)
 end
 
 xDTaraZ.Server = {}
@@ -2826,7 +3157,10 @@ end
 
 function xDTaraZ.Progression.Start()
     local self = xDTaraZ.Progression
-    if not self.Ready() then self.Stage = "Game modules unavailable" return false end
+    if not self.Ready() then
+        self.Stage = "Game modules unavailable"
+        return false
+    end
     self.Started, self.Failures, self.LastUpgrade = osClock(), 0, 0
     self.SyncToggle = false
     self.Stage, self.WaitingLevel, self.ProbeEnd = "Starting", nil, nil
@@ -2861,12 +3195,12 @@ function xDTaraZ.Progression.Goals()
     local done = hasGoal and not needStrength and not needSpeed
         and (opt.ProgressionCoins <= 0 or xDTaraZ.Game.Coins() >= opt.ProgressionCoins)
         and (opt.ProgressionPyramids <= 0 or pyramids >= opt.ProgressionPyramids)
-    return done, needStrength, needSpeed, strength
+    return done, needStrength, needSpeed
 end
 
 function xDTaraZ.Progression.Select()
     local self, opt = xDTaraZ.Progression, State.Opt
-    local done, needStrength, needSpeed, strength = self.Goals()
+    local done, needStrength, needSpeed = self.Goals()
     if done then return "Targets reached" end
     if self.Started and opt.ProgressionMinutes > 0 and osClock() - self.Started >= opt.ProgressionMinutes * 60 then
         return "Session limit reached"
@@ -2876,9 +3210,7 @@ function xDTaraZ.Progression.Select()
     local waiting = not GameLib.Runtime.getCurrentLayer(Workspace)
     if waiting then
         if not opt.ProgressionWaitTrain then return "Waiting" end
-        if not self.WaitingLevel then self.WaitingLevel = strength + 1 end
-        if strength < self.WaitingLevel then return "Wait Strength" end
-        return "Waiting"
+        return "Wait Strength"
     end
     self.WaitingLevel = nil
     if opt.ProgressionStrength == 0 and State.LastFarmSample and not State.BenchRate
@@ -2894,15 +3226,50 @@ function xDTaraZ.Progression.Upgrade()
     if not opt.ProgressionUpgrades or not xDTaraZ.Gate.Ready("AutoUpgrade")
         or osClock() - self.LastUpgrade < Config.UpgradeInterval or State.UpgradeProbe then return end
     self.LastUpgrade = osClock()
-    local budget = xDTaraZ.Game.Coins() - math.max(opt.ProgressionReserve, opt.KeepCoins or 0)
+    local currency = xDTaraZ.Upgrade.ResolveCurrency()
+    local budget = xDTaraZ.Upgrade.BudgetFor(currency, opt.ProgressionReserve)
     if budget <= 0 then return end
-    local upgrade, cost = xDTaraZ.Upgrade.PickByValue(budget)
+    local upgrade, cost = xDTaraZ.Upgrade.PickByValue(budget, currency)
     if not upgrade or not cost or cost > budget then return end
     xDTaraZ.Upgrade.Exclusive(function()
-        local current = xDTaraZ.Upgrade.NextCost(upgrade)
-        local available = xDTaraZ.Game.Coins() - math.max(opt.ProgressionReserve, opt.KeepCoins or 0)
-        if current and current <= available and State.Opt.AutoProgression then xDTaraZ.Upgrade.Buy(upgrade) end
+        local current = xDTaraZ.Upgrade.NextCost(upgrade, currency)
+        local available = xDTaraZ.Upgrade.BudgetFor(currency, opt.ProgressionReserve)
+        if current and current <= available and State.Opt.AutoProgression then
+            xDTaraZ.Upgrade.Buy(upgrade, false, currency)
+        end
     end)
+end
+
+function xDTaraZ.Progression.TrainStage(stage, once)
+    local self = xDTaraZ.Progression
+    State.ProgressionTraining = true
+    local ok = stage == "Speed" and xDTaraZ.Train.Speed("Best Unlocked")
+        or (stage ~= "Speed" and xDTaraZ.Train.Strength("Best Unlocked"))
+    self.Failures = ok and 0 or (self.Failures + 1)
+    if ok and stage ~= "Speed" then
+        if stage == "Measure Strength" and not self.ProbeEnd then self.ProbeEnd = osClock() + Config.RateSample + 2 end
+        local value = tonumber(State.Stats.Strength)
+        if value then xDTaraZ.Train.MeasuredRate(value, osClock()) end
+    end
+    if once and ok then
+        local deadline = osClock() + 3
+        repeat task.wait(Config.TickDelay)
+        until not State.Alive or State.ActiveEpoch ~= State.WorkEpoch or osClock() >= deadline
+    end
+end
+
+function xDTaraZ.Progression.FarmStage(once)
+    local self = xDTaraZ.Progression
+    if not once then self.Upgrade() end
+    if not State.Alive or State.ActiveEpoch ~= State.WorkEpoch then return end
+    State.ProgressionFarm = true
+    local ok, result = pcall(xDTaraZ.Farm.Step)
+    State.ProgressionFarm = false
+    if not ok then
+        self.Stop("Farm error")
+        error(result, 0)
+    end
+    self.Failures = (result or State.Waiting) and 0 or (self.Failures + 1)
 end
 
 function xDTaraZ.Progression.Step(once)
@@ -2910,49 +3277,53 @@ function xDTaraZ.Progression.Step(once)
     if State.ProgressionCleanup then self.Cleanup() end
     if not State.Opt.AutoProgression and not once then return false end
     if not self.Started and not self.Start() then return false end
-    if not self.Ready() then self.Stop("Game modules unavailable") self.Cleanup() return false end
+    if not self.Ready() then
+        self.Stop("Game modules unavailable")
+        self.Cleanup()
+        return false
+    end
     local _, humanoid = xDTaraZ:Character()
-    if not humanoid then self.Stage = "Waiting for character" return true end
+    if not humanoid then
+        self.Stage = "Waiting for character"
+        return true
+    end
     local stage = self.Select()
     self.Stage = stage
     if stage == "Targets reached" or stage == "Session limit reached" then
-        self.Stop(stage) self.Cleanup() return true
+        self.Stop(stage)
+        self.Cleanup()
+        return true
     end
-    if stage == "Farm" or stage == "Waiting" then
-        if State.ProgressionTraining then self.Cleanup() end
+    if (stage == "Farm" or stage == "Waiting") and State.ProgressionTraining then
+        self.Cleanup()
     end
-    if stage == "Waiting" then State.Status = "Smart: waiting for next pyramid" return true end
+    if stage == "Waiting" then
+        local secs = xDTaraZ.Game.ResetCountdown()
+        State.Status = (secs and secs > 0) and ("Smart: waiting for next pyramid (%ds)"):format(secs) or "Smart: waiting for next pyramid"
+        return true
+    end
     if stage ~= "Farm" then
-        State.ProgressionTraining = true
-        local ok = stage == "Speed" and xDTaraZ.Train.Speed("Best Unlocked")
-            or (stage ~= "Speed" and xDTaraZ.Train.Strength("Best Unlocked"))
-        if ok then self.Failures = 0 else self.Failures += 1 end
-        if ok and stage ~= "Speed" then
-            if stage == "Measure Strength" and not self.ProbeEnd then self.ProbeEnd = osClock() + Config.RateSample + 2 end
-            local value = tonumber(State.Stats.Strength)
-            if value then xDTaraZ.Train.MeasuredRate(value, osClock()) end
-        end
-        if once and ok then
-            local deadline = osClock() + 3
-            repeat task.wait(Config.TickDelay)
-            until not State.Alive or State.ActiveEpoch ~= State.WorkEpoch or osClock() >= deadline
-        end
+        self.TrainStage(stage, once)
     else
-        if not once then self.Upgrade() end
-        if not State.Alive or State.ActiveEpoch ~= State.WorkEpoch then return true end
-        State.ProgressionFarm = true
-        local ok, result = pcall(xDTaraZ.Farm.Step)
-        State.ProgressionFarm = false
-        if not ok then self.Stop("Farm error") error(result, 0) end
-        if result or State.Waiting then self.Failures = 0 else self.Failures += 1 end
+        self.FarmStage(once)
     end
-    if self.Failures >= 12 then self.Stop("No progress: check game access") self.Cleanup() end
-    if once then self.Cleanup() self.Started = nil self.Stage = "Decision completed" end
+    if self.Failures >= 12 then
+        self.Stop("No progress: check game access")
+        self.Cleanup()
+    end
+    if once then
+        self.Cleanup()
+        self.Started = nil
+        self.Stage = "Decision completed"
+    end
     return true
 end
 
 function xDTaraZ.Progression.Now()
-    if State.Opt.AutoProgression then xDTaraZ:Notify("Smart Progression is already running") return end
+    if State.Opt.AutoProgression then
+        xDTaraZ:Notify("Smart Progression is already running")
+        return
+    end
     xDTaraZ.Progression.Step(true)
 end
 
@@ -2973,14 +3344,17 @@ function xDTaraZ.Progression.Build(window, T, Library)
             end
             local previous = opt.AutoProgression
             opt.AutoProgression = on
-            if on then xDTaraZ.Scheduler.Resume("AutoProgression") elseif previous then self.Stop("Stopped") end
+            if on then
+                xDTaraZ.Scheduler.Resume("AutoProgression")
+            elseif previous then
+                self.Stop("Stopped")
+            end
         end,
     })
-    run:AddButton({ Text = T("Run One Decision Now", "ทำหนึ่งขั้นตอนตอนนี้"), Func = function()
-        State.WorkEpoch += 1 State.Requests.ProgressionNow = true
-    end })
+    run:AddButton({ Text = T("Run One Decision Now", "ทำหนึ่งขั้นตอนตอนนี้"), Func = xDTaraZ.Scheduler.Action("ProgressionNow") })
     run:AddButton({ Text = T("Stop Progression", "หยุดสมาร์ทพัฒนา"), Func = function()
-        State.WorkEpoch += 1 self.Stop("Stopped")
+        State.WorkEpoch += 1
+        self.Stop("Stopped")
     end })
     run:AddToggle("ProgressionWaitTrain", { Text = T("Train One Level Between Pyramids", "ฝึกหนึ่งเลเวลระหว่างรอพีระมิด"), Default = false,
         Callback = function(on) opt.ProgressionWaitTrain = on end })
@@ -3024,7 +3398,7 @@ end
 
 xDTaraZ.Visual = { Entries = {}, NextRefresh = 0, NextUpdate = 0, MaxEntries = 96 }
 State.Opt.ESP = false
-State.Opt.ESPCategories = { Players = true, Quarry = true, Pyramid = true, Pool = true, Gyms = true, Eggs = true }
+State.Opt.ESPCategories = { Players = true, Quarry = true, Pyramid = true, Pool = true, Gyms = true, Eggs = true, POI = true }
 State.Opt.ESPDistance = 1500
 State.Opt.ESPNames, State.Opt.ESPDistances, State.Opt.ESPStatus = true, true, true
 State.Opt.ESPThroughWalls = true
@@ -3036,7 +3410,10 @@ function xDTaraZ.Visual.Clear()
         if entry.Label then entry.Label:Destroy() end
     end
     table.clear(xDTaraZ.Visual.Entries)
-    if xDTaraZ.Visual.Folder then xDTaraZ.Visual.Folder:Destroy() xDTaraZ.Visual.Folder = nil end
+    if xDTaraZ.Visual.Folder then
+        xDTaraZ.Visual.Folder:Destroy()
+        xDTaraZ.Visual.Folder = nil
+    end
 end
 
 function xDTaraZ.Visual.RestoreCamera()
@@ -3058,16 +3435,26 @@ end
 
 function xDTaraZ.Visual.CameraStep()
     local visual, opt = xDTaraZ.Visual, State.Opt
-    if not opt.Spectate then visual.RestoreCamera() return end
+    if not opt.Spectate then
+        visual.RestoreCamera()
+        return
+    end
     local target = opt.SpectateTarget and Players:FindFirstChild(opt.SpectateTarget)
-    if not target or target == LocalPlayer then opt.Spectate = false visual.RestoreCamera() return end
+    if not target or target == LocalPlayer then
+        opt.Spectate = false
+        visual.RestoreCamera()
+        return
+    end
     local camera = Workspace.CurrentCamera
     if not camera then return end
     if visual.Camera and visual.Camera.Object ~= camera then visual.RestoreCamera() end
     if camera.CameraType == Enum.CameraType.Scriptable then return end
     local character = target.Character
     local hum = character and character:FindFirstChildOfClass("Humanoid")
-    if not hum or hum.Health <= 0 then visual.RestoreCamera() return end
+    if not hum or hum.Health <= 0 then
+        visual.RestoreCamera()
+        return
+    end
     if not visual.Camera then
         visual.Camera = { Object = camera, OriginalSubject = camera.CameraSubject, Type = camera.CameraType }
     end
@@ -3075,9 +3462,8 @@ function xDTaraZ.Visual.CameraStep()
     camera.CameraSubject = hum
 end
 
-function xDTaraZ.Visual.Refresh()
-    local visual, opt = xDTaraZ.Visual, State.Opt
-    local candidates, categories = {}, opt.ESPCategories or {}
+function xDTaraZ.Visual.Collect(categories)
+    local candidates = {}
     local function Add(object, anchor, category, name, player)
         if #candidates >= 256 or not categories[category] or not object or not anchor or not anchor:IsA("BasePart") then return end
         candidates[#candidates + 1] = { Object = object, Anchor = anchor, Category = category, Name = name, Player = player }
@@ -3085,7 +3471,9 @@ function xDTaraZ.Visual.Refresh()
     if categories.Players then
         for _, player in ipairs(Players:GetPlayers()) do
             local character = player.Character
-            if player ~= LocalPlayer and character then Add(character, character:FindFirstChild("HumanoidRootPart"), "Players", player.DisplayName .. " (@" .. player.Name .. ")", player) end
+            if player ~= LocalPlayer and character then
+                Add(character, character:FindFirstChild("HumanoidRootPart"), "Players", player.DisplayName .. " (@" .. player.Name .. ")", player)
+            end
         end
     end
     if categories.Quarry and GameLib.Regions then
@@ -3099,13 +3487,13 @@ function xDTaraZ.Visual.Refresh()
         Add(model, part, "Pyramid", "Pyramid")
     end
     if categories.Pool and GameLib.Completion then
-        local display = Workspace:FindFirstChild(GameLib.Completion.CompletedDisplayName)
-        local part = display and display:FindFirstChild(GameLib.Completion.PoolHitboxName)
-        Add(part, part, "Pool", "Waters of Nu")
+        xDTaraZ.Move.PoolSpot()
+        local part = State.PoolPart
+        if part then Add(part, part, "Pool", "Waters of Nu") end
     end
     if categories.Gyms and GameLib.Gym then
         local seen = {}
-        for _, stations in ipairs({ (GameLib.Gym and GameLib.Gym.BenchpressStations or {}) or {}, (GameLib.Gym and GameLib.Gym.TreadmillStations or {}) or {} }) do
+        for _, stations in ipairs({ GameLib.Gym.BenchpressStations or {}, GameLib.Gym.TreadmillStations or {} }) do
             for _, station in ipairs(stations) do
                 local folder = station.GymFolder
                 if not seen[folder] then
@@ -3119,13 +3507,80 @@ function xDTaraZ.Visual.Refresh()
     end
     if categories.Eggs and GameLib.EggConfig then
         local folder = Workspace:FindFirstChild(GameLib.EggConfig.WorldFolderName)
-        for _, id in ipairs(GameLib.EggConfig.Order or {}) do
+        local order = GameLib.EggConfig.AllOrder or GameLib.EggConfig.Order or {}
+        for _, id in ipairs(order) do
             local egg = GameLib.EggConfig.ById[id]
             local display = egg and folder and folder:FindFirstChild(egg.DisplayModel)
-            local part = display and display:FindFirstChild("BuyPart", true)
-            Add(display, part, "Eggs", egg and (egg.DisplayName .. " | " .. tostring(egg.Price) .. " coins"))
+            local part = display and (display:FindFirstChild("BuyPart", true) or display:FindFirstChildWhichIsA("BasePart", true))
+            if display and part then
+                local cur = egg.Currency or "coins"
+                Add(display, part, "Eggs", egg.DisplayName .. " | " .. tostring(egg.Price) .. " " .. cur:lower())
+            end
         end
     end
+    if categories.POI then
+        local portalArea = Workspace:FindFirstChild("HalloweenPortalArea") or Workspace:FindFirstChild("MainPlacePortalArea")
+        local portal = portalArea and (portalArea:FindFirstChild("HalloweenPortal") or portalArea:FindFirstChild("MainPlacePortal"))
+        local pPart = portal and (portal:FindFirstChild("ProximityPromptPart") or portal:FindFirstChildWhichIsA("BasePart", true))
+        if pPart then Add(portal, pPart, "POI", "World Portal") end
+
+        local sg = Workspace:FindFirstChild("SunGod")
+        local sgPart = sg and sg:FindFirstChildWhichIsA("BasePart", true)
+        if sgPart then Add(sg, sgPart, "POI", "Sun Shrine") end
+
+        local jackArea = Workspace:FindFirstChild("JackArea")
+        local jack = jackArea and jackArea:FindFirstChild("Jack")
+        local jPart = jack and (jack:FindFirstChild("Torso") or jack:FindFirstChildWhichIsA("BasePart", true))
+        if jPart then Add(jack, jPart, "POI", "Jack NPC") end
+
+        local es = Workspace:FindFirstChild("EventSign")
+        local esPart = es and (es:FindFirstChild("PromptPart") or es:FindFirstChildWhichIsA("BasePart", true))
+        if esPart then Add(es, esPart, "POI", "Event Sign") end
+    end
+    return candidates
+end
+
+function xDTaraZ.Visual.Mount(candidate)
+    local visual = xDTaraZ.Visual
+    if not visual.Folder then
+        local folder = Instance.new("Folder")
+        folder.Name = "MarioPyramidVisuals"
+        folder.Parent = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        visual.Folder = folder
+    end
+    local entry = candidate
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "Marker"
+    billboard.ResetOnSpawn = false
+    billboard.Adornee = entry.Anchor
+    billboard.Size = UDim2.fromOffset(250, 58)
+    billboard.StudsOffsetWorldSpace = Vector3.new(0, 4, 0)
+    billboard.Parent = visual.Folder
+    entry.Label = billboard
+    local text = Instance.new("TextLabel")
+    text.Size = UDim2.fromScale(1, 1)
+    text.BackgroundTransparency = 1
+    text.TextColor3 = Color3.fromRGB(255, 230, 120)
+    text.TextStrokeTransparency = 0.35
+    text.TextSize = 14
+    text.Font = Enum.Font.GothamBold
+    text.Parent = billboard
+    entry.Text = text
+    local ok, highlight = pcall(function()
+        local item = Instance.new("Highlight")
+        item.Adornee = entry.Object
+        item.FillTransparency = 0.8
+        item.OutlineColor = Color3.fromRGB(255, 220, 100)
+        item.Parent = visual.Folder
+        return item
+    end)
+    if ok then entry.Highlight = highlight end
+    visual.Entries[candidate.Object] = entry
+end
+
+function xDTaraZ.Visual.Refresh()
+    local visual, opt = xDTaraZ.Visual, State.Opt
+    local candidates = visual.Collect(opt.ESPCategories or {})
     local _, _, root = xDTaraZ:Character()
     table.sort(candidates, function(a, b)
         if (a.Category == "Players") ~= (b.Category == "Players") then return a.Category ~= "Players" end
@@ -3143,42 +3598,7 @@ function xDTaraZ.Visual.Refresh()
             visual.Entries[candidate.Object] = nil
             entry = nil
         end
-        if not entry then
-            if not visual.Folder then
-                local folder = Instance.new("Folder")
-                folder.Name = "MarioPyramidVisuals"
-                folder.Parent = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-                visual.Folder = folder
-            end
-            entry = candidate
-            local billboard = Instance.new("BillboardGui")
-            billboard.Name = "Marker"
-            billboard.ResetOnSpawn = false
-            billboard.Adornee = entry.Anchor
-            billboard.Size = UDim2.fromOffset(250, 58)
-            billboard.StudsOffsetWorldSpace = Vector3.new(0, 4, 0)
-            billboard.Parent = visual.Folder
-            entry.Label = billboard
-            local text = Instance.new("TextLabel")
-            text.Size = UDim2.fromScale(1, 1)
-            text.BackgroundTransparency = 1
-            text.TextColor3 = Color3.fromRGB(255, 230, 120)
-            text.TextStrokeTransparency = 0.35
-            text.TextSize = 14
-            text.Font = Enum.Font.GothamBold
-            text.Parent = billboard
-            entry.Text = text
-            local ok, highlight = pcall(function()
-                local item = Instance.new("Highlight")
-                item.Adornee = entry.Object
-                item.FillTransparency = 0.8
-                item.OutlineColor = Color3.fromRGB(255, 220, 100)
-                item.Parent = visual.Folder
-                return item
-            end)
-            if ok then entry.Highlight = highlight end
-            visual.Entries[candidate.Object] = entry
-        end
+        if not entry then visual.Mount(candidate) end
     end
     for object, entry in pairs(visual.Entries) do
         if not present[object] then
@@ -3191,11 +3611,20 @@ end
 
 function xDTaraZ.Visual.Step()
     local visual, opt = xDTaraZ.Visual, State.Opt
-    if visual.Folder and not visual.Folder.Parent then visual.Clear() visual.NextRefresh = 0 end
+    if visual.Folder and not visual.Folder.Parent then
+        visual.Clear()
+        visual.NextRefresh = 0
+    end
     visual.CameraStep()
-    if not opt.ESP then if next(visual.Entries) then visual.Clear() end return end
-    local now = os.clock()
-    if now >= visual.NextRefresh then visual.NextRefresh = now + 1 visual.Refresh() end
+    if not opt.ESP then
+        if next(visual.Entries) then visual.Clear() end
+        return
+    end
+    local now = osClock()
+    if now >= visual.NextRefresh then
+        visual.NextRefresh = now + 1
+        visual.Refresh()
+    end
     if now < visual.NextUpdate then return end
     visual.NextUpdate = now + 0.25
     local _, _, root = xDTaraZ:Character()
@@ -3232,51 +3661,81 @@ function xDTaraZ.Visual.Stop()
     xDTaraZ.Visual.Clear()
 end
 
-function xDTaraZ.Visual.Build(window, T, Library)
-    local visual, opt = xDTaraZ.Visual, State.Opt
-    local tab = window:AddTab(T("Visuals", "การมองเห็น"), "eye", T("Map markers and player camera", "จุดสำคัญในแมพและกล้องผู้เล่น"))
+local function BuildEspSection(tab, T, opt, visual)
     local markers = tab:AddLeftGroupbox(T("Map ESP", "มองจุดสำคัญ"), "eye")
     local detail = tab:AddRightGroupbox(T("Marker Options", "ตัวเลือกป้าย"), "gear")
-    local camera = tab:AddLeftGroupbox(T("Spectate", "ติดตามกล้องผู้เล่น"), "user")
     local function Toggle(group, key, text, callback)
         group:AddToggle(key, { Text = text, Default = opt[key] == true,
-            Callback = function(value) opt[key] = value == true if callback then callback(value) end end })
+            Callback = function(value)
+                opt[key] = value == true
+                if callback then callback(value) end
+            end })
     end
     Toggle(markers, "ESP", T("Enable ESP", "เปิดป้ายและเส้นขอบ"), function(value)
-        if value then visual.NextRefresh = 0 else visual.Clear() end
+        if value then
+            visual.NextRefresh = 0
+        else
+            visual.Clear()
+        end
     end)
     markers:AddDropdown("ESPCategories", { Text = T("Categories", "หมวดหมู่"),
-        Values = { "Players", "Quarry", "Pyramid", "Pool", "Gyms", "Eggs" }, Multi = true,
-        Default = { "Players", "Quarry", "Pyramid", "Pool", "Gyms", "Eggs" },
-        Callback = function(value) opt.ESPCategories = value or {} visual.NextRefresh = 0 end })
+        Values = { "Players", "Quarry", "Pyramid", "Pool", "Gyms", "Eggs", "POI" }, Multi = true,
+        Default = { "Players", "Quarry", "Pyramid", "Pool", "Gyms", "Eggs", "POI" },
+        Callback = function(value)
+            opt.ESPCategories = value or {}
+            visual.NextRefresh = 0
+        end })
     markers:AddSlider("ESPDistance", { Text = T("Maximum Distance", "ระยะสูงสุด"), Min = 50, Max = 5000,
         Default = opt.ESPDistance, Rounding = 0, Callback = function(value) opt.ESPDistance = value end })
     markers:AddButton({ Text = T("Refresh Markers Now", "รีเฟรชป้ายตอนนี้"), Func = function()
-        visual.NextRefresh = 0 if opt.ESP then visual.Step() end
+        visual.NextRefresh = 0
+        if opt.ESP then visual.Step() end
     end })
     Toggle(detail, "ESPNames", T("Names", "ชื่อ"))
     Toggle(detail, "ESPDistances", T("Distances", "ระยะทาง"))
     Toggle(detail, "ESPStatus", T("Health / Pyramid Status", "พลังชีวิต / สถานะพีระมิด"))
     Toggle(detail, "ESPThroughWalls", T("Show Through Walls", "แสดงผ่านกำแพง"))
+end
+
+local function BuildSpectateSection(tab, T, opt, visual, Library)
+    local camera = tab:AddLeftGroupbox(T("Spectate", "ติดตามกล้องผู้เล่น"), "user")
     local function Names()
         local result = {}
-        for _, player in ipairs(Players:GetPlayers()) do if player ~= LocalPlayer then result[#result + 1] = player.Name end end
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer then result[#result + 1] = player.Name end
+        end
         table.sort(result)
         return result
     end
     local targets = camera:AddDropdown("SpectateTarget", { Text = T("Player", "ผู้เล่น"),
         Values = Names(), Searchable = true, AllowNull = true,
-        Callback = function(value) visual.RestoreCamera() opt.SpectateTarget = value end })
-    Toggle(camera, "Spectate", T("Auto Follow Selected Player", "ติดตามผู้เล่นที่เลือก"), function() visual.CameraStep() end)
+        Callback = function(value)
+            visual.RestoreCamera()
+            opt.SpectateTarget = value
+        end })
+    camera:AddToggle("Spectate", { Text = T("Auto Follow Selected Player", "ติดตามผู้เล่นที่เลือก"), Default = false,
+        Callback = function(value)
+            opt.Spectate = value == true
+            visual.CameraStep()
+        end })
     camera:AddButton({ Text = T("Spectate Now", "ดูผู้เล่นตอนนี้"), Func = function()
-        opt.Spectate = true visual.CameraStep()
+        opt.Spectate = true
+        visual.CameraStep()
         if Library.Toggles.Spectate then Library.Toggles.Spectate:SetValue(opt.Spectate) end
     end })
     camera:AddButton({ Text = T("Return To My Camera", "กลับกล้องตัวเอง"), Func = function()
-        opt.Spectate = false visual.RestoreCamera()
+        opt.Spectate = false
+        visual.RestoreCamera()
         if Library.Toggles.Spectate then Library.Toggles.Spectate:SetValue(false) end
     end })
     camera:AddButton({ Text = T("Refresh Players", "รีเฟรชผู้เล่น"), Func = function() targets:SetValues(Names()) end })
+end
+
+function xDTaraZ.Visual.Build(window, T, Library)
+    local visual, opt = xDTaraZ.Visual, State.Opt
+    local tab = window:AddTab(T("Visuals", "การมองเห็น"), "eye", T("Map markers and player camera", "จุดสำคัญในแมพและกล้องผู้เล่น"))
+    BuildEspSection(tab, T, opt, visual)
+    BuildSpectateSection(tab, T, opt, visual, Library)
 end
 
 function xDTaraZ.Visual.Pump(Library)
@@ -3288,10 +3747,15 @@ xDTaraZ.Client = {}
 
 function xDTaraZ.Client.ResetCharacter()
     State.WorkEpoch += 1
-    if xDTaraZ.Visual then xDTaraZ.Visual.Clear() xDTaraZ.Visual.NextRefresh = 0 end
+    xDTaraZ.Raknet.Stop()
+    if xDTaraZ.Visual then
+        xDTaraZ.Visual.Clear()
+        xDTaraZ.Visual.NextRefresh = 0
+    end
     State.TrainingOrigin, State.TrainingPosition, State.FarmOrigin, State.LastSlot = nil, nil, nil, nil
     State.TrainingPool, State.PoolPart, State.PoolSpot, State.PoolRayNext = nil, nil, nil, nil
     State.CarrySnapshot, State.Carry, State.CarryConfirmed = nil, nil, false
+    State.QuarryPhysBuf, State.QuarryPhysChar = nil, nil
     State.FarmWait, State.Parked = 0, false
     xDTaraZ.Pets.Origin, xDTaraZ.Pets.ReturnPending = nil, false
     State.Character, State.Humanoid, State.Root = nil, nil, nil
@@ -3321,7 +3785,10 @@ function xDTaraZ.Client.Recover()
     State.Rejoining = true
     xDTaraZ.Util.QueueReload()
     task.wait(Config.RejoinDelay)
-    if not State.Alive or not State.Opt.AutoRejoin then State.Rejoining = false return false end
+    if not State.Alive or not State.Opt.AutoRejoin then
+        State.Rejoining = false
+        return false
+    end
     local ok, err = pcall(xDTaraZ.Client.DispatchRejoin)
     if not ok then
         State.Rejoining, State.RejoinNext = false, osClock() + Config.RejoinDelay
@@ -3374,13 +3841,18 @@ xDTaraZ.Scheduler.RequestHandlers = {
     TrainSpeedNow = xDTaraZ.Train.Speed,
     Unboost = xDTaraZ.Server.Unboost,
     PetsNow = xDTaraZ.Pets.HatchNow,
-    PetsStop = function() xDTaraZ.Pets.Stop() xDTaraZ.Pets.Return() end,
+    PetsStop = function()
+        xDTaraZ.Pets.Stop()
+        xDTaraZ.Pets.Return()
+    end,
     PetsBestNow = function() xDTaraZ.Pets.EquipBestStep(true) end,
     PetsRefresh = xDTaraZ.Pets.Refresh,
     PetEquipNow = function() xDTaraZ.Pets.SelectedAction("Equip") end,
     PetUnequipNow = function() xDTaraZ.Pets.SelectedAction("Unequip") end,
     PetLockNow = function() xDTaraZ.Pets.SelectedAction("Lock") end,
     PetUnlockNow = function() xDTaraZ.Pets.SelectedAction("Unlock") end,
+    PetUnequipAllNow = xDTaraZ.Pets.UnequipAll,
+    PetDeleteUnlockedNow = xDTaraZ.Pets.DeleteUnlocked,
     Movement = xDTaraZ.Move.Refresh,
     FarmStop = xDTaraZ.Farm.Stop,
     TrainStop = xDTaraZ.Train.Leave,
@@ -3396,22 +3868,34 @@ xDTaraZ.Scheduler.RequestHandlers = {
     TpPool = xDTaraZ.Teleport.Pool,
     TpGym = xDTaraZ.Teleport.Gym,
     TpPlayer = xDTaraZ.Teleport.Player,
+    TpEggs = function()
+        local spot = xDTaraZ.Move.EggsSpot()
+        if spot then xDTaraZ.Move.To(spot, true) end
+    end,
+    TpJack = function()
+        local spot = xDTaraZ.Move.JackSpot()
+        if spot then xDTaraZ.Move.To(spot, true) end
+    end,
     TpHalloween = xDTaraZ.Move.HalloweenPortal,
     TpMain = xDTaraZ.Move.MainPortal,
+    TpSunGod = xDTaraZ.Teleport.SunGod,
+    TpEventSign = xDTaraZ.Teleport.EventSign,
+    SignUpEventNow = xDTaraZ.Tasks.SignUpEvent,
     BuyJackNow = xDTaraZ.Tasks.BuyJack,
-    PickTierNow = xDTaraZ.Farm.AutoPickTier,
     Rejoin = xDTaraZ.Server.Rejoin,
     Hop = xDTaraZ.Server.Hop,
     Boost = xDTaraZ.Server.Boost,
     CompleteTutorialNow = xDTaraZ.Exploits.CompleteTutorial,
-    ClaimSimNow = function() pcall(setsimulationradius, 1e9, 1e9) end,
+    RaknetCycleNow = xDTaraZ.Farm.CycleNow,
 }
 
 xDTaraZ.Scheduler.Toggles = {
     Progression = { "AutoProgression" },
     Pets = { "AutoHatch" },
     PetsBest = { "AutoEquipPets" },
-    Farm = { "AutoFarm", "AutoPickup", "AutoPlace" },
+    PetsLock = { "AutoLockRares" },
+    PetsDelete = { "AutoDeletePets" },
+    Farm = { "AutoFarm", "InsaneInstant", "AutoPickup", "AutoPlace" },
     Train = { "AutoStrength", "AutoSpeed", "TrainWhileWaiting" },
     Pool = { "AutoPool" },
     Upgrade = { "AutoUpgrade" },
@@ -3424,10 +3908,25 @@ xDTaraZ.Scheduler.Toggles = {
 }
 
 xDTaraZ.Tasks.Commands = {
-    ProgressionNow = true, PickupNow = true, PlaceNow = true, TrainStrengthNow = true, TrainSpeedNow = true,
+    ProgressionNow = true, PickupNow = true, PlaceNow = true, RaknetCycleNow = true, TrainStrengthNow = true, TrainSpeedNow = true,
     PetsNow = true, PetsStop = true, FarmStop = true, TrainStop = true, TrainingExit = true,
-    TpQuarry = true, TpPyramid = true, TpPool = true, TpGym = true, TpPlayer = true,
-    TpHalloween = true, TpMain = true, BuyJackNow = true, PickTierNow = true }
+    TpQuarry = true, TpPyramid = true, TpPool = true, TpGym = true, TpPlayer = true, TpEggs = true, TpJack = true,
+    TpHalloween = true, TpMain = true, TpSunGod = true, TpEventSign = true, SignUpEventNow = true, BuyJackNow = true,
+    PetUnequipAllNow = true, PetDeleteUnlockedNow = true,
+}
+
+---@param name string
+function xDTaraZ.Scheduler.Enqueue(name)
+    if not State.Alive then return end
+    if xDTaraZ.Tasks.Commands[name] then State.WorkEpoch += 1 end
+    State.Requests[name] = true
+end
+
+---@param name string
+---@return function
+function xDTaraZ.Scheduler.Action(name)
+    return function() xDTaraZ.Scheduler.Enqueue(name) end
+end
 
 ---@param key string?  job name; repeated failures stop it and switch its toggles off
 function xDTaraZ.Scheduler.Run(fn, key)
@@ -3500,22 +3999,26 @@ function xDTaraZ.Scheduler.Every(key, interval, fn, async)
     end
 end
 
-function xDTaraZ.Scheduler.Summarize()
-    local now = osClock()
-    local cutoff = now - Config.RateWindow
-    local recent = 0
-    for i = #State.CoinLog, 1, -1 do
-        local entry = State.CoinLog[i]
-        if entry[1] < cutoff then table.remove(State.CoinLog, i) else recent += entry[2] end
+local function PruneLog(log, cutoff)
+    local sum = 0
+    for i = #log, 1, -1 do
+        local entry = log[i]
+        if entry[1] < cutoff then
+            table.remove(log, i)
+        else
+            sum += entry[2]
+        end
     end
-    while State.CycleLog[1] and State.CycleLog[1] < cutoff do table.remove(State.CycleLog, 1) end
+    return sum
+end
 
-    local blocks = 0
-    for i = #State.BlockLog, 1, -1 do
-        local entry = State.BlockLog[i]
-        if entry[1] < cutoff then table.remove(State.BlockLog, i) else blocks += entry[2] end
-    end
+function xDTaraZ.Scheduler.Summarize()
+    local cutoff = osClock() - Config.RateWindow
+    local recent = PruneLog(State.CoinLog, cutoff)
+    while State.CycleLog[1] and State.CycleLog[1] < cutoff do table.remove(State.CycleLog, 1) end
+    local blocks = PruneLog(State.BlockLog, cutoff)
     State.BlockRate = blocks / Config.RateWindow
+
     local petCoins = xDTaraZ.Pets.Inventory and xDTaraZ.Pets.Inventory.Boosts and xDTaraZ.Pets.Inventory.Boosts.Coins or 1
     local economy = tostring(xDTaraZ.Game.Attr("StrengthLevel")) .. ":" .. tostring(petCoins)
     if State.EconomySignature ~= economy then
@@ -3523,9 +4026,9 @@ function xDTaraZ.Scheduler.Summarize()
         table.clear(State.UpgradeGain)
         table.clear(State.CoinLog)
         table.clear(State.BlockLog)
-        recent, blocks = 0, 0
-        State.BlockRate = 0
+        recent, blocks, State.BlockRate = 0, 0, 0
     end
+
     local signature = table.concat({ tostring(xDTaraZ.Game.Attr("StrengthLevel")), tostring(petCoins),
         tostring(State.Opt.PlaceReach), tostring(State.Opt.FarmBatchCap), tostring(State.Opt.FarmSettle),
         tostring(xDTaraZ.Game.UpgradeLevel(GameLib.Upgrades.ById.bulkPickup)),
@@ -3610,12 +4113,16 @@ function xDTaraZ.Scheduler.Loop(step, label)
         while State.Alive do
             local ok, result = pcall(step)
             if ok and result == false then return end
-            if ok then fails = 0 else
+            if ok then
+                fails = 0
+            else
                 fails += 1
                 if fails == 1 then warn("[BuildThePyramid] " .. (label or "Worker") .. ":", result) end
                 if fails == Config.FailLimit then xDTaraZ:Notify((label or "Worker") .. " is retrying after an error") end
             end
-            task.wait(ok and Config.TickDelay or math.min(Config.RetryMax, Config.TickDelay * 2 ^ math.min(fails, 7)))
+            local delay = ok and ((label == "Character" and State.Opt.InsaneInstant) and 0 or Config.TickDelay)
+                or math.min(Config.RetryMax, Config.TickDelay * 2 ^ math.min(fails, 7))
+            task.wait(delay)
         end
     end)
 end
@@ -3658,17 +4165,14 @@ function xDTaraZ.Scheduler.Stop()
 
     if xDTaraZ.Exploits then
         pcall(xDTaraZ.Exploits.SetInstantPrompts, false)
-        pcall(xDTaraZ.Exploits.SetMaxSimRadius, false)
         pcall(xDTaraZ.Exploits.SetAntiHazard, false)
         pcall(xDTaraZ.Exploits.SetFastInteract, false)
-        pcall(xDTaraZ.Exploits.SetRaknetOptimizer, false)
-        pcall(xDTaraZ.Exploits.HookCinematic, false)
     end
+    xDTaraZ.Raknet.Stop()
+    opt.RemoteQuarry, opt.PacketBurst, opt.InsaneInstant = false, false, false
     opt.InstantPrompts = false
     opt.AntiHazard = false
-    opt.MaxSimRadius = false
     opt.FastInteract = false
-    opt.RaknetOptimizer = false
 
     for _, conn in ipairs(State.Connections) do conn:Disconnect() end
     table.clear(State.Connections)
@@ -3686,6 +4190,7 @@ local function BuildInterface()
     end
     pcall(MarioBanner.Step, "UI library")
     local T = function(en, th) return Library:T(en, th) end
+    local Compat = Library.Compat
     local opt = State.Opt
     local statusLabel, runLabel
 
@@ -3693,13 +4198,7 @@ local function BuildInterface()
         Library:Notify("Build the Pyramid", text, 4, kind or "Info")
     end
 
-    local function Request(name)
-        return function()
-            if not State.Alive then return end
-            if xDTaraZ.Tasks.Commands[name] then State.WorkEpoch += 1 end
-            State.Requests[name] = true
-        end
-    end
+    local Request = xDTaraZ.Scheduler.Action
 
     local function Toggle(group, key, text, description, onChange)
         return group:AddToggle(key, {
@@ -3771,12 +4270,14 @@ local function BuildInterface()
 
     local function DrainHalted()
         while #State.HaltQueue > 0 do
-            local toggles, label, reason = table.unpack(table.remove(State.HaltQueue, 1))
-            for _, idx in ipairs(toggles) do
+            local item = table.remove(State.HaltQueue, 1)
+            if not item then break end
+            local toggles, label, reason = item[1], item[2], item[3]
+            for _, idx in ipairs(toggles or {}) do
                 local toggle = Library.Toggles[idx]
                 if toggle and toggle.Value == true then toggle:SetValue(false) end
             end
-            Notify(label .. " stopped: " .. reason, "Error")
+            Notify(tostring(label) .. " stopped: " .. tostring(reason), "Error")
         end
     end
 
@@ -3801,10 +4302,7 @@ local function BuildInterface()
         end
     end
 
-    local function BuildFarm(window)
-        window:AddTabSection(T("Farming", "ฟาร์ม"))
-        local FarmTab = window:AddTab(T("Auto Farm", "ฟาร์มอัตโนมัติ"), "brick", T("Blocks and coins", "บล็อกและเหรียญ"))
-
+    local function BuildFarmCore(FarmTab, T, opt, Toggle, NumberInput)
         local farmBox = FarmTab:AddLeftGroupbox(T("Auto Farm", "ฟาร์มอัตโนมัติ"), "brick")
         farmBox:AddToggle("AutoFarm", {
             Text = T("Auto Farm", "ฟาร์มอัตโนมัติ"),
@@ -3812,33 +4310,14 @@ local function BuildInterface()
             Default = false,
             Callback = function(value)
                 opt.AutoFarm = value
-                if value then xDTaraZ.Scheduler.Resume("AutoFarm") else
+                if value then
+                    xDTaraZ.Scheduler.Resume("AutoFarm")
+                else
                     State.WorkEpoch += 1
                     State.Requests.FarmStop = true
                 end
             end,
         })
-        farmBox:AddDropdown("FarmMode", {
-            Text = T("Farm Mode", "โหมดฟาร์ม"),
-            Values = { "Normal", "Turbo", "Ultra (60/s)" },
-            Default = 1,
-            Description = T("Ultra accelerates placement pacing to 60 actions/sec with pipelining", "Ultra เร่งความเร็วการวางบล็อกสู่ 60 ครั้งต่อวินาทีด้วยระบบไปป์ไลน์"),
-            Callback = function(value) opt.FarmMode = value or "Normal" end,
-        })
-        local blockBox = FarmTab:AddRightGroupbox(T("Block Actions", "คำสั่งบล็อก"), "brick")
-        Toggle(blockBox, "AutoPickup", T("Auto Pickup", "หยิบบล็อกอัตโนมัติ"), nil, function(on) if not on then State.WorkEpoch += 1 end end)
-        Toggle(blockBox, "AutoPlace", T("Auto Place", "วางบล็อกอัตโนมัติ"), nil, function(on) if not on then State.WorkEpoch += 1 end end)
-        blockBox:AddButton({ Text = T("Pickup Now", "หยิบบล็อกเดี๋ยวนี้"), Func = Request("PickupNow") })
-        blockBox:AddButton({ Text = T("Place Now", "วางบล็อกเดี๋ยวนี้"), Func = Request("PlaceNow") })
-        local tierBox = FarmTab:AddRightGroupbox(T("Pyramid Tier", "ระดับพีระมิด"), "star")
-        tierBox:AddDropdown("PreferredTier", {
-            Text = T("Next Pyramid Tier", "ระดับพีระมิดถัดไป"),
-            Values = { "Auto", "Cursed", "Haunted", "Void", "Gold", "Silver" },
-            Default = 1,
-            Description = T("Auto chooses best tier (Cursed 25x in Halloween, Void 10x in Main)", "Auto เลือกระดับที่ดีที่สุด (Cursed 25x ในฮาโลวีน, Void 10x ในโลกหลัก)"),
-            Callback = function(value) opt.PreferredTier = value or "Auto" end,
-        })
-        tierBox:AddButton({ Text = T("Request Tier Now", "ขอระดับพีระมิดตอนนี้"), Func = Request("PickTierNow") })
         Toggle(farmBox, "ReturnOnStop", T("Return On Stop", "กลับที่เดิมเมื่อหยุด"), T("Goes back to where you started", "กลับไปจุดที่เริ่มฟาร์ม"))
         farmBox:AddSlider("PlaceReach", {
             Text = T("Place Distance", "ระยะวางบล็อก"),
@@ -3865,6 +4344,14 @@ local function BuildInterface()
         NumberInput(farmBox, "StopCoins", T("Stop At Coins (0 = never)", "หยุดเมื่อเหรียญถึง (0 = ไม่หยุด)"), function(value) opt.StopCoins = value end)
         NumberInput(farmBox, "StopPyramids", T("Stop At Pyramids (0 = never)", "หยุดเมื่อพีระมิดถึง (0 = ไม่หยุด)"), function(value) opt.StopPyramids = value end)
 
+        local blockBox = FarmTab:AddLeftGroupbox(T("Block Actions", "คำสั่งบล็อก"), "brick")
+        Toggle(blockBox, "AutoPickup", T("Auto Pickup", "หยิบบล็อกอัตโนมัติ"), nil, function(on) if not on then State.WorkEpoch += 1 end end)
+        Toggle(blockBox, "AutoPlace", T("Auto Place", "วางบล็อกอัตโนมัติ"), nil, function(on) if not on then State.WorkEpoch += 1 end end)
+        blockBox:AddButton({ Text = T("Pickup Now", "หยิบบล็อกเดี๋ยวนี้"), Func = Request("PickupNow") })
+        blockBox:AddButton({ Text = T("Place Now", "วางบล็อกเดี๋ยวนี้"), Func = Request("PlaceNow") })
+    end
+
+    local function BuildFarmCoordination(FarmTab, T, opt, Toggle, Compat, Library)
         local orderBox = FarmTab:AddRightGroupbox(T("Farm vs Training", "ฟาร์มกับฝึก"), "sliders-horizontal")
         Toggle(orderBox, "TrainWhileWaiting", T("Train While Waiting", "ฝึกระหว่างรอ"),
             T("Trains Strength or joins the pool while the pyramid resets", "ฝึกพลังหรือลงสระระหว่างรอพีระมิดใหม่"))
@@ -3892,11 +4379,62 @@ local function BuildInterface()
             Callback = function(value) opt.AlternateMinutes = tonumber(value) or 5 end,
         })
         altSlider:SetVisible(opt.Priority == "Alternate")
+
+        local accelBox = FarmTab:AddRightGroupbox(T("Network Acceleration", "เร่งความเร็วขั้นสูง"), "zap", "OP")
+        local function HandleRaknetToggle(toggle, key, on)
+            opt[key] = on
+            if not on then
+                xDTaraZ.Raknet.Stop()
+                return
+            end
+            task.spawn(function()
+                if not Compat.RaknetLive(1.5) and State.Alive and opt[key] then
+                    Library:Notify("Mario Hub", T("Turn on RakNet in Potassium settings", "กรุณาเปิด RakNet ในตั้งค่า Potassium ก่อน"), 4, "Warn")
+                    toggle:SetValue(false)
+                end
+            end)
+        end
+        local remoteQuarryToggle
+        remoteQuarryToggle = accelBox:AddToggle("RemoteQuarry", {
+            Text = T("Remote Quarry Refill", "เติมบล็อกจากเหมืองระยะไกล"),
+            Description = T("Refills blocks without leaving the pyramid", "เติมบล็อกเต็มความจุโดยไม่ต้องเดินกลับไปที่เหมือง"),
+            Default = false,
+            Callback = function(on) HandleRaknetToggle(remoteQuarryToggle, "RemoteQuarry", on) end,
+        })
+        Compat.NeedCap(remoteQuarryToggle, "Raknet")
+        local packetBurstToggle
+        packetBurstToggle = accelBox:AddToggle("PacketBurst", {
+            Text = T("Instant Pickup Burst", "ดึงบล็อกแบบรวดเดียว"),
+            Description = T("Fills your carry capacity in a single burst", "ดึงบล็อกเข้าตัวพร้อมกันรวดเดียวจนเต็มความจุ"),
+            Default = false,
+            Callback = function(on) HandleRaknetToggle(packetBurstToggle, "PacketBurst", on) end,
+        })
+        Compat.NeedCap(packetBurstToggle, "Raknet")
+        local insaneInstantToggle
+        insaneInstantToggle = accelBox:AddToggle("InsaneInstant", {
+            Text = T("Zero-Delay Instant Farm", "ฟาร์มทันทีไร้ดีเลย์"),
+            Description = T("Continuous high-speed block refill and instant pyramid building", "เติมบล็อกความเร็วสูงต่อเนื่องและสร้างพีระมิดทันที"),
+            Default = false,
+            Callback = function(on)
+                HandleRaknetToggle(insaneInstantToggle, "InsaneInstant", on)
+                if on then
+                    if remoteQuarryToggle then remoteQuarryToggle:SetValue(true) end
+                    if packetBurstToggle then packetBurstToggle:SetValue(true) end
+                end
+            end,
+        })
+        Compat.NeedCap(insaneInstantToggle, "Raknet")
+        accelBox:AddButton({ Text = T("Refill & Place Now", "เติมและวางบล็อกเดี๋ยวนี้"), Func = Request("RaknetCycleNow") })
     end
 
-    local function BuildTraining(window)
-        local GymTab = window:AddTab(T("Training", "ฝึก"), "heart", T("Strength, speed and the pool", "พลัง ความเร็ว และสระ"))
+    local function BuildFarm(window)
+        window:AddTabSection(T("Farming", "ฟาร์ม"))
+        local FarmTab = window:AddTab(T("Auto Farm", "ฟาร์มอัตโนมัติ"), "brick", T("Blocks and coins", "บล็อกและเหรียญ"))
+        BuildFarmCore(FarmTab, T, opt, Toggle, NumberInput)
+        BuildFarmCoordination(FarmTab, T, opt, Toggle, Compat, Library)
+    end
 
+    local function BuildGymSection(GymTab, T, opt, Toggle, NumberInput)
         local gymBox = GymTab:AddLeftGroupbox(T("Gym", "ยิม"), "heart")
         Toggle(gymBox, "AutoStrength", T("Auto Train Strength", "ฝึกพลังอัตโนมัติ"), T("Bench press at your strongest gym", "ยกน้ำหนักที่ยิมแรงสุดที่ใช้ได้"), function(on)
             if not on then
@@ -3942,7 +4480,9 @@ local function BuildInterface()
         NumberInput(gymBox, "TargetSpeed", T("Target Speed Level (0 = never)", "เลเวลความเร็วเป้าหมาย (0 = ไม่หยุด)"), function(value) opt.TargetSpeed = value end)
         Toggle(gymBox, "ReturnTraining", T("Return On Training Stop", "กลับที่เดิมเมื่อหยุดฝึก"))
         gymBox:AddButton({ Text = T("Exit Training Now", "ออกจากการฝึกทันที"), Func = Request("TrainingExit") })
+    end
 
+    local function BuildPoolSection(GymTab, T, opt, Toggle, NumberInput)
         local poolBox = GymTab:AddRightGroupbox(T("Waters of Nu", "สระ Waters of Nu"), "pipe")
         Toggle(poolBox, "AutoPool", T("Auto Join Pool", "ลงสระอัตโนมัติ"), T("Trains in the pool when a pyramid is finished", "ฝึกในสระเมื่อพีระมิดสร้างเสร็จ"), function(on)
             if not on then
@@ -3961,17 +4501,24 @@ local function BuildInterface()
         bankBox:AddButton({ Text = T("Spend Pool Time Now", "ใช้เวลาสระเดี๋ยวนี้"), Func = Request("SecondsNow") })
     end
 
+    local function BuildTraining(window)
+        local GymTab = window:AddTab(T("Training", "ฝึก"), "heart", T("Strength, speed and the pool", "พลัง ความเร็ว และสระ"))
+        BuildGymSection(GymTab, T, opt, Toggle, NumberInput)
+        BuildPoolSection(GymTab, T, opt, Toggle, NumberInput)
+    end
+
     local function BuildShop(window)
         window:AddTabSection(T("Progression", "ความคืบหน้า"))
         local ShopTab = window:AddTab(T("Upgrades & Codes", "อัปเกรดและโค้ด"), "shop", T("Spend coins and redeem codes", "ใช้เหรียญและใส่โค้ด"))
 
         local upgradeBox = ShopTab:AddLeftGroupbox(T("Upgrades", "อัปเกรด"), "coin")
-        Toggle(upgradeBox, "AutoUpgrade", T("Auto Upgrade", "อัปเกรดอัตโนมัติ"), T("Buys the selected upgrades with coins", "ซื้ออัปเกรดที่เลือกด้วยเหรียญ"))
+        Toggle(upgradeBox, "AutoUpgrade", T("Auto Upgrade", "อัปเกรดอัตโนมัติ"), T("Buys the selected upgrades with Coins or Candy Corn", "ซื้ออัปเกรดที่เลือกด้วยเหรียญหรือแคนดี้คอร์น"))
         opt.Upgrades = {}
         for _, name in ipairs(xDTaraZ.UpgradeNames) do opt.Upgrades[name] = true end
         upgradeBox:AddDropdown("Upgrades", {
             Text = T("Upgrades", "อัปเกรด"),
             Values = xDTaraZ.UpgradeNames,
+            Images = xDTaraZ.UpgradeImages,
             Multi = true,
             Default = xDTaraZ.UpgradeNames,
             Callback = function(selected) opt.Upgrades = selected or {} end,
@@ -3985,6 +4532,12 @@ local function BuildInterface()
             Values = { "Best Value", "Cheapest First", "In Order" },
             Default = 1,
             Callback = function(value) opt.UpgradeOrder = value or "Best Value" end,
+        })
+        rulesBox:AddDropdown("UpgradeCurrency", {
+            Text = T("Currency", "สกุลเงินที่ใช้"),
+            Values = { "Auto", "Coins", "Candy Corn" },
+            Default = 1,
+            Callback = function(value) opt.UpgradeCurrency = value or "Auto" end,
         })
         NumberInput(rulesBox, "KeepCoins", T("Keep Coins", "กันเหรียญไว้"), function(value) opt.KeepCoins = value end)
         for _, name in ipairs(xDTaraZ.UpgradeNames) do
@@ -4004,10 +4557,7 @@ local function BuildInterface()
         halloweenShopBox:AddButton({ Text = T("Buy Jack Now", "ซื้อ Jack ทันที"), Func = Request("BuyJackNow") })
     end
 
-    local function BuildPlayer(window)
-        window:AddTabSection(T("Misc", "อื่นๆ"))
-        local PlayerTab = window:AddTab(T("Player", "ผู้เล่น"), "user", T("Movement and teleports", "การเคลื่อนที่และวาร์ป"))
-
+    local function BuildMoveSection(PlayerTab, T, opt, Toggle)
         local moveBox = PlayerTab:AddLeftGroupbox(T("Movement", "การเคลื่อนที่"), "star")
         Toggle(moveBox, "SpeedOn", T("Speed", "ความเร็ว"), nil, Request("Movement"))
             :AddKeyPicker("SpeedOnKey", { Default = "None", Mode = "Toggle" })
@@ -4039,34 +4589,24 @@ local function BuildInterface()
         Toggle(exploitBox, "AntiHazard", T("Anti-Hazard / Godmode", "กันตก / อมตะจากหลุม"),
             T("Prevents void death, fall damage and ragdoll locks", "ป้องกันการตกหลุมตายและอาการล็อกขยับไม่ได้"),
             function(on) xDTaraZ.Exploits.SetAntiHazard(on) end)
-        Toggle(exploitBox, "MaxSimRadius", T("Max Simulation Radius", "ขยายรัศมีฟิสิกส์สูงสุด"),
-            T("Maximizes network simulation ownership radius", "ขยายระยะควบคุมฟิสิกส์เครือข่ายของตัวละครสูงสุด"),
-            function(on) xDTaraZ.Exploits.SetMaxSimRadius(on) end)
         Toggle(exploitBox, "FastInteract", T("Fast Hold Interaction (60/s)", "กดค้างความเร็วสูง (60/วิ)"),
             T("Accelerates manual holding actions to 60/sec", "เร่งความเร็วการกดค้างเองเป็น 60 ครั้งต่อวินาที"),
             function(on) xDTaraZ.Exploits.SetFastInteract(on) end)
-        Toggle(exploitBox, "RaknetOptimizer", T("RakNet Optimization", "เพิ่มประสิทธิภาพ RakNet"),
-            T("Optimizes packet dispatch using Potassium RakNet", "เพิ่มประสิทธิภาพการส่งแพ็กเก็ตผ่าน RakNet ของ Potassium"),
-            function(on)
-                if on and Library.Compat and Library.Compat.RaknetLive and not Library.Compat.RaknetLive() then
-                    Notify(T("Turn on RakNet in Potassium settings", "กรุณาเปิด RakNet ในการตั้งค่า Potassium"), "Warning")
-                    task.defer(function() Library.Toggles.RaknetOptimizer:SetValue(false) end)
-                    return
-                end
-                xDTaraZ.Exploits.SetRaknetOptimizer(on)
-            end)
-        if Library.Compat and Library.Compat.NeedCap then
-            Library.Compat.NeedCap(Library.Toggles.RaknetOptimizer, "Raknet")
-        end
-        exploitBox:AddButton({ Text = T("Claim Sim Radius Now", "รับสิทธิ์คุมฟิสิกส์ทันที"), Func = Request("ClaimSimNow") })
         exploitBox:AddButton({ Text = T("Complete Tutorial Now", "ผ่านติวเตอร์ทันที"), Func = Request("CompleteTutorialNow") })
+    end
 
+    local function BuildTeleportSection(PlayerTab, T)
         local tpBox = PlayerTab:AddRightGroupbox(T("Teleport", "วาร์ป"), "teleport")
         tpBox:AddButton({ Text = T("Halloween World (Portal)", "โลกฮาโลวีน (วาร์ป)"), Func = Request("TpHalloween") })
         tpBox:AddButton({ Text = T("Main World (Portal)", "โลกหลัก (วาร์ป)"), Func = Request("TpMain") })
         tpBox:AddButton({ Text = T("Quarry", "เหมืองหิน"), Func = Request("TpQuarry") })
         tpBox:AddButton({ Text = T("Pyramid", "พีระมิด"), Func = Request("TpPyramid") })
-        tpBox:AddButton({ Text = T("Pool", "สระ"), Func = Request("TpPool") })
+        tpBox:AddButton({ Text = T("Waters of Nu (Pool)", "สระวารีศักดิ์สิทธิ์"), Func = Request("TpPool") })
+        tpBox:AddButton({ Text = T("Eggs Area", "พื้นที่ไข่"), Func = Request("TpEggs") })
+        tpBox:AddButton({ Text = T("Jack NPC", "จุดรับแจ็ค"), Func = Request("TpJack") })
+        tpBox:AddButton({ Text = T("Sun Shrine", "ศาลสุริยัน"), Func = Request("TpSunGod") })
+        tpBox:AddButton({ Text = T("Event Sign", "ป้ายกิจกรรม"), Func = Request("TpEventSign") })
+        tpBox:AddButton({ Text = T("Sign Up Event Now", "ลงทะเบียนกิจกรรมทันที"), Func = Request("SignUpEventNow") })
         local gymDropdown = tpBox:AddDropdown("GymTarget", {
             Text = T("Gym", "ยิม"),
             Values = Values(GymNames),
@@ -4087,12 +4627,19 @@ local function BuildInterface()
         tpBox:AddButton({ Text = T("Go To Player", "ไปหาผู้เล่น"), Func = Request("TpPlayer") })
     end
 
+    local function BuildPlayer(window)
+        window:AddTabSection(T("Misc", "อื่นๆ"))
+        local PlayerTab = window:AddTab(T("Player", "ผู้เล่น"), "user", T("Movement and teleports", "การเคลื่อนที่และวาร์ป"))
+        BuildMoveSection(PlayerTab, T, opt, Toggle)
+        BuildTeleportSection(PlayerTab, T)
+    end
+
     local function BuildSettings(window)
         local settingsTab = window:AddSettingsTab()
         local sessionBox = settingsTab:AddRightGroupbox(T("Session", "เซสชัน"), "gear")
         Toggle(sessionBox, "AutoSkipCutscene", T("Auto Skip Cutscene", "ข้ามคัตซีนอัตโนมัติ"),
             T("Restores camera, HUD and controls after completion", "คืนกล้อง หน้าจอ และการควบคุมหลังสร้างเสร็จ"),
-            function(on) if xDTaraZ.Exploits then xDTaraZ.Exploits.HookCinematic(on) end end)
+            function(on) xDTaraZ.Cutscene.SetAutoSkip(on) end)
         sessionBox:AddButton({ Text = T("Skip Cutscene Now", "ข้ามคัตซีนตอนนี้"), Func = Request("SkipCutsceneNow") })
         Toggle(sessionBox, "AntiAfk", T("Anti AFK", "กันหลุด AFK"), T("Keeps the session active even when automation is off", "คงสถานะแอ็กทีฟแม้ไม่ได้เปิดระบบอัตโนมัติ"))
         Toggle(sessionBox, "AutoRejoin", T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), T("Rejoins by itself after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"))
