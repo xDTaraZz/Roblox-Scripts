@@ -1148,7 +1148,8 @@ end
 ---@param jitter boolean?  pick a random spot inside the region instead of its centre
 function xDTaraZ.Move.QuarrySpot(jitter)
     local region = GameLib.Regions and GameLib.Regions.getPart("Quarry")
-    if not (region and region:IsA("BasePart")) then return Config.QuarrySpot end
+    local fallback = xDTaraZ.Game.World() == "Halloween" and vector3New(601.96, 340, 156.27) or Config.QuarrySpot
+    if not (region and region:IsA("BasePart")) then return fallback end
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.FilterDescendantsInstances = { LocalPlayer.Character, region }
@@ -1162,7 +1163,7 @@ function xDTaraZ.Move.QuarrySpot(jitter)
     local hit = Workspace:Raycast(top, vector3New(0, -region.Size.Y - 50, 0), params)
     local spot = hit and hit.Position + vector3New(0, Config.StandHeight, 0)
     if spot and GameLib.Regions.isWithin("Quarry", spot) then return spot end
-    return Config.QuarrySpot
+    return region.Position + vector3New(0, Config.StandHeight, 0)
 end
 
 function xDTaraZ.Move.GymPart(folder, model, part)
@@ -2069,7 +2070,20 @@ end
 
 function xDTaraZ.Pets.Egg()
     local cfg = GameLib.EggConfig
-    return cfg and cfg.ById[State.Opt.PetEgg]
+    if not cfg then return nil end
+    local curWorld = xDTaraZ.Game.World()
+    local egg = cfg.ById[State.Opt.PetEgg]
+    if egg and (not egg.World or egg.World == curWorld) then
+        return egg
+    end
+    for _, id in ipairs(cfg.AllOrder or cfg.Order or {}) do
+        local candidate = cfg.ById[id]
+        if candidate and (candidate.World == curWorld or not candidate.World) then
+            State.Opt.PetEgg = id
+            return candidate
+        end
+    end
+    return egg
 end
 
 function xDTaraZ.Pets.Amount()
@@ -2885,9 +2899,10 @@ end
 
 function xDTaraZ.Tasks.BuyJack()
     local jackCfg = GameLib.JackConfig
-    local charId = jackCfg and jackCfg.CharacterId or "jack"
+    local charId = jackCfg and (jackCfg.ProductKey or jackCfg.CharacterId) or "jack"
+    local passAttr = jackCfg and jackCfg.OwnsPassAttribute or ("OwnsPass_" .. charId)
     local price = jackCfg and jackCfg.Price or 50000000
-    local owns = LocalPlayer:GetAttribute("OwnsPass_" .. charId) == true
+    local owns = LocalPlayer:GetAttribute(passAttr) == true
     if owns then
         local equipped = LocalPlayer:GetAttribute("EquippedCharacter")
         if equipped ~= charId and GameLib.EquipCharacter then
@@ -2906,29 +2921,35 @@ function xDTaraZ.Tasks.BuyJack()
         xDTaraZ:Notify(("Need %s Candy Corn for Jack (have %s)"):format(xDTaraZ.Format(price), xDTaraZ.Format(candy)))
         return false
     end
-    if not GameLib.ShopPurchase then
-        xDTaraZ:Notify("Shop remote unavailable")
-        return false
-    end
-    local ok, reply = xDTaraZ:Invoke(GameLib.ShopPurchase, charId)
-    if ok == true or (type(reply) == "table" and reply.ok) then
-        xDTaraZ:Notify("Jack purchased!")
-        if GameLib.EquipCharacter then
-            task.wait(0.5)
-            xDTaraZ:Invoke(GameLib.EquipCharacter, charId)
+    if GameLib.ShopPurchase then
+        local ok, reply = xDTaraZ:Invoke(GameLib.ShopPurchase, charId)
+        if ok == true or (type(reply) == "table" and reply.ok) then
+            xDTaraZ:Notify("Jack purchased!")
+            if GameLib.EquipCharacter then
+                task.wait(0.5)
+                xDTaraZ:Invoke(GameLib.EquipCharacter, charId)
+            end
+            return true
         end
+    end
+    local jackArea = Workspace:FindFirstChild("JackArea")
+    local prompt = jackArea and jackArea:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if prompt and typeof(fireproximityprompt) == "function" then
+        fireproximityprompt(prompt)
+        xDTaraZ:Notify("Interacted with Jack NPC!")
         return true
     end
-    xDTaraZ:Notify("Purchase refused: " .. tostring(type(reply) == "table" and reply.reason or reply))
+    xDTaraZ:Notify("Purchase failed: could not buy Jack")
     return false
 end
 
 function xDTaraZ.Tasks.AutoJack()
     if not State.Opt.AutoBuyJack then return end
     local jackCfg = GameLib.JackConfig
-    local charId = jackCfg and jackCfg.CharacterId or "jack"
+    local charId = jackCfg and (jackCfg.ProductKey or jackCfg.CharacterId) or "jack"
+    local passAttr = jackCfg and jackCfg.OwnsPassAttribute or ("OwnsPass_" .. charId)
     local price = jackCfg and jackCfg.Price or 50000000
-    local owns = LocalPlayer:GetAttribute("OwnsPass_" .. charId) == true
+    local owns = LocalPlayer:GetAttribute(passAttr) == true
     if not owns then
         if xDTaraZ.Game.CandyCorn() >= price then
             xDTaraZ.Tasks.BuyJack()
