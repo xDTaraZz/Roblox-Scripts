@@ -1127,17 +1127,6 @@ end
 function xDTaraZ.Spawn.Choices()
     local labels, ids = {}, {}
 
-    local currencies = {
-        { id = "SeasonCoin", name = "Season Coin", kind = "Currency" },
-        { id = "SeasonTicket", name = "Season Ticket", kind = "Currency" },
-        { id = "ClassRoll", name = "Race Roll", kind = "Currency" },
-    }
-    for _, cur in ipairs(currencies) do
-        local label = "Currency • " .. cur.name .. " [" .. cur.id .. "]"
-        labels[#labels + 1] = label
-        ids[label] = { id = cur.id, kind = cur.kind }
-    end
-
     local runeShow = xDTaraZ.GameLib.Need(GameConfig.EnchStone.Show)
     local runeOrder = {
         "Thunder_3", "Poison_3", "Ice_3", "Fire_3",
@@ -3948,7 +3937,7 @@ function xDTaraZ.Pet.HatchStep()
             for eggId, data in pairs(eggCfg or {}) do
                 if data.Loot then
                     for petId, _ in pairs(data.Loot) do
-                        if petId == pId then targetEggId = eggId break end
+                        if petId == pId then targetEggId = eggId; break end
                     end
                 end
             end
@@ -4545,10 +4534,10 @@ function xDTaraZ.Movement.SetFly(enabled)
     local root = char and (char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart)
     local hum = char and char:FindFirstChildOfClass("Humanoid")
     if not enabled then
-        if State.FlyBodyGyro then pcall(function() State.FlyBodyGyro:Destroy() end) State.FlyBodyGyro = nil end
-        if State.FlyBodyVelocity then pcall(function() State.FlyBodyVelocity:Destroy() end) State.FlyBodyVelocity = nil end
+        if State.FlyBodyGyro then pcall(function() State.FlyBodyGyro:Destroy() end); State.FlyBodyGyro = nil end
+        if State.FlyBodyVelocity then pcall(function() State.FlyBodyVelocity:Destroy() end); State.FlyBodyVelocity = nil end
         if hum then hum.PlatformStand = false end
-        if State.FlyConn then State.FlyConn:Disconnect() State.FlyConn = nil end
+        if State.FlyConn then State.FlyConn:Disconnect(); State.FlyConn = nil end
         return
     end
     if not (root and hum) then return end
@@ -4665,8 +4654,9 @@ end
 ---@return number?
 function xDTaraZ.Boss.SinceLastHop()
     local ok, stamp = pcall(readfile, Config.SaveFolder .. "/" .. Config.BossHopFlag)
-    if not ok or not tonumber(stamp) then return nil end
-    return os.time() - tonumber(stamp)
+    local n = ok and tonumber(stamp) or nil
+    if not n then return nil end
+    return os.time() - n
 end
 
 ---@return boolean
@@ -5075,10 +5065,16 @@ local function BuildInterface()
     ---@param done function?
     local function LongAction(name, action, done)
         return Action(function()
-            if State.Lock then return Notify("Busy: " .. State.Lock, "Warning") end
+            if State.Lock then
+                Notify("Busy: " .. State.Lock, "Warning")
+                return
+            end
             Notify(name .. "...")
             local acquired, outcome = xDTaraZ.Util.Exclusive(name, action)
-            if not acquired then return Notify("An inventory task is still running; retry when it finishes", "Warning") end
+            if not acquired then
+                Notify("An inventory task is still running; retry when it finishes", "Warning")
+                return
+            end
             if done then Notify(done(outcome), (outcome == false or outcome == nil or outcome == 0) and "Warning" or "Success") end
         end)
     end
@@ -5171,7 +5167,10 @@ local function BuildInterface()
             local dropdown = Options[idx]
             if not (dropdown and dropdown.SetImages) then return end
             local ok, images, colors = pcall(xDTaraZ.Look.Maps, dropdown.Values, idOf)
-            if not ok then return warn("[LootToForge] item images:", images) end
+            if not ok then
+                warn("[LootToForge] item images:", images)
+                return
+            end
             Later(function()
                 if Options[idx] then Options[idx]:SetImages(images, colors) end
             end)
@@ -5316,7 +5315,10 @@ local function BuildInterface()
         local towerBox = tab:AddRightGroupbox(T("Tower & Season", "หอคอยและซีซั่น"), nil, "OP")
         Feature(towerBox, "AutoTower", T("Auto Farm Tower", "ฟาร์มหอคอยอัตโนมัติ"), T("Top floor loot nonstop on one ticket: rare stones and season coins", "ของชั้นบนสุดไม่หยุดด้วยตั๋วใบเดียว ได้หินหายากและเหรียญซีซั่น"), function(value)
             task.defer(function()
-                if not value then return xDTaraZ.Util.Try(xDTaraZ.Tower.Exit) end
+                if not value then
+                    xDTaraZ.Util.Try(xDTaraZ.Tower.Exit)
+                    return
+                end
                 if not xDTaraZ.Tower.Enter() then Notify("No tower ticket", "Warning") end
             end)
         end)
@@ -5366,11 +5368,14 @@ local function BuildInterface()
         local spawnBox = tab:AddLeftGroupbox(T("Ore & Loot Spawner", "เสกแร่และไอเทม"), nil, "OP")
         Feature(spawnBox, "TurboSpawn", T("Continuous Turbo Spawner", "เสกของรัวต่อเนื่อง"), T("Continuously streams selected or top tier loot directly into your backpack", "ฟาร์มเสกไอเทมที่เลือกหรือไอเทมระดับสูงเข้ากระเป๋าต่อเนื่องแบบไม่หยุด"))
         Pick(spawnBox, "SpawnItem", T("Ore / Item / Pet", "แร่ / ไอเทม / สัตว์เลี้ยง"), T("Every ore, egg, fruit, rune and pet; farmed into inventory", "แร่ ไข่ ผลไม้ รูน และสัตว์เลี้ยงทั้งหมด ดึงเข้ากระเป๋าทันที"), xDTaraZ.Spawn.Choices, true)
-        Decorate("SpawnItem", function(label) local entry = State.SpawnLabels[label] return entry and entry.id end)
+        Decorate("SpawnItem", function(label) local entry = State.SpawnLabels[label]; return entry and entry.id end)
         NumberInput(spawnBox, "SpawnAmount", T("Amount", "จำนวน"), T("Target amount to acquire (up to 1,000,000)", "จำนวนที่ต้องการได้ (สูงสุด 1,000,000)"), 1)
         spawnBox:AddButton({ Text = T("Spawn Selected Item", "เสกไอเทมที่เลือก"), Style = "Primary", Func = Action(function()
             local picked = State.SpawnLabels[opt.SpawnItem]
-            if not picked then return Notify("Pick an item first", "Warning") end
+            if not picked then
+                Notify("Pick an item first", "Warning")
+                return
+            end
             local acquired, outcome, reason = xDTaraZ.Spawn.Give(picked.id, picked.kind, opt.SpawnAmount)
             Notify(acquired and ("Obtained %s"):format(xDTaraZ.Util.Abbreviate(outcome)) or (reason or "Done"), acquired and "Success" or "Warning")
         end) }):AddButton(RefreshButton("SpawnItem", xDTaraZ.Spawn.Choices))
