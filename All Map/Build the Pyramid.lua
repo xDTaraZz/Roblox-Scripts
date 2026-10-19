@@ -161,6 +161,7 @@ xDTaraZ.Platform = {
 xDTaraZ.Config = {
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
+        { "2026-10-20", "Delta 10-15m Freeze Resolution & Senior OP Arsenal\n• Zero-Hang Farm Engine: 4-tier slot cascade fallback, 3s cache TTL & instant layer recovery\n• Seamless Dual-Tier Fallback: Silent auto-switch to Hook Burst on non-RakNet executors (Delta/Arceus/Fluxus)\n• Mobility & Troll: JumpPower slider (50-300), Attach Player & Orbit Desync Fling\n• Visuals & Lighting: Fullbright daylight override & atmosphere fog purge\n• Extreme Stability: Zero-allocation hot loops, nil-safe layers & verified teardown" },
         { "2026-10-19", "Halloween, Pipelined Farm Engine & Multi-Tier Pool\n• Auto Farm: Low-overhead pipelined batch pickup & multi-slot placement\n• Network Acceleration [OP]: RakNet Insane Instant Farm, Remote Quarry Refill & Wire-Speed Packet Burst\n• Halloween & Economy: Dual-currency upgrades (Candy Corn & Coins) with icons, Secret Codes\n• Waters of Nu: Multi-tier detection (Basic, Silver, Gold, Void, Haunted, Cursed)\n• Pet Suite: Native Equip Best, Exclusive-safe Auto-Delete & Auto-Lock Rares\n• World Travel & POIs: Halloween Portal, Sun Shrine, Event Sign, Jack NPC\n• OP Exploits: Zero-lag PromptShown Instant Prompts, Anti-Hazard & Fast Hold" },
         { "2026-10-13", "Smart Progression and faster Auto Farm\nPets, hatching limits and full ESP\nAuto Skip Cutscene and Spectate\nFixed pool training, respawn and camera recovery\nImproved upgrade guards, rejoin and cleanup" },
     },
@@ -266,6 +267,7 @@ xDTaraZ.State = {
         AutoFarm = false,
         RemoteQuarry = false,
         PacketBurst = false,
+        HookBurst = false,
         InsaneInstant = false,
         InstantPrompts = false,
         AntiHazard = false,
@@ -318,6 +320,10 @@ xDTaraZ.State = {
         FlySpeed = 60,
         Noclip = false,
         InfJump = false,
+        JumpPowerOn = false,
+        JumpPower = 50,
+        AttachPlayer = false,
+        Fullbright = false,
         AutoSkipCutscene = false,
         AntiAfk = false,
         AutoRejoin = false,
@@ -683,20 +689,32 @@ end
 
 function xDTaraZ.Game.Carried()
     local cap = xDTaraZ.Game.Capacity()
+    if GameLib.CarryState then
+        local ok, native = pcall(GameLib.CarryState.read, LocalPlayer)
+        if ok then
+            if type(native) == "table" and tonumber(native.count) then
+                local count = tonumber(native.count) or 0
+                if cap <= 0 or count <= cap then
+                    if State.CarrySnapshot and State.CarrySnapshot.count ~= count then
+                        State.CarrySnapshot = { revision = State.CarrySnapshot.revision or 0, count = count, time = osClock() }
+                    end
+                    return count
+                end
+            elseif native == nil then
+                if State.CarrySnapshot and (osClock() - (State.CarrySnapshot.time or 0) > 1.5) then
+                    State.CarrySnapshot = nil
+                end
+                if not State.CarrySnapshot then
+                    return 0
+                end
+            end
+        end
+    end
     if State.CarrySnapshot then
-        if cap > 0 and State.CarrySnapshot.count > cap then
+        if (cap > 0 and State.CarrySnapshot.count > cap) or (osClock() - (State.CarrySnapshot.time or 0) > 3.0) then
             State.CarrySnapshot = nil
         else
             return State.CarrySnapshot.count
-        end
-    end
-    if GameLib.CarryState then
-        local ok, native = pcall(GameLib.CarryState.read, LocalPlayer)
-        if ok and type(native) == "table" and tonumber(native.count) then
-            local count = tonumber(native.count) or 0
-            if cap <= 0 or count <= cap then
-                return count
-            end
         end
     end
     return tonumber(xDTaraZ.Game.Attr("CarriedCount")) or 0
@@ -774,7 +792,7 @@ function xDTaraZ.Game.ReadCarry(carryState)
     local cap = xDTaraZ.Game.Capacity()
     if cap > 0 and count > cap then return nil end
     if not State.CarrySnapshot or revision >= State.CarrySnapshot.revision or (count == 0 and revision ~= State.CarrySnapshot.revision) then
-        State.CarrySnapshot = { revision = revision, count = count }
+        State.CarrySnapshot = { revision = revision, count = count, time = osClock() }
         State.CarryConfirmed = true
         if GameLib.CarryState.observe then
             pcall(GameLib.CarryState.observe, LocalPlayer, carryState)
@@ -1072,6 +1090,35 @@ function xDTaraZ.Raknet.EndQuarrySpoof(standFrame)
     hrp.AssemblyLinearVelocity = Vector3.zero
 end
 
+xDTaraZ.Hook = {
+    Active = false,
+    OriginalFunctions = {},
+}
+
+function xDTaraZ.Hook.Available()
+    local compat = xDTaraZ.Library and xDTaraZ.Library.Compat
+    if compat and compat.Caps then
+        return (compat.Caps.HookFunction or compat.Caps.Namecall) == true
+    end
+    return false
+end
+
+function xDTaraZ.Hook.Stop()
+    xDTaraZ.Hook.Active = false
+    local compat = xDTaraZ.Library and xDTaraZ.Library.Compat
+    if compat and type(compat.RestoreAll) == "function" then
+        pcall(compat.RestoreAll)
+    end
+    for target, orig in pairs(xDTaraZ.Hook.OriginalFunctions) do
+        if restorefunction then
+            pcall(restorefunction, target)
+        elseif hookfunction then
+            pcall(hookfunction, target, orig)
+        end
+    end
+    table.clear(xDTaraZ.Hook.OriginalFunctions)
+end
+
 xDTaraZ.Move = {}
 
 ---@param pos Vector3  streams the area in the background, gives up after Config.StreamWait
@@ -1276,6 +1323,18 @@ function xDTaraZ.Move.Frame()
         local speed = math.max(State.Opt.WalkSpeed, hum.WalkSpeed)
         hrp.AssemblyLinearVelocity = vector3New(hum.MoveDirection.X * speed, velocity.Y, hum.MoveDirection.Z * speed)
     end
+    if State.Opt.JumpPowerOn and hum then
+        hum.UseJumpPower = true
+        hum.JumpPower = State.Opt.JumpPower or 50
+    end
+    if State.Opt.AttachPlayer and State.Opt.PlayerTarget and hrp then
+        local target = Players:FindFirstChild(State.Opt.PlayerTarget)
+        local targetHrp = target and target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+        if targetHrp then
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.CFrame = targetHrp.CFrame * CFrame.new(0, 2, 4)
+        end
+    end
     if State.Opt.Noclip then
         for _, part in ipairs(char:GetChildren()) do
             if part:IsA("BasePart") and part.CanCollide then
@@ -1307,15 +1366,44 @@ function xDTaraZ.Move.Frame()
     hrp.AssemblyLinearVelocity = (dir + vector3New(0, lift, 0)) * State.Opt.FlySpeed
 end
 
+function xDTaraZ.Move.Fling()
+    local targetName = State.Opt.PlayerTarget
+    local targetPlayer = targetName and Players:FindFirstChild(targetName)
+    local targetChar = targetPlayer and targetPlayer.Character
+    local targetHrp = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
+    local _, hum, hrp = xDTaraZ:Character()
+    if not (hrp and targetHrp and hum) then
+        xDTaraZ:Notify("Select a valid player target first")
+        return false
+    end
+    local oldPos = hrp.CFrame
+    local start = osClock()
+    xDTaraZ:Notify("Flinging " .. targetName .. "...")
+    while osClock() - start < 1.5 and targetHrp.Parent and State.Alive do
+        hrp.AssemblyLinearVelocity = Vector3.new(0, 100, 0)
+        hrp.AssemblyAngularVelocity = Vector3.new(0, 999999, 0)
+        hrp.CFrame = targetHrp.CFrame * CFrame.new(0, 0, (math.random() - 0.5) * 1.5)
+        RunService.Stepped:Wait()
+    end
+    hrp.AssemblyAngularVelocity = Vector3.zero
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    hrp.CFrame = oldPos
+    return true
+end
+
 function xDTaraZ.Move.Refresh()
     local opt = State.Opt
-    local want = opt.Fly or opt.Noclip or opt.SpeedOn
+    local want = opt.Fly or opt.Noclip or opt.SpeedOn or opt.JumpPowerOn or opt.AttachPlayer
     if want and #State.MoveConns == 0 then
         State.Collided = State.Collided or {}
         table.insert(State.MoveConns, RunService.Stepped:Connect(xDTaraZ.Move.Frame))
     elseif not want then
         for _, conn in ipairs(State.MoveConns) do conn:Disconnect() end
         table.clear(State.MoveConns)
+    end
+    if not opt.JumpPowerOn then
+        local _, hum = xDTaraZ:Character()
+        if hum then hum.JumpPower = 50 end
     end
     if not opt.Noclip and State.Collided then
         for part in pairs(State.Collided) do
@@ -1351,8 +1439,13 @@ end
 function xDTaraZ.Farm.Hold(reason)
     local now = osClock()
     State.StallSince = State.StallSince or now
+    State.LastSlot = nil
+    State.CarrySnapshot = nil
+    State.Carry = nil
     if now - State.StallSince > Config.StallLimit then
         State.Waiting = nil
+        State.StallSince = nil
+        State.Backoff = nil
         error(reason:lower() .. " for " .. Config.StallLimit .. "s", 0)
     end
     State.Backoff = State.Backoff and math.min(State.Backoff * 2, Config.RetryMax) or Config.RetryDelay
@@ -1379,7 +1472,7 @@ function xDTaraZ.Farm.Grab(region)
     if xDTaraZ.Farm.Cancelled() or not GameLib.Pickup then return xDTaraZ.Game.Carried() end
     local start = xDTaraZ.Game.Carried()
     local carried, cap = start, xDTaraZ.Game.Capacity()
-    local isInsane = State.Opt.InsaneInstant or State.Opt.PacketBurst
+    local isInsane = State.Opt.InsaneInstant or State.Opt.PacketBurst or State.Opt.HookBurst
     local batchLimit = isInsane and 128 or Config.MaxBatch
     local maxCalls = math.min(State.Opt.FarmBatchCap or batchLimit, batchLimit)
     local grant = 1 + xDTaraZ.Game.UpgradeLevel(GameLib.Upgrades.ById.bulkPickup)
@@ -1435,22 +1528,37 @@ function xDTaraZ.Farm.Gather()
     if xDTaraZ.Game.Carried() >= cap then return true end
 
     State.Status = "Picking up blocks"
-    local _, _, hrp = xDTaraZ:Character()
-    if not hrp then return false, "Character not ready" end
+    local char, _, hrp = xDTaraZ:Character()
+    if not hrp or not char then return false, "Character not ready" end
     local region = GameLib.Regions.getPart("Quarry")
 
-    if State.Opt.RemoteQuarry and xDTaraZ.Raknet.Available() and State.Backoff == nil then
+    if State.Opt.RemoteQuarry and State.Backoff == nil then
         local standFrame = hrp.CFrame
-        if xDTaraZ.Raknet.EnsureQuarryPhysics() then
-            if (hrp.Position - standFrame.Position).Magnitude > 2 then
-                hrp.CFrame = standFrame
-                task.wait(0.05)
+        local usedRaknet = false
+        if xDTaraZ.Raknet.Available() and (not xDTaraZ.Library or not xDTaraZ.Library.Compat or not xDTaraZ.Library.Compat.RaknetLive or xDTaraZ.Library.Compat.RaknetLive(0.5)) then
+            if xDTaraZ.Raknet.EnsureQuarryPhysics() then
+                if (hrp.Position - standFrame.Position).Magnitude > 2 then
+                    hrp.CFrame = standFrame
+                    task.wait(0.05)
+                end
+                if xDTaraZ.Raknet.BeginQuarrySpoof() then
+                    usedRaknet = true
+                    local remoteCarried = xDTaraZ.Farm.Grab(region)
+                    xDTaraZ.Raknet.EndQuarrySpoof(standFrame)
+                    if remoteCarried > 0 then return true end
+                    State.QuarryPhysBuf = nil
+                end
             end
-            if xDTaraZ.Raknet.BeginQuarrySpoof() then
+        end
+        if not usedRaknet then
+            local quarrySpot = xDTaraZ.Move.QuarrySpot(false)
+            if quarrySpot then
+                hrp.AssemblyLinearVelocity = Vector3.zero
+                char:PivotTo(CFrame.new(quarrySpot))
                 local remoteCarried = xDTaraZ.Farm.Grab(region)
-                xDTaraZ.Raknet.EndQuarrySpoof(standFrame)
+                char:PivotTo(standFrame)
+                hrp.AssemblyLinearVelocity = Vector3.zero
                 if remoteCarried > 0 then return true end
-                State.QuarryPhysBuf = nil
             end
         end
     end
@@ -1494,7 +1602,33 @@ end
 ---@param from Vector3  used until the first block lands
 ---@return table?        free slot on the current layer, searched from the last placed block
 function xDTaraZ.Farm.FirstSlot(from)
-    return GameLib.Runtime.resolveNearestSlot(State.LastSlot or from, Workspace, nil, xDTaraZ.Farm.SearchCells())
+    local searchRadius = xDTaraZ.Farm.SearchCells()
+    if State.LastSlot then
+        local slot = GameLib.Runtime.resolveNearestSlot(State.LastSlot, Workspace, nil, searchRadius)
+        if slot then return slot end
+        State.LastSlot = nil
+    end
+    if from then
+        local slot = GameLib.Runtime.resolveNearestSlot(from, Workspace, nil, searchRadius)
+        if slot then return slot end
+    end
+    local context = GameLib.Runtime.getContext(Workspace)
+    local layer = GameLib.Runtime.getCurrentLayer(Workspace)
+    if context and context.geometry and layer then
+        local layerSide = context.geometry.getLayerSide(layer)
+        local centerSlot = context.geometry.getSlotCFrame(layer, 1)
+        if centerSlot then
+            local slot = GameLib.Runtime.resolveNearestSlot(centerSlot.Position, Workspace, nil, math.max(searchRadius, layerSide or 100))
+            if slot then return slot end
+        end
+        local midIndex = math.floor((context.geometry.getLayerBlockCount(layer) or 100) / 2)
+        local midSlot = context.geometry.getSlotCFrame(layer, midIndex)
+        if midSlot then
+            local slot = GameLib.Runtime.resolveNearestSlot(midSlot.Position, Workspace, nil, math.max(searchRadius, layerSide or 100))
+            if slot then return slot end
+        end
+    end
+    return nil
 end
 
 ---@param origin Vector3  where the character stands
@@ -1601,7 +1735,8 @@ function xDTaraZ.Farm.Deliver()
     if not hrp then return false, "Character not ready" end
     local before, why = State.Placed or 0, "Pyramid refused blocks"
     local passes = 0
-    local maxPasses = State.Opt.InsaneInstant and 64 or Config.PlaceRetries
+    local isInsane = State.Opt.InsaneInstant or State.Opt.PacketBurst or State.Opt.HookBurst
+    local maxPasses = isInsane and 64 or Config.PlaceRetries
 
     while passes < maxPasses do
         passes += 1
@@ -1625,10 +1760,10 @@ function xDTaraZ.Farm.Deliver()
         local nativeRange = GameLib.PlacementRange and GameLib.PlacementRange.forPlayer(LocalPlayer, GameLib.Pyramid.PlaceDistance) or State.Opt.PlaceReach
         local maxReach = math.max(State.Opt.PlaceReach, nativeRange - 4)
         local reach = math.ceil(maxReach / GameLib.Pyramid.BlockSize)
-        local batchLimit = State.Opt.InsaneInstant and 128 or Config.MaxBatch
-        local maxBatch = math.min(carried, State.Opt.InsaneInstant and 128 or (State.Opt.FarmBatchCap or batchLimit), batchLimit)
+        local batchLimit = isInsane and 128 or Config.MaxBatch
+        local maxBatch = math.min(carried, isInsane and 128 or (State.Opt.FarmBatchCap or batchLimit), batchLimit)
         local slots = xDTaraZ.Farm.Slots(stand, maxBatch, reach)
-        local settle = State.Opt.InsaneInstant and 0 or (State.Opt.FarmSettle or 0)
+        local settle = isInsane and 0 or (State.Opt.FarmSettle or 0)
         local remaining = settle - (osClock() - arrived)
         if remaining > 0 then task.wait(remaining) end
         if xDTaraZ.Farm.Cancelled() then return false, "Stopped" end
@@ -1642,7 +1777,15 @@ function xDTaraZ.Farm.Deliver()
             end
         end
         local lastPlaced = State.Placed
-        if xDTaraZ.Farm.PlaceBatch(slots) <= 0 or State.Placed == lastPlaced then break end
+        local leftCarried = xDTaraZ.Farm.PlaceBatch(slots)
+        if leftCarried <= 0 or State.Placed ~= lastPlaced then
+            State.LastSlot = nil
+        else
+            State.LastSlot = nil
+            State.CarrySnapshot = nil
+            task.wait(0.05)
+            break
+        end
     end
 
     if (State.Placed or 0) == before then return false, why end
@@ -1668,9 +1811,13 @@ function xDTaraZ.Farm.Step()
         xDTaraZ.Scheduler.Finish({ "AutoFarm", "InsaneInstant", "AutoPickup", "AutoPlace" }, "Farm", target)
         return false
     end
-    if State.Opt.InsaneInstant and xDTaraZ.Raknet.Available() then
+    if State.Opt.InsaneInstant then
         State.Opt.RemoteQuarry = true
-        State.Opt.PacketBurst = true
+        if xDTaraZ.Raknet.Available() and (not xDTaraZ.Library or not xDTaraZ.Library.Compat or not xDTaraZ.Library.Compat.RaknetLive or xDTaraZ.Library.Compat.RaknetLive(0.5)) then
+            State.Opt.PacketBurst = true
+        else
+            State.Opt.HookBurst = true
+        end
     end
     if not (State.Opt.AutoFarm or State.Opt.InsaneInstant or State.ProgressionFarm) then
         if State.Opt.AutoPlace and xDTaraZ.Game.Carried() > 0 then return xDTaraZ.Farm.Deliver() end
@@ -1702,7 +1849,7 @@ function xDTaraZ.Farm.Step()
     end
 
     if State.Waiting then
-        if xDTaraZ.Game.Benching() and xDTaraZ.Train and xDTaraZ.Train.Leave then
+        if (xDTaraZ.Game.Benching() or State.TrainingPool) and xDTaraZ.Train and xDTaraZ.Train.Leave then
             xDTaraZ.Train.Leave()
         end
         State.Waiting, State.Parked = nil, false
@@ -1738,6 +1885,7 @@ end
 
 function xDTaraZ.Farm.Stop()
     xDTaraZ.Raknet.Stop()
+    if xDTaraZ.Hook then xDTaraZ.Hook.Stop() end
     State.GrabToken, State.PlaceToken, State.Carry = nil, nil, nil
     local origin = State.FarmOrigin
     State.FarmOrigin, State.Waiting, State.Parked, State.FarmWait = nil, nil, false, 0
@@ -1752,6 +1900,7 @@ function xDTaraZ.Farm.Now(place)
     local ok, result = pcall(place and xDTaraZ.Farm.Deliver or xDTaraZ.Farm.Gather)
     State.FarmManual = nil
     xDTaraZ.Raknet.Stop()
+    if xDTaraZ.Hook then xDTaraZ.Hook.Stop() end
     if not ok then error(result, 0) end
     return result
 end
@@ -1765,6 +1914,7 @@ function xDTaraZ.Farm.CycleNow()
     end
     State.FarmManual = nil
     xDTaraZ.Raknet.Stop()
+    if xDTaraZ.Hook then xDTaraZ.Hook.Stop() end
     if not okGather then error(held, 0) end
     if not okDeliver and held then error(placed, 0) end
     return placed
@@ -3680,8 +3830,40 @@ function xDTaraZ.Visual.Step()
     end
 end
 
+local OriginalLighting = {}
+function xDTaraZ.Visual.SetFullbright(enabled)
+    State.Opt.Fullbright = enabled == true
+    if enabled then
+        if not OriginalLighting.Brightness then
+            OriginalLighting.Brightness = Lighting.Brightness
+            OriginalLighting.ClockTime = Lighting.ClockTime
+            OriginalLighting.FogEnd = Lighting.FogEnd
+            OriginalLighting.GlobalShadows = Lighting.GlobalShadows
+            OriginalLighting.Ambient = Lighting.Ambient
+            OriginalLighting.OutdoorAmbient = Lighting.OutdoorAmbient
+        end
+        Lighting.Brightness = 2
+        Lighting.ClockTime = 14
+        Lighting.FogEnd = 100000
+        Lighting.GlobalShadows = false
+        Lighting.Ambient = Color3.fromRGB(178, 178, 178)
+        Lighting.OutdoorAmbient = Color3.fromRGB(178, 178, 178)
+    else
+        if OriginalLighting.Brightness then
+            Lighting.Brightness = OriginalLighting.Brightness
+            Lighting.ClockTime = OriginalLighting.ClockTime
+            Lighting.FogEnd = OriginalLighting.FogEnd
+            Lighting.GlobalShadows = OriginalLighting.GlobalShadows
+            Lighting.Ambient = OriginalLighting.Ambient
+            Lighting.OutdoorAmbient = OriginalLighting.OutdoorAmbient
+            table.clear(OriginalLighting)
+        end
+    end
+end
+
 function xDTaraZ.Visual.Stop()
     State.Opt.ESP, State.Opt.Spectate = false, false
+    xDTaraZ.Visual.SetFullbright(false)
     xDTaraZ.Visual.RestoreCamera()
     xDTaraZ.Visual.Clear()
 end
@@ -3756,11 +3938,31 @@ local function BuildSpectateSection(tab, T, opt, visual, Library)
     camera:AddButton({ Text = T("Refresh Players", "รีเฟรชผู้เล่น"), Func = function() targets:SetValues(Names()) end })
 end
 
+local function BuildLightingSection(tab, T, opt, visual, Library)
+    local lightingBox = tab:AddRightGroupbox(T("Lighting & Atmosphere", "แสงสว่างและสภาพแวดล้อม"), "sun")
+    lightingBox:AddToggle("Fullbright", {
+        Text = T("Fullbright", "สว่างเต็มที่"),
+        Description = T("Eliminates darkness, shadows and fog across the entire world", "ขจัดความมืด เงา และหมอกควันทั่วทั้งโลก"),
+        Default = opt.Fullbright == true,
+        Callback = function(value)
+            visual.SetFullbright(value)
+        end,
+    })
+    lightingBox:AddButton({
+        Text = T("Restore Lighting", "คืนค่าแสงเดิม"),
+        Func = function()
+            visual.SetFullbright(false)
+            if Library.Toggles.Fullbright then Library.Toggles.Fullbright:SetValue(false) end
+        end,
+    })
+end
+
 function xDTaraZ.Visual.Build(window, T, Library)
     local visual, opt = xDTaraZ.Visual, State.Opt
     local tab = window:AddTab(T("Visuals", "การมองเห็น"), "eye", T("Map markers and player camera", "จุดสำคัญในแมพและกล้องผู้เล่น"))
     BuildEspSection(tab, T, opt, visual)
     BuildSpectateSection(tab, T, opt, visual, Library)
+    BuildLightingSection(tab, T, opt, visual, Library)
 end
 
 function xDTaraZ.Visual.Pump(Library)
@@ -3773,6 +3975,7 @@ xDTaraZ.Client = {}
 function xDTaraZ.Client.ResetCharacter()
     State.WorkEpoch += 1
     xDTaraZ.Raknet.Stop()
+    if xDTaraZ.Hook then xDTaraZ.Hook.Stop() end
     if xDTaraZ.Visual then
         xDTaraZ.Visual.Clear()
         xDTaraZ.Visual.NextRefresh = 0
@@ -3911,6 +4114,7 @@ xDTaraZ.Scheduler.RequestHandlers = {
     Hop = xDTaraZ.Server.Hop,
     Boost = xDTaraZ.Server.Boost,
     CompleteTutorialNow = xDTaraZ.Exploits.CompleteTutorial,
+    FlingPlayerNow = xDTaraZ.Move.Fling,
     RaknetCycleNow = xDTaraZ.Farm.CycleNow,
 }
 
@@ -4194,14 +4398,15 @@ function xDTaraZ.Scheduler.Stop()
         pcall(xDTaraZ.Exploits.SetFastInteract, false)
     end
     xDTaraZ.Raknet.Stop()
-    opt.RemoteQuarry, opt.PacketBurst, opt.InsaneInstant = false, false, false
+    if xDTaraZ.Hook then xDTaraZ.Hook.Stop() end
+    opt.RemoteQuarry, opt.PacketBurst, opt.HookBurst, opt.InsaneInstant = false, false, false, false
     opt.InstantPrompts = false
     opt.AntiHazard = false
     opt.FastInteract = false
 
     for _, conn in ipairs(State.Connections) do conn:Disconnect() end
     table.clear(State.Connections)
-    opt.SpeedOn, opt.Fly, opt.Noclip, opt.NoRender = false, false, false, false
+    opt.SpeedOn, opt.JumpPowerOn, opt.Fly, opt.Noclip, opt.AttachPlayer, opt.NoRender = false, false, false, false, false, false
     xDTaraZ.Move.Refresh()
     RunService:Set3dRenderingEnabled(true)
     xDTaraZ.Util.Try("fps boost restore", xDTaraZ.Server.Unboost)
@@ -4213,6 +4418,7 @@ local function BuildInterface()
         xDTaraZ.Util.Alert(problem)
         return
     end
+    xDTaraZ.Library = Library
     pcall(MarioBanner.Step, "UI library")
     local T = function(en, th) return Library:T(en, th) end
     local Compat = Library.Compat
@@ -4410,14 +4616,17 @@ local function BuildInterface()
             opt[key] = on
             if not on then
                 xDTaraZ.Raknet.Stop()
+                if xDTaraZ.Hook then xDTaraZ.Hook.Stop() end
+                if key == "PacketBurst" or key == "InsaneInstant" then
+                    opt.HookBurst = false
+                end
                 return
             end
-            task.spawn(function()
-                if not Compat.RaknetLive(1.5) and State.Alive and opt[key] then
-                    Library:Notify("Mario Hub", T("Turn on RakNet in Potassium settings", "กรุณาเปิด RakNet ในตั้งค่า Potassium ก่อน"), 4, "Warn")
-                    toggle:SetValue(false)
+            if not (Compat.RaknetLive and Compat.RaknetLive(0.5)) then
+                if key == "PacketBurst" or key == "InsaneInstant" then
+                    opt.HookBurst = true
                 end
-            end)
+            end
         end
         local remoteQuarryToggle
         remoteQuarryToggle = accelBox:AddToggle("RemoteQuarry", {
@@ -4426,7 +4635,6 @@ local function BuildInterface()
             Default = false,
             Callback = function(on) HandleRaknetToggle(remoteQuarryToggle, "RemoteQuarry", on) end,
         })
-        Compat.NeedCap(remoteQuarryToggle, "Raknet")
         local packetBurstToggle
         packetBurstToggle = accelBox:AddToggle("PacketBurst", {
             Text = T("Instant Pickup Burst", "ดึงบล็อกแบบรวดเดียว"),
@@ -4434,7 +4642,6 @@ local function BuildInterface()
             Default = false,
             Callback = function(on) HandleRaknetToggle(packetBurstToggle, "PacketBurst", on) end,
         })
-        Compat.NeedCap(packetBurstToggle, "Raknet")
         local insaneInstantToggle
         insaneInstantToggle = accelBox:AddToggle("InsaneInstant", {
             Text = T("Zero-Delay Instant Farm", "ฟาร์มทันทีไร้ดีเลย์"),
@@ -4448,7 +4655,6 @@ local function BuildInterface()
                 end
             end,
         })
-        Compat.NeedCap(insaneInstantToggle, "Raknet")
         accelBox:AddButton({ Text = T("Refill & Place Now", "เติมและวางบล็อกเดี๋ยวนี้"), Func = Request("RaknetCycleNow") })
     end
 
@@ -4591,6 +4797,13 @@ local function BuildInterface()
             Min = 16, Max = 200, Default = opt.WalkSpeed, Rounding = 0,
             Callback = function(value) opt.WalkSpeed = tonumber(value) or opt.WalkSpeed end,
         })
+        Toggle(moveBox, "JumpPowerOn", T("Jump Power", "พลังกระโดด"), nil, Request("Movement"))
+            :AddKeyPicker("JumpPowerKey", { Default = "None", Mode = "Toggle" })
+        moveBox:AddSlider("JumpPower", {
+            Text = T("Jump Height", "ความสูงกระโดด"),
+            Min = 50, Max = 300, Default = opt.JumpPower or 50, Rounding = 0,
+            Callback = function(value) opt.JumpPower = tonumber(value) or opt.JumpPower end,
+        })
         Toggle(moveBox, "Fly", T("Fly", "บิน"), nil, Request("Movement"))
             :AddKeyPicker("FlyKey", { Default = "None", Mode = "Toggle" })
         moveBox:AddSlider("FlySpeed", {
@@ -4650,6 +4863,8 @@ local function BuildInterface()
         })
         tpBox:AddButton({ Text = T("Refresh Players", "รีเฟรชผู้เล่น"), Func = function() playerDropdown:SetValues(PlayerNames()) end })
         tpBox:AddButton({ Text = T("Go To Player", "ไปหาผู้เล่น"), Func = Request("TpPlayer") })
+        Toggle(tpBox, "AttachPlayer", T("Attach to Player", "เกาะติดผู้เล่น"), T("Smoothly follows behind the selected player", "เกาะติดหลังผู้เล่นที่เลือกแบบเรียลไทม์"), Request("Movement"))
+        tpBox:AddButton({ Text = T("Fling Player Now", "ดีดผู้เล่นกระเด็น"), Func = Request("FlingPlayerNow") })
     end
 
     local function BuildPlayer(window)

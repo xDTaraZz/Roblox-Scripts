@@ -366,12 +366,12 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 - **Waters of Nu Pool**: multi-tier pool detection (Basic, Silver, Gold, Void, Haunted, Cursed) with safe return
 - **Auto Upgrade**: dual-currency support (Coins & Candy Corn), level caps, best value scoring, custom order and coin reserve
 - **Pet Suite**: auto hatch, native Equip Best, auto-delete unlocked pets, auto-lock rares, individual pet management
-- **OP Exploits**: Instant Proximity Prompts (0s hold duration), Anti-Hazard / Godmode, Fast Hold Interaction (60/s)
+- **OP Exploits**: Instant Proximity Prompts (0s hold duration), Anti-Hazard / Godmode, Fast Hold Interaction (60/s), Orbit Desync Fling
 - **ESP**: players, quarry, pyramid, pool, gyms, eggs, event sign, sun god and Jack NPC with distance and display controls
 - **Spectate**, Auto Skip Cutscene and 1-Click Complete Tutorial
 - Separate bank resource controls, free gifts, secret codes and live farm status
 - Teleport to all POIs, worlds and players; return after farming, training or hatching
-- Speed, fly, noclip, infinite jump, anti AFK, FPS boost, disable 3D rendering, rejoin and server hop
+- Speed, jump power, fly, noclip, infinite jump, fullbright, troll attach and fling, anti AFK, FPS boost, disable 3D rendering, rejoin and server hop
 - English / Thai UI, saved settings and mobile menu controls
 
 </details>
