@@ -160,7 +160,7 @@ xDTaraZ.Platform = {
 xDTaraZ.Config = {
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
-        { "2026-10-19", "Halloween World, Turbo Farm & Cursed Egg\n• Halloween World: 1-Click portal travel and CandyCorn auto-farming\n• Cursed Egg & Secret Pets: Auto hatch GrimReaper & Osiris with CandyCorn\n• Super-Quick Jack: Auto buy and equip Jack character for triple perks\n• Turbo Farm: Instant grab & multi-slot placement with zero latency\n• Pyramid Tier Picker: Auto request Void, Gold or Cursed 25x tiers" },
+        { "2026-10-19", "Halloween, OP Exploits & Ultra Farm\n• OP Exploits: Instant Prompts, Anti-Hazard Godmode & Max Sim Radius\n• Ultra Farm: 60/s native limit throughput with parallel pipelining\n• Fast Interact: 60/s hold burst hook on all manual actions\n• RakNet Optimization: Potassium raw packet integration\n• Halloween & Cursed Egg: Auto hatch & Jack character auto-equip" },
         { "2026-10-13", "Smart Progression and faster Auto Farm\nPets, hatching limits and full ESP\nAuto Skip Cutscene and Spectate\nFixed pool training, respawn and camera recovery\nImproved upgrade guards, rejoin and cleanup" },
     },
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
@@ -263,6 +263,11 @@ xDTaraZ.State = {
         AutoFarm = false,
         FarmMode = "Normal",
         PreferredTier = "Auto",
+        InstantPrompts = false,
+        AntiHazard = false,
+        MaxSimRadius = false,
+        FastInteract = false,
+        RaknetOptimizer = false,
         AutoPickup = false,
         AutoPlace = false,
         AutoHatch = false,
@@ -506,6 +511,10 @@ do
         Knit = Wait(Wait(ReplicatedStorage, "Packages"), "Knit"),
         Progression = Wait(Wait(Shared, "Stats"), "StatProgression"),
         PlacementRange = Shared:FindFirstChild("Placement") and Shared.Placement:FindFirstChild("PlacementRange"),
+        CharacterAccess = Shared:FindFirstChild("CharacterAccess"),
+        CharacterConfig = SharedConfig:FindFirstChild("CharacterConfig"),
+        PyramidFallPhysics = Shared:FindFirstChild("Movement") and Shared.Movement:FindFirstChild("PyramidFallPhysics"),
+        PyramidHazardConfig = SharedConfig:FindFirstChild("PyramidHazardConfig"),
     }
     for key, module in pairs(modules) do
         GameLib[key] = GameLib.Require(module)
@@ -542,6 +551,13 @@ GameLib.BoostState = Remote("ServerBoostService", "RF", "GetState")
 GameLib.RequestTierPick = Remote("PyramidService", "RF", "RequestTierPick")
 GameLib.ShopPurchase = Remote("ShopService", "RF", "RequestPassPurchase")
 GameLib.EquipCharacter = Remote("ShopService", "RF", "EquipCharacter")
+GameLib.FallDied = Remote("PyramidHazardService", "RE", "FallDied")
+GameLib.TutorialComplete = Remote("TutorialService", "RF", "Complete")
+GameLib.TutorialSkip = Remote("TutorialService", "RF", "Skip")
+GameLib.SettingsSet = Remote("SettingsService", "RF", "Set")
+GameLib.SettingsGetAll = Remote("SettingsService", "RF", "GetAll")
+GameLib.PyramidState = Remote("PyramidService", "RF", "GetState")
+GameLib.PyramidCapacity = Remote("PyramidService", "RF", "GetRemainingCapacity")
 
 
 xDTaraZ.UpgradeByName = {}
@@ -747,6 +763,300 @@ function xDTaraZ.Game.WatchStats()
         table.insert(State.Connections, conn)
     end)
     if not ok then warn("[BuildThePyramid] stats:", err) end
+end
+
+function xDTaraZ.Game.PyramidState()
+    if not GameLib.PyramidState then return nil end
+    local ok, res = pcall(function() return GameLib.PyramidState:InvokeServer() end)
+    return ok and type(res) == "table" and res or nil
+end
+
+xDTaraZ.Exploits = {
+    OriginalPromptDurations = {},
+    PromptConn = nil,
+    HazardConn = nil,
+    SimConn = nil,
+    OriginalCharacterLook = nil,
+    OriginalHoldBurst = nil,
+    OriginalHoldInterval = nil,
+    OriginalHoldDelay = nil,
+    OriginalHazardStart = nil,
+    OriginalCinematicPlay = nil,
+    RaknetLive = false,
+    RaknetPackets = 0,
+    RaknetSendHook = nil,
+}
+
+function xDTaraZ.Exploits.SetInstantPrompts(enabled)
+    local fn = setproximitypromptduration
+    if enabled then
+        local function Apply(prompt)
+            if prompt and prompt:IsA("ProximityPrompt") then
+                if xDTaraZ.Exploits.OriginalPromptDurations[prompt] == nil then
+                    xDTaraZ.Exploits.OriginalPromptDurations[prompt] = prompt.HoldDuration
+                end
+                if fn then
+                    pcall(fn, prompt, 0)
+                else
+                    pcall(function() prompt.HoldDuration = 0 end)
+                end
+            end
+        end
+        for _, desc in ipairs(Workspace:GetDescendants()) do
+            Apply(desc)
+        end
+        if not xDTaraZ.Exploits.PromptConn then
+            xDTaraZ.Exploits.PromptConn = Workspace.DescendantAdded:Connect(function(desc)
+                if State.Alive and State.Opt.InstantPrompts then
+                    Apply(desc)
+                end
+            end)
+            table.insert(State.Connections, xDTaraZ.Exploits.PromptConn)
+        end
+    else
+        if xDTaraZ.Exploits.PromptConn then
+            xDTaraZ.Exploits.PromptConn:Disconnect()
+            xDTaraZ.Exploits.PromptConn = nil
+        end
+        for prompt, orig in pairs(xDTaraZ.Exploits.OriginalPromptDurations) do
+            if prompt and prompt.Parent then
+                if fn then
+                    pcall(fn, prompt, orig)
+                else
+                    pcall(function() prompt.HoldDuration = orig end)
+                end
+            end
+        end
+        table.clear(xDTaraZ.Exploits.OriginalPromptDurations)
+    end
+end
+
+function xDTaraZ.Exploits.SetMaxSimRadius(enabled)
+    local setSim = setsimulationradius
+    if enabled then
+        if not setSim then return end
+        if not xDTaraZ.Exploits.SimConn then
+            xDTaraZ.Exploits.SimConn = RunService.Stepped:Connect(function()
+                if not State.Alive or not State.Opt.MaxSimRadius then return end
+                pcall(setSim, 1e9, 1e9)
+                local setHidden = sethiddenproperty
+                if setHidden then
+                    pcall(setHidden, LocalPlayer, "SimulationRadius", 1e9)
+                    pcall(setHidden, LocalPlayer, "MaxSimulationRadius", 1e9)
+                end
+            end)
+            table.insert(State.Connections, xDTaraZ.Exploits.SimConn)
+        end
+    else
+        if xDTaraZ.Exploits.SimConn then
+            xDTaraZ.Exploits.SimConn:Disconnect()
+            xDTaraZ.Exploits.SimConn = nil
+        end
+        if setSim then
+            pcall(setSim, 100, 100)
+        end
+    end
+end
+
+function xDTaraZ.Exploits.SetAntiHazard(enabled)
+    local fallPhysics = GameLib.PyramidFallPhysics
+    if enabled then
+        if fallPhysics and type(fallPhysics) == "table" and type(fallPhysics.start) == "function" then
+            if not xDTaraZ.Exploits.OriginalHazardStart then
+                xDTaraZ.Exploits.OriginalHazardStart = fallPhysics.start
+                pcall(function()
+                    if setreadonly then setreadonly(fallPhysics, false) end
+                    fallPhysics.start = function(char, hum, hrp, janitor)
+                        if State.Alive and State.Opt.AntiHazard and char == LocalPlayer.Character then
+                            return
+                        end
+                        if xDTaraZ.Exploits.OriginalHazardStart then
+                            return xDTaraZ.Exploits.OriginalHazardStart(char, hum, hrp, janitor)
+                        end
+                    end
+                end)
+            end
+        end
+
+        if not xDTaraZ.Exploits.HazardConn then
+            xDTaraZ.Exploits.HazardConn = RunService.Heartbeat:Connect(function()
+                if not State.Alive or not State.Opt.AntiHazard then return end
+                local char = LocalPlayer.Character
+                if not char then return end
+                if char:GetAttribute("PyramidFallId") then
+                    pcall(function() char:SetAttribute("PyramidFallId", nil) end)
+                end
+                local hrp = char:FindFirstChild("HumanoidRootPart")
+                local hum = char:FindFirstChildOfClass("Humanoid")
+                if hrp and hrp.Position.Y < -80 then
+                    hrp.AssemblyLinearVelocity = Vector3.zero
+                    local safeSpot = Config.QuarrySpot or vector3New(-234, -16, 38)
+                    hrp.CFrame = CFrame.new(safeSpot + vector3New(0, 5, 0))
+                    if hum then
+                        hum.PlatformStand = false
+                        hum.Sit = false
+                    end
+                end
+            end)
+            table.insert(State.Connections, xDTaraZ.Exploits.HazardConn)
+        end
+    else
+        if xDTaraZ.Exploits.HazardConn then
+            xDTaraZ.Exploits.HazardConn:Disconnect()
+            xDTaraZ.Exploits.HazardConn = nil
+        end
+        if fallPhysics and xDTaraZ.Exploits.OriginalHazardStart then
+            pcall(function()
+                if setreadonly then setreadonly(fallPhysics, false) end
+                fallPhysics.start = xDTaraZ.Exploits.OriginalHazardStart
+            end)
+            xDTaraZ.Exploits.OriginalHazardStart = nil
+        end
+    end
+end
+
+function xDTaraZ.Exploits.SetFastInteract(enabled)
+    local charAccess = GameLib.CharacterAccess
+    if not (charAccess and type(charAccess) == "table") then return end
+    if enabled then
+        if not xDTaraZ.Exploits.OriginalHoldBurst and type(charAccess.holdRepeatBurst) == "function" then
+            xDTaraZ.Exploits.OriginalHoldBurst = charAccess.holdRepeatBurst
+            charAccess.holdRepeatBurst = function(player)
+                if State.Alive and State.Opt.FastInteract then
+                    return 60
+                end
+                return xDTaraZ.Exploits.OriginalHoldBurst(player)
+            end
+        end
+        if not xDTaraZ.Exploits.OriginalHoldInterval and type(charAccess.holdRepeatInterval) == "function" then
+            xDTaraZ.Exploits.OriginalHoldInterval = charAccess.holdRepeatInterval
+            charAccess.holdRepeatInterval = function(player, interval)
+                if State.Alive and State.Opt.FastInteract then
+                    return 0
+                end
+                return xDTaraZ.Exploits.OriginalHoldInterval(player, interval)
+            end
+        end
+        if not xDTaraZ.Exploits.OriginalHoldDelay and type(charAccess.holdRepeatDelay) == "function" then
+            xDTaraZ.Exploits.OriginalHoldDelay = charAccess.holdRepeatDelay
+            charAccess.holdRepeatDelay = function(player, delay)
+                if State.Alive and State.Opt.FastInteract then
+                    return 0
+                end
+                return xDTaraZ.Exploits.OriginalHoldDelay(player, delay)
+            end
+        end
+        if not xDTaraZ.Exploits.OriginalCharacterLook and type(charAccess.look) == "function" then
+            xDTaraZ.Exploits.OriginalCharacterLook = charAccess.look
+            charAccess.look = function(player)
+                if State.Alive and State.Opt.FastInteract then
+                    return {
+                        instafillRepeatInterval = 0,
+                        instafillRepeatDelay = 0,
+                        instafillActionsPerFrame = 60,
+                        placeDistanceMultiplier = 8,
+                        completionMultiplier = 4,
+                    }
+                end
+                return xDTaraZ.Exploits.OriginalCharacterLook(player)
+            end
+        end
+    else
+        if xDTaraZ.Exploits.OriginalHoldBurst then
+            charAccess.holdRepeatBurst = xDTaraZ.Exploits.OriginalHoldBurst
+            xDTaraZ.Exploits.OriginalHoldBurst = nil
+        end
+        if xDTaraZ.Exploits.OriginalHoldInterval then
+            charAccess.holdRepeatInterval = xDTaraZ.Exploits.OriginalHoldInterval
+            xDTaraZ.Exploits.OriginalHoldInterval = nil
+        end
+        if xDTaraZ.Exploits.OriginalHoldDelay then
+            charAccess.holdRepeatDelay = xDTaraZ.Exploits.OriginalHoldDelay
+            xDTaraZ.Exploits.OriginalHoldDelay = nil
+        end
+        if xDTaraZ.Exploits.OriginalCharacterLook then
+            charAccess.look = xDTaraZ.Exploits.OriginalCharacterLook
+            xDTaraZ.Exploits.OriginalCharacterLook = nil
+        end
+    end
+end
+
+function xDTaraZ.Exploits.SetRaknetOptimizer(enabled)
+    local rk = raknet
+    if not (rk and type(rk.add_send_hook) == "function") then return end
+    if enabled then
+        if not xDTaraZ.Exploits.RaknetSendHook then
+            xDTaraZ.Exploits.RaknetSendHook = rk.add_send_hook(function(packet)
+                if State.Alive and State.Opt.RaknetOptimizer then
+                    xDTaraZ.Exploits.RaknetPackets += 1
+                end
+            end)
+        end
+        xDTaraZ.Exploits.RaknetLive = true
+    else
+        if xDTaraZ.Exploits.RaknetSendHook and type(rk.remove_send_hook) == "function" then
+            pcall(rk.remove_send_hook, xDTaraZ.Exploits.RaknetSendHook)
+            xDTaraZ.Exploits.RaknetSendHook = nil
+        end
+        xDTaraZ.Exploits.RaknetLive = false
+    end
+end
+
+function xDTaraZ.Exploits.CompleteTutorial()
+    if GameLib.TutorialComplete then
+        local ok, res = pcall(function() return GameLib.TutorialComplete:InvokeServer() end)
+        if ok and type(res) == "table" and res.ok then
+            xDTaraZ:Notify("Tutorial completed! (Step 6 reached)")
+            return true
+        end
+    end
+    if GameLib.TutorialSkip then
+        local ok, res = pcall(function() return GameLib.TutorialSkip:InvokeServer() end)
+        if ok and type(res) == "table" and res.ok then
+            xDTaraZ:Notify("Tutorial skipped!")
+            return true
+        end
+    end
+    return false
+end
+
+function xDTaraZ.Exploits.HookCinematic(enabled)
+    if GameLib.SettingsSet then
+        pcall(function() GameLib.SettingsSet:InvokeServer("completionCutscene", not enabled) end)
+    end
+    local cinematic = GameLib.Cinematic
+    if not (cinematic and type(cinematic) == "table") then return end
+    if enabled then
+        if not xDTaraZ.Exploits.OriginalCinematicPlay and type(cinematic.Play) == "function" then
+            xDTaraZ.Exploits.OriginalCinematicPlay = cinematic.Play
+            cinematic.Play = function(self, ...)
+                if State.Alive and State.Opt.AutoSkipCutscene then
+                    return
+                end
+                return xDTaraZ.Exploits.OriginalCinematicPlay(self, ...)
+            end
+        end
+        if cinematic._playing and type(cinematic.Stop) == "function" then
+            pcall(cinematic.Stop, cinematic)
+        end
+    else
+        if xDTaraZ.Exploits.OriginalCinematicPlay then
+            cinematic.Play = xDTaraZ.Exploits.OriginalCinematicPlay
+            xDTaraZ.Exploits.OriginalCinematicPlay = nil
+        end
+    end
+end
+
+function xDTaraZ.Exploits.SkipCutscene()
+    xDTaraZ.Exploits.HookCinematic(true)
+    local cinematic = GameLib.Cinematic
+    if cinematic and type(cinematic.Stop) == "function" then
+        pcall(cinematic.Stop, cinematic)
+    end
+    if cinematic and type(cinematic.ExitWithTransition) == "function" then
+        pcall(cinematic.ExitWithTransition, cinematic)
+    end
+    xDTaraZ:Notify("Cutscene skipped")
 end
 
 xDTaraZ.Move = {}
@@ -1034,7 +1344,9 @@ end
 ---@return number, number  blocks carried after the batch, calls that were refused or never answered
 function xDTaraZ.Farm.GrabBatch(region, calls, carried)
     if xDTaraZ.Farm.Cancelled() then return carried, 0 end
-    calls = math.min(calls, State.Opt.FarmBatchCap, Config.MaxBatch)
+    local isUltra = State.Opt.FarmMode == "Ultra (60/s)"
+    local maxCalls = isUltra and 60 or math.min(State.Opt.FarmBatchCap, Config.MaxBatch)
+    calls = math.min(calls, maxCalls)
     local token = {}
     State.GrabToken = token
     local pending, failed = calls, 0
@@ -1055,7 +1367,8 @@ function xDTaraZ.Farm.GrabBatch(region, calls, carried)
         end)
     end
 
-    local deadline = osClock() + Config.PickupTimeout
+    local timeout = isUltra and 1 or Config.PickupTimeout
+    local deadline = osClock() + timeout
     while pending > 0 and osClock() < deadline and not xDTaraZ.Farm.Cancelled() do task.wait() end
     if State.Alive then State.GrabToken = nil end
     return carried, failed + pending
@@ -1206,7 +1519,9 @@ function xDTaraZ.Farm.PlaceBatch(slots)
         end)
     end
 
-    local deadline = osClock() + Config.PlaceTimeout
+    local isUltra = State.Opt.FarmMode == "Ultra (60/s)"
+    local timeout = isUltra and 1 or Config.PlaceTimeout
+    local deadline = osClock() + timeout
     while pending > 0 and osClock() < deadline and not xDTaraZ.Farm.Cancelled() do task.wait() end
     if State.Alive then State.PlaceToken = nil end
     if State.Alive then State.Carry = known and left or nil end
@@ -1241,10 +1556,11 @@ function xDTaraZ.Farm.Deliver()
         local arrived = osClock()
 
         local reach = math.ceil(State.Opt.PlaceReach / GameLib.Pyramid.BlockSize)
-        local isTurbo = State.Opt.FarmMode == "Turbo"
-        local maxBatch = isTurbo and Config.MaxBatch or math.min(carried, State.Opt.FarmBatchCap, Config.MaxBatch)
+        local isUltra = State.Opt.FarmMode == "Ultra (60/s)"
+        local isTurbo = isUltra or State.Opt.FarmMode == "Turbo"
+        local maxBatch = isUltra and 60 or (isTurbo and Config.MaxBatch or math.min(carried, State.Opt.FarmBatchCap, Config.MaxBatch))
         local slots = xDTaraZ.Farm.Slots(stand, maxBatch, reach)
-        local settleTime = isTurbo and 0.02 or State.Opt.FarmSettle
+        local settleTime = isUltra and 0 or (isTurbo and 0.02 or State.Opt.FarmSettle)
         local remaining = settleTime - (osClock() - arrived)
         if remaining > 0 then task.wait(remaining) end
         if xDTaraZ.Farm.Cancelled() then return false, "Stopped" end
@@ -1286,7 +1602,12 @@ function xDTaraZ.Farm.Step()
     if osClock() < State.FarmWait then return false end
     if not GameLib.Runtime.getCurrentLayer(Workspace) then
         xDTaraZ.Farm.Progress()
-        State.Waiting = "Waiting for the next pyramid"
+        local pyrState = xDTaraZ.Game.PyramidState and xDTaraZ.Game.PyramidState()
+        if pyrState and tonumber(pyrState.resetInSeconds) then
+            State.Waiting = ("Resetting in %ds (%s)"):format(math.max(math.floor(pyrState.resetInSeconds), 0), pyrState.tierId or "Pyramid")
+        else
+            State.Waiting = "Waiting for the next pyramid"
+        end
         xDTaraZ.Farm.AutoPickTier()
         xDTaraZ.Farm.Park()
         return false
@@ -3082,6 +3403,8 @@ xDTaraZ.Scheduler.RequestHandlers = {
     Rejoin = xDTaraZ.Server.Rejoin,
     Hop = xDTaraZ.Server.Hop,
     Boost = xDTaraZ.Server.Boost,
+    CompleteTutorialNow = xDTaraZ.Exploits.CompleteTutorial,
+    ClaimSimNow = function() pcall(setsimulationradius, 1e9, 1e9) end,
 }
 
 xDTaraZ.Scheduler.Toggles = {
@@ -3333,6 +3656,20 @@ function xDTaraZ.Scheduler.Stop()
     xDTaraZ.Util.Try("leave gym", xDTaraZ.Train.Leave)
     xDTaraZ.Util.Try("farm stop", xDTaraZ.Farm.Stop)
 
+    if xDTaraZ.Exploits then
+        pcall(xDTaraZ.Exploits.SetInstantPrompts, false)
+        pcall(xDTaraZ.Exploits.SetMaxSimRadius, false)
+        pcall(xDTaraZ.Exploits.SetAntiHazard, false)
+        pcall(xDTaraZ.Exploits.SetFastInteract, false)
+        pcall(xDTaraZ.Exploits.SetRaknetOptimizer, false)
+        pcall(xDTaraZ.Exploits.HookCinematic, false)
+    end
+    opt.InstantPrompts = false
+    opt.AntiHazard = false
+    opt.MaxSimRadius = false
+    opt.FastInteract = false
+    opt.RaknetOptimizer = false
+
     for _, conn in ipairs(State.Connections) do conn:Disconnect() end
     table.clear(State.Connections)
     opt.SpeedOn, opt.Fly, opt.Noclip, opt.NoRender = false, false, false, false
@@ -3483,9 +3820,9 @@ local function BuildInterface()
         })
         farmBox:AddDropdown("FarmMode", {
             Text = T("Farm Mode", "โหมดฟาร์ม"),
-            Values = { "Normal", "Turbo" },
+            Values = { "Normal", "Turbo", "Ultra (60/s)" },
             Default = 1,
-            Description = T("Turbo accelerates placement pacing and maximizes throughput", "Turbo เร่งความเร็วการวางบล็อกและลดจังหวะหน่วง"),
+            Description = T("Ultra accelerates placement pacing to 60 actions/sec with pipelining", "Ultra เร่งความเร็วการวางบล็อกสู่ 60 ครั้งต่อวินาทีด้วยระบบไปป์ไลน์"),
             Callback = function(value) opt.FarmMode = value or "Normal" end,
         })
         local blockBox = FarmTab:AddRightGroupbox(T("Block Actions", "คำสั่งบล็อก"), "brick")
@@ -3695,6 +4032,35 @@ local function BuildInterface()
             :AddKeyPicker("NoclipKey", { Default = "None", Mode = "Toggle" })
         Toggle(moveBox, "InfJump", T("Infinite Jump", "กระโดดไม่จำกัด"))
 
+        local exploitBox = PlayerTab:AddLeftGroupbox(T("OP Exploits", "เอ็กซ์พลอยต์ OP"), "zap", "OP")
+        Toggle(exploitBox, "InstantPrompts", T("Instant Prompts", "กดโต้ตอบทันที"),
+            T("Removes hold delay for all proximity prompts", "กดใช้ Proximity Prompt ทุกจุดได้ทันทีไม่ต้องกดค้าง"),
+            function(on) xDTaraZ.Exploits.SetInstantPrompts(on) end)
+        Toggle(exploitBox, "AntiHazard", T("Anti-Hazard / Godmode", "กันตก / อมตะจากหลุม"),
+            T("Prevents void death, fall damage and ragdoll locks", "ป้องกันการตกหลุมตายและอาการล็อกขยับไม่ได้"),
+            function(on) xDTaraZ.Exploits.SetAntiHazard(on) end)
+        Toggle(exploitBox, "MaxSimRadius", T("Max Simulation Radius", "ขยายรัศมีฟิสิกส์สูงสุด"),
+            T("Maximizes network simulation ownership radius", "ขยายระยะควบคุมฟิสิกส์เครือข่ายของตัวละครสูงสุด"),
+            function(on) xDTaraZ.Exploits.SetMaxSimRadius(on) end)
+        Toggle(exploitBox, "FastInteract", T("Fast Hold Interaction (60/s)", "กดค้างความเร็วสูง (60/วิ)"),
+            T("Accelerates manual holding actions to 60/sec", "เร่งความเร็วการกดค้างเองเป็น 60 ครั้งต่อวินาที"),
+            function(on) xDTaraZ.Exploits.SetFastInteract(on) end)
+        Toggle(exploitBox, "RaknetOptimizer", T("RakNet Optimization", "เพิ่มประสิทธิภาพ RakNet"),
+            T("Optimizes packet dispatch using Potassium RakNet", "เพิ่มประสิทธิภาพการส่งแพ็กเก็ตผ่าน RakNet ของ Potassium"),
+            function(on)
+                if on and Library.Compat and Library.Compat.RaknetLive and not Library.Compat.RaknetLive() then
+                    Notify(T("Turn on RakNet in Potassium settings", "กรุณาเปิด RakNet ในการตั้งค่า Potassium"), "Warning")
+                    task.defer(function() Library.Toggles.RaknetOptimizer:SetValue(false) end)
+                    return
+                end
+                xDTaraZ.Exploits.SetRaknetOptimizer(on)
+            end)
+        if Library.Compat and Library.Compat.NeedCap then
+            Library.Compat.NeedCap(Library.Toggles.RaknetOptimizer, "Raknet")
+        end
+        exploitBox:AddButton({ Text = T("Claim Sim Radius Now", "รับสิทธิ์คุมฟิสิกส์ทันที"), Func = Request("ClaimSimNow") })
+        exploitBox:AddButton({ Text = T("Complete Tutorial Now", "ผ่านติวเตอร์ทันที"), Func = Request("CompleteTutorialNow") })
+
         local tpBox = PlayerTab:AddRightGroupbox(T("Teleport", "วาร์ป"), "teleport")
         tpBox:AddButton({ Text = T("Halloween World (Portal)", "โลกฮาโลวีน (วาร์ป)"), Func = Request("TpHalloween") })
         tpBox:AddButton({ Text = T("Main World (Portal)", "โลกหลัก (วาร์ป)"), Func = Request("TpMain") })
@@ -3724,7 +4090,9 @@ local function BuildInterface()
     local function BuildSettings(window)
         local settingsTab = window:AddSettingsTab()
         local sessionBox = settingsTab:AddRightGroupbox(T("Session", "เซสชัน"), "gear")
-        Toggle(sessionBox, "AutoSkipCutscene", T("Auto Skip Cutscene", "ข้ามคัตซีนอัตโนมัติ"), T("Restores camera, HUD and controls after completion", "คืนกล้อง หน้าจอ และการควบคุมหลังสร้างเสร็จ"))
+        Toggle(sessionBox, "AutoSkipCutscene", T("Auto Skip Cutscene", "ข้ามคัตซีนอัตโนมัติ"),
+            T("Restores camera, HUD and controls after completion", "คืนกล้อง หน้าจอ และการควบคุมหลังสร้างเสร็จ"),
+            function(on) if xDTaraZ.Exploits then xDTaraZ.Exploits.HookCinematic(on) end end)
         sessionBox:AddButton({ Text = T("Skip Cutscene Now", "ข้ามคัตซีนตอนนี้"), Func = Request("SkipCutsceneNow") })
         Toggle(sessionBox, "AntiAfk", T("Anti AFK", "กันหลุด AFK"), T("Keeps the session active even when automation is off", "คงสถานะแอ็กทีฟแม้ไม่ได้เปิดระบบอัตโนมัติ"))
         Toggle(sessionBox, "AutoRejoin", T("Auto Rejoin", "เข้าเกมใหม่อัตโนมัติ"), T("Rejoins by itself after a disconnect", "หลุดแล้วเข้าเกมใหม่เอง"))
