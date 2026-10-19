@@ -160,8 +160,8 @@ xDTaraZ.Platform = {
 xDTaraZ.Config = {
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
+        { "2026-10-19", "Halloween World, Turbo Farm & Cursed Egg\n• Halloween World: 1-Click portal travel and CandyCorn auto-farming\n• Cursed Egg & Secret Pets: Auto hatch GrimReaper & Osiris with CandyCorn\n• Super-Quick Jack: Auto buy and equip Jack character for triple perks\n• Turbo Farm: Instant grab & multi-slot placement with zero latency\n• Pyramid Tier Picker: Auto request Void, Gold or Cursed 25x tiers" },
         { "2026-10-13", "Smart Progression and faster Auto Farm\nPets, hatching limits and full ESP\nAuto Skip Cutscene and Spectate\nFixed pool training, respawn and camera recovery\nImproved upgrade guards, rejoin and cleanup" },
-        { "2026-10-10", "Updated for the new game version\nFaster farm loop\nAuto Free Gift and Train While Waiting\nStop targets for farm and training\nFixed unloading, Balanced training and upgrade checks" },
     },
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
     ReloadSource = [[
@@ -257,10 +257,12 @@ xDTaraZ.State = {
     HaltQueue = {},
     Status = "Idle",
     Task = "None",
-    Placed = 0,
-    FarmWait = 0,
+    CandyCornLog = {},
+    CandyCornGained = 0,
     Opt = {
         AutoFarm = false,
+        FarmMode = "Normal",
+        PreferredTier = "Auto",
         AutoPickup = false,
         AutoPlace = false,
         AutoHatch = false,
@@ -268,6 +270,7 @@ xDTaraZ.State = {
         PetEgg = "Basic",
         PetHatchAmount = "Best Owned",
         PetKeepCoins = 0,
+        PetKeepCandyCorn = 0,
         PetHatchBudget = 0,
         PetSessionMax = 0,
         PetStopRarity = "None",
@@ -280,6 +283,8 @@ xDTaraZ.State = {
         TargetStrength = 0,
         TargetSpeed = 0,
         AutoGift = false,
+        AutoBuyJack = false,
+        AutoHalloweenFarm = false,
         UpgradeMax = {},
         PlaceReach = 30,
         FarmBatchCap = 64,
@@ -485,7 +490,6 @@ end
 
 do
     local modules = {
-        Cinematic = LocalPlayer.PlayerScripts:FindFirstChild("Controllers") and LocalPlayer.PlayerScripts.Controllers:FindFirstChild("CompletionCinematicController"),
         Pyramid = Wait(SharedConfig, "PyramidConfig"),
         EggConfig = SharedConfig:FindFirstChild("EggConfig"),
         PetConfig = SharedConfig:FindFirstChild("PetConfig"),
@@ -505,6 +509,10 @@ do
     }
     for key, module in pairs(modules) do
         GameLib[key] = GameLib.Require(module)
+    end
+    if GameLib.Knit then
+        local ok, controller = pcall(GameLib.Knit.GetController, "CompletionCinematicController")
+        if ok and controller then GameLib.Cinematic = controller end
     end
 end
 
@@ -531,6 +539,9 @@ GameLib.GiftStep = Remote("FreeGiftService", "RF", "MarkStep")
 GameLib.GiftState = Remote("FreeGiftService", "RF", "GetState")
 GameLib.GiftChanged = Remote("FreeGiftService", "RE", "StateChanged")
 GameLib.BoostState = Remote("ServerBoostService", "RF", "GetState")
+GameLib.RequestTierPick = Remote("PyramidService", "RF", "RequestTierPick")
+GameLib.ShopPurchase = Remote("ShopService", "RF", "RequestPassPurchase")
+GameLib.EquipCharacter = Remote("ShopService", "RF", "EquipCharacter")
 
 
 xDTaraZ.UpgradeByName = {}
@@ -575,6 +586,8 @@ xDTaraZ.Gate.Needs.AutoHatch = { "EggConfig", "PetConfig", "PetHatch", "Knit" }
 xDTaraZ.Gate.Needs.AutoEquipPets = { "PetConfig", "PetEquipBest", "Knit" }
 xDTaraZ.Gate.Needs.AutoPickup = xDTaraZ.Gate.Needs.AutoFarm
 xDTaraZ.Gate.Needs.AutoPlace = xDTaraZ.Gate.Needs.AutoFarm
+xDTaraZ.Gate.Needs.AutoBuyJack = { "ShopPurchase", "EquipCharacter" }
+xDTaraZ.Gate.Needs.AutoPickTier = { "RequestTierPick" }
 
 function xDTaraZ.Gate.Missing(idx)
     for _, key in ipairs(xDTaraZ.Gate.Needs[idx] or {}) do
@@ -661,6 +674,17 @@ function xDTaraZ.Game.Coins()
     return tonumber(State.Stats.Coins) or 0
 end
 
+function xDTaraZ.Game.CandyCorn()
+    return tonumber(State.Stats.CandyCorn) or 0
+end
+
+function xDTaraZ.Game.World()
+    if Workspace:FindFirstChild("MainPlacePortalArea") or game.PlaceId == 95412364107708 then
+        return "Halloween"
+    end
+    return "Main"
+end
+
 function xDTaraZ.Game.Benching()
     if not GameLib.Gym then return nil end
     local station = xDTaraZ.Game.Attr(GameLib.Gym.BenchStationAttribute)
@@ -712,6 +736,12 @@ function xDTaraZ.Game.WatchStats()
             local before = tonumber(State.Stats.Coins)
             local now = tonumber(values.Coins)
             if before and now and now > before then table.insert(State.CoinLog, { osClock(), now - before }) end
+            local beforeCandy = tonumber(State.Stats.CandyCorn)
+            local nowCandy = tonumber(values.CandyCorn)
+            if beforeCandy and nowCandy and nowCandy > beforeCandy then
+                table.insert(State.CandyCornLog, { osClock(), nowCandy - beforeCandy })
+                State.CandyCornGained = (State.CandyCornGained or 0) + (nowCandy - beforeCandy)
+            end
             State.Stats = values
         end)
         table.insert(State.Connections, conn)
@@ -829,6 +859,48 @@ function xDTaraZ.Move.PoolSpot()
     return spot
 end
 
+function xDTaraZ.Move.HalloweenPortal()
+    local area = Workspace:FindFirstChild("HalloweenPortalArea")
+    local portal = area and area:FindFirstChild("HalloweenPortal")
+    local promptPart = portal and portal:FindFirstChild("ProximityPromptPart")
+    local prompt = promptPart and promptPart:FindFirstChild("PortalPrompt")
+    if promptPart and prompt then
+        xDTaraZ.Move.To(promptPart.Position + vector3New(0, Config.StandHeight, 0), true)
+        task.wait(0.2)
+        if typeof(fireproximityprompt) == "function" then
+            fireproximityprompt(prompt)
+        end
+        return true
+    end
+    if game.PlaceId == 95412364107708 or Workspace:FindFirstChild("MainPlacePortalArea") then
+        xDTaraZ:Notify("Already in Halloween World!")
+        return true
+    end
+    TeleportService:Teleport(95412364107708, LocalPlayer)
+    return true
+end
+
+function xDTaraZ.Move.MainPortal()
+    local area = Workspace:FindFirstChild("MainPlacePortalArea")
+    local portal = area and area:FindFirstChild("MainPlacePortal")
+    local promptPart = portal and portal:FindFirstChild("ProximityPromptPart")
+    local prompt = promptPart and promptPart:FindFirstChild("PortalPrompt")
+    if promptPart and prompt then
+        xDTaraZ.Move.To(promptPart.Position + vector3New(0, Config.StandHeight, 0), true)
+        task.wait(0.2)
+        if typeof(fireproximityprompt) == "function" then
+            fireproximityprompt(prompt)
+        end
+        return true
+    end
+    if game.PlaceId == 123720558354386 or Workspace:FindFirstChild("HalloweenPortalArea") then
+        xDTaraZ:Notify("Already in Main World!")
+        return true
+    end
+    TeleportService:Teleport(123720558354386, LocalPlayer)
+    return true
+end
+
 function xDTaraZ.Move.Frame()
     local char, hum, hrp = xDTaraZ:Character()
     if not char then return end
@@ -929,6 +1001,33 @@ function xDTaraZ.Farm.Park()
     if State.Parked then return end
     State.Parked = true
     xDTaraZ.Move.To(xDTaraZ.Move.QuarrySpot())
+end
+
+function xDTaraZ.Farm.PickTier(tierId)
+    if not GameLib.RequestTierPick then return false, "RequestTierPick unavailable" end
+    local ok, reply = xDTaraZ:Invoke(GameLib.RequestTierPick, tierId)
+    if ok == true or (type(reply) == "table" and reply.ok) then
+        xDTaraZ:Notify(("Pyramid tier picked: %s"):format(tierId))
+        return true
+    else
+        local reason = type(reply) == "table" and tostring(reply.reason) or tostring(reply)
+        return false, reason
+    end
+end
+
+function xDTaraZ.Farm.AutoPickTier()
+    if not GameLib.RequestTierPick then return end
+    local pref = State.Opt.PreferredTier
+    if not pref or pref == "None" then return end
+    local target = pref
+    if target == "Auto" then
+        if xDTaraZ.Game.World() == "Halloween" then
+            target = "Cursed"
+        else
+            target = "Void"
+        end
+    end
+    xDTaraZ.Farm.PickTier(target)
 end
 
 ---@param calls number  pickups fired at once; the server stops granting at capacity
@@ -1142,8 +1241,11 @@ function xDTaraZ.Farm.Deliver()
         local arrived = osClock()
 
         local reach = math.ceil(State.Opt.PlaceReach / GameLib.Pyramid.BlockSize)
-        local slots = xDTaraZ.Farm.Slots(stand, math.min(carried, State.Opt.FarmBatchCap, Config.MaxBatch), reach)
-        local remaining = State.Opt.FarmSettle - (osClock() - arrived)
+        local isTurbo = State.Opt.FarmMode == "Turbo"
+        local maxBatch = isTurbo and Config.MaxBatch or math.min(carried, State.Opt.FarmBatchCap, Config.MaxBatch)
+        local slots = xDTaraZ.Farm.Slots(stand, maxBatch, reach)
+        local settleTime = isTurbo and 0.02 or State.Opt.FarmSettle
+        local remaining = settleTime - (osClock() - arrived)
         if remaining > 0 then task.wait(remaining) end
         if xDTaraZ.Farm.Cancelled() then return false, "Stopped" end
         if #slots == 0 then
@@ -1185,6 +1287,7 @@ function xDTaraZ.Farm.Step()
     if not GameLib.Runtime.getCurrentLayer(Workspace) then
         xDTaraZ.Farm.Progress()
         State.Waiting = "Waiting for the next pyramid"
+        xDTaraZ.Farm.AutoPickTier()
         xDTaraZ.Farm.Park()
         return false
     end
@@ -1577,12 +1680,27 @@ function xDTaraZ.Pets.Step(manual)
     if count + amount > GameLib.PetConfig.MaxOwned then xDTaraZ.Pets.Stop("Pet inventory full") return false end
     if opt.PetSessionMax > 0 and xDTaraZ.Pets.SessionCount + amount > opt.PetSessionMax then xDTaraZ.Pets.Stop("Hatch limit reached") return false end
     if opt.PetHatchBudget > 0 and xDTaraZ.Pets.SessionSpent + cost > opt.PetHatchBudget then xDTaraZ.Pets.Stop("Hatch budget reached") return false end
-    if xDTaraZ.Game.Coins() - math.max(opt.KeepCoins or 0, opt.PetKeepCoins) < cost then
-        xDTaraZ.Pets.Stop("Coin reserve reached") return false
+    if egg.Currency == "CandyCorn" then
+        if xDTaraZ.Game.CandyCorn() - (opt.PetKeepCandyCorn or 0) < cost then
+            xDTaraZ.Pets.Stop("Candy Corn reserve reached") return false
+        end
+    else
+        if xDTaraZ.Game.Coins() - math.max(opt.KeepCoins or 0, opt.PetKeepCoins or 0) < cost then
+            xDTaraZ.Pets.Stop("Coin reserve reached") return false
+        end
+    end
+    if egg.World and egg.World ~= xDTaraZ.Game.World() then
+        if egg.World == "Halloween" then
+            xDTaraZ.Pets.Stop("Requires Halloween World")
+            return false
+        elseif egg.World == "Main" then
+            xDTaraZ.Pets.Stop("Requires Main World")
+            return false
+        end
     end
     local folder = Workspace:FindFirstChild(GameLib.EggConfig.WorldFolderName)
     local display = folder and folder:FindFirstChild(egg.DisplayModel)
-    local buy = display and display:FindFirstChild("BuyPart", true)
+    local buy = display and (display:FindFirstChild("BuyPart", true) or display:FindFirstChildWhichIsA("BasePart", true))
     if not buy or not buy:IsA("BasePart") then xDTaraZ.Pets.Stop("Egg area unavailable") return false end
     local _, _, root = xDTaraZ:Character()
     if not root then return false end
@@ -1697,10 +1815,11 @@ function xDTaraZ.Pets.Build(window, T, Library)
     end
     local cfg, presentation = GameLib.EggConfig, GameLib.PetPresentation or {}
     local eggValues, eggIds, eggImages, eggColors = {}, {}, {}, {}
-    for _, id in ipairs(cfg and cfg.Order or {}) do
+    for _, id in ipairs(cfg and (cfg.AllOrder or cfg.Order) or {}) do
         local egg = cfg.ById[id]
         if egg then
-            local label = egg.DisplayName .. " | " .. tostring(egg.Price) .. " coins"
+            local currency = egg.Currency or "coins"
+            local label = egg.DisplayName .. " | " .. tostring(egg.Price) .. " " .. currency:lower()
             eggValues[#eggValues + 1], eggIds[label] = label, id
             eggImages[label] = presentation.EggIcons and presentation.EggIcons[id]
             local highest = 0
@@ -1723,7 +1842,7 @@ function xDTaraZ.Pets.Build(window, T, Library)
         Callback = function(value) opt.PetHatchAmount = value or "Best Owned" end,
     })
     hatch:AddToggle("AutoHatch", { Text = T("Auto Hatch", "เปิดไข่อัตโนมัติ"), Default = false,
-        Description = T("Uses coins. Pauses farming while hatching.", "ใช้เหรียญ หยุดฟาร์มชั่วคราวระหว่างเปิดไข่"),
+        Description = T("Uses coins/candy corn. Pauses farming while hatching.", "ใช้เหรียญ/แคนดี้คอร์น หยุดฟาร์มชั่วคราวระหว่างเปิดไข่"),
         Callback = function(value)
             if value and not xDTaraZ.Pets.Ready() then
                 xDTaraZ:Notify(T("Pet modules unavailable", "ระบบสัตว์เลี้ยงยังไม่พร้อม"))
@@ -1738,6 +1857,7 @@ function xDTaraZ.Pets.Build(window, T, Library)
     hatch:AddButton({ Text = T("Hatch Now", "เปิดไข่เดี๋ยวนี้"), Func = Queue("PetsNow") })
     hatch:AddButton({ Text = T("Stop Hatching", "หยุดเปิดไข่"), Func = Queue("PetsStop") })
     Number("PetKeepCoins", T("Keep Coins", "สำรองเหรียญ"))
+    Number("PetKeepCandyCorn", T("Keep Candy Corn", "สำรองแคนดี้คอร์น"))
     Number("PetHatchBudget", T("Session Coin Budget (0 = unlimited)", "งบเหรียญต่อรอบ (0 = ไม่จำกัด)"))
     Number("PetSessionMax", T("Session Egg Limit (0 = unlimited)", "จำนวนไข่สูงสุดต่อรอบ (0 = ไม่จำกัด)"))
     local rarities = { "None" }
@@ -1747,12 +1867,25 @@ function xDTaraZ.Pets.Build(window, T, Library)
         Callback = function(value) opt.PetStopRarity = value or "None" end,
     })
     local petValues, petIds, petImages, petColors = { "None" }, { None = "None" }, {}, {}
-    for _, id in ipairs(GameLib.PetConfig and GameLib.PetConfig.Order or {}) do
+    local petOrder = {}
+    if GameLib.PetConfig then
+        if GameLib.PetConfig.Order then
+            for _, id in ipairs(GameLib.PetConfig.Order) do table.insert(petOrder, id) end
+        end
+        for id in pairs(GameLib.PetConfig.ById or {}) do
+            if not table.find(petOrder, id) then
+                table.insert(petOrder, id)
+            end
+        end
+    end
+    for _, id in ipairs(petOrder) do
         local def = GameLib.PetConfig.ById[id]
-        local label = def.DisplayName .. " | " .. def.Rarity
-        petValues[#petValues + 1], petIds[label] = label, id
-        petImages[label] = presentation.Icons and presentation.Icons[id]
-        petColors[label] = presentation.RarityColors and presentation.RarityColors[def.Rarity]
+        if def then
+            local label = def.DisplayName .. " | " .. tostring(def.Rarity)
+            petValues[#petValues + 1], petIds[label] = label, id
+            petImages[label] = presentation.Icons and presentation.Icons[id]
+            petColors[label] = presentation.RarityColors and presentation.RarityColors[def.Rarity]
+        end
     end
     rules:AddDropdown("PetStopId", { Text = T("Stop At Pet", "หยุดเมื่อได้ตัวนี้"), Values = petValues,
         Default = 1, Images = petImages, Colors = petColors,
@@ -2149,6 +2282,53 @@ end
 
 function xDTaraZ.Gift.Now()
     xDTaraZ.Gift.Claim(true)
+end
+
+function xDTaraZ.Tasks.BuyJack()
+    local owns = LocalPlayer:GetAttribute("OwnsPass_jack") == true
+    if owns then
+        local equipped = LocalPlayer:GetAttribute("EquippedCharacter")
+        if equipped ~= "jack" and GameLib.EquipCharacter then
+            local ok = xDTaraZ:Invoke(GameLib.EquipCharacter, "jack")
+            if ok then xDTaraZ:Notify("Jack equipped!") return true end
+        else
+            xDTaraZ:Notify("Jack is already owned and equipped!")
+            return true
+        end
+    end
+    local candy = xDTaraZ.Game.CandyCorn()
+    local price = 50000000
+    if candy < price then
+        xDTaraZ:Notify(("Need 50M Candy Corn for Jack (have %s)"):format(xDTaraZ.Format(candy)))
+        return false
+    end
+    if not GameLib.ShopPurchase then
+        xDTaraZ:Notify("Shop remote unavailable")
+        return false
+    end
+    local ok, reply = xDTaraZ:Invoke(GameLib.ShopPurchase, "jack")
+    if ok == true or (type(reply) == "table" and reply.ok) then
+        xDTaraZ:Notify("Jack purchased!")
+        if GameLib.EquipCharacter then
+            task.wait(0.5)
+            xDTaraZ:Invoke(GameLib.EquipCharacter, "jack")
+        end
+        return true
+    end
+    xDTaraZ:Notify("Purchase refused: " .. tostring(type(reply) == "table" and reply.reason or reply))
+    return false
+end
+
+function xDTaraZ.Tasks.AutoJack()
+    if not State.Opt.AutoBuyJack then return end
+    local owns = LocalPlayer:GetAttribute("OwnsPass_jack") == true
+    if not owns then
+        if xDTaraZ.Game.CandyCorn() >= 50000000 then
+            xDTaraZ.Tasks.BuyJack()
+        end
+    elseif LocalPlayer:GetAttribute("EquippedCharacter") ~= "jack" and GameLib.EquipCharacter then
+        xDTaraZ:Invoke(GameLib.EquipCharacter, "jack")
+    end
 end
 
 xDTaraZ.Boost = {}
@@ -2895,6 +3075,10 @@ xDTaraZ.Scheduler.RequestHandlers = {
     TpPool = xDTaraZ.Teleport.Pool,
     TpGym = xDTaraZ.Teleport.Gym,
     TpPlayer = xDTaraZ.Teleport.Player,
+    TpHalloween = xDTaraZ.Move.HalloweenPortal,
+    TpMain = xDTaraZ.Move.MainPortal,
+    BuyJackNow = xDTaraZ.Tasks.BuyJack,
+    PickTierNow = xDTaraZ.Farm.AutoPickTier,
     Rejoin = xDTaraZ.Server.Rejoin,
     Hop = xDTaraZ.Server.Hop,
     Boost = xDTaraZ.Server.Boost,
@@ -2912,12 +3096,15 @@ xDTaraZ.Scheduler.Toggles = {
     Cutscene = { "AutoSkipCutscene" },
     Activity = { "AntiAfk" },
     Bank = { "SpendBlocks", "SpendSeconds" },
+    Jack = { "AutoBuyJack" },
     Summary = {},
 }
 
 xDTaraZ.Tasks.Commands = {
     ProgressionNow = true, PickupNow = true, PlaceNow = true, TrainStrengthNow = true, TrainSpeedNow = true,
-    PetsNow = true, PetsStop = true, FarmStop = true, TrainStop = true, TrainingExit = true, TpQuarry = true, TpPyramid = true, TpPool = true, TpGym = true, TpPlayer = true }
+    PetsNow = true, PetsStop = true, FarmStop = true, TrainStop = true, TrainingExit = true,
+    TpQuarry = true, TpPyramid = true, TpPool = true, TpGym = true, TpPlayer = true,
+    TpHalloween = true, TpMain = true, BuyJackNow = true, PickTierNow = true }
 
 ---@param key string?  job name; repeated failures stop it and switch its toggles off
 function xDTaraZ.Scheduler.Run(fn, key)
@@ -3030,8 +3217,12 @@ function xDTaraZ.Scheduler.Summarize()
     xDTaraZ.Upgrade.Measure()
 
     local carried, cap = xDTaraZ.Game.Carried(), xDTaraZ.Game.Capacity()
-    State.Summary = ("Coins %s · %s/min\nStrength Lv %s · Speed Lv %s · Carry %d/%d\nPyramids %s · Blocks %d\n%s"):format(
+    local candy = xDTaraZ.Game.CandyCorn()
+    local candyText = candy > 0 and (" · Candy " .. xDTaraZ.Format(candy)) or ""
+    local world = xDTaraZ.Game.World()
+    State.Summary = ("Coins %s · %s/min%s · %s\nStrength Lv %s · Speed Lv %s · Carry %d/%d\nPyramids %s · Blocks %d\n%s"):format(
         xDTaraZ.Format(State.Stats.Coins), xDTaraZ.Format(recent * 60 / Config.RateWindow),
+        candyText, world,
         tostring(xDTaraZ.Game.Attr("StrengthLevel") or 0), tostring(xDTaraZ.Game.Attr("SpeedLevel") or 0),
         carried, cap, tostring(xDTaraZ.Game.Attr("Pyramids") or 0), State.BlocksPlaced, xDTaraZ.Boost.Text())
 end
@@ -3061,6 +3252,7 @@ function xDTaraZ.Scheduler.Light()
     if GameLib.BoostState then xDTaraZ.Scheduler.Every("Boost", Config.BoostInterval, xDTaraZ.Boost.Read, true) end
     if opt.AutoUpgrade and not opt.AutoProgression then xDTaraZ.Scheduler.Every("Upgrade", Config.UpgradeInterval, xDTaraZ.Upgrade.Step, true) end
     if opt.SpendBlocks or opt.SpendSeconds then xDTaraZ.Scheduler.Every("Bank", Config.BankInterval, xDTaraZ.Bank.Auto, true) end
+    if opt.AutoBuyJack then xDTaraZ.Scheduler.Every("Jack", 5, xDTaraZ.Tasks.AutoJack, true) end
 
     if opt.AutoGift and not State.GiftDone then
         if State.GiftDirty then
@@ -3289,11 +3481,27 @@ local function BuildInterface()
                 end
             end,
         })
+        farmBox:AddDropdown("FarmMode", {
+            Text = T("Farm Mode", "โหมดฟาร์ม"),
+            Values = { "Normal", "Turbo" },
+            Default = 1,
+            Description = T("Turbo accelerates placement pacing and maximizes throughput", "Turbo เร่งความเร็วการวางบล็อกและลดจังหวะหน่วง"),
+            Callback = function(value) opt.FarmMode = value or "Normal" end,
+        })
         local blockBox = FarmTab:AddRightGroupbox(T("Block Actions", "คำสั่งบล็อก"), "brick")
         Toggle(blockBox, "AutoPickup", T("Auto Pickup", "หยิบบล็อกอัตโนมัติ"), nil, function(on) if not on then State.WorkEpoch += 1 end end)
         Toggle(blockBox, "AutoPlace", T("Auto Place", "วางบล็อกอัตโนมัติ"), nil, function(on) if not on then State.WorkEpoch += 1 end end)
         blockBox:AddButton({ Text = T("Pickup Now", "หยิบบล็อกเดี๋ยวนี้"), Func = Request("PickupNow") })
         blockBox:AddButton({ Text = T("Place Now", "วางบล็อกเดี๋ยวนี้"), Func = Request("PlaceNow") })
+        local tierBox = FarmTab:AddRightGroupbox(T("Pyramid Tier", "ระดับพีระมิด"), "star")
+        tierBox:AddDropdown("PreferredTier", {
+            Text = T("Next Pyramid Tier", "ระดับพีระมิดถัดไป"),
+            Values = { "Auto", "Cursed", "Haunted", "Void", "Gold", "Silver" },
+            Default = 1,
+            Description = T("Auto chooses best tier (Cursed 25x in Halloween, Void 10x in Main)", "Auto เลือกระดับที่ดีที่สุด (Cursed 25x ในฮาโลวีน, Void 10x ในโลกหลัก)"),
+            Callback = function(value) opt.PreferredTier = value or "Auto" end,
+        })
+        tierBox:AddButton({ Text = T("Request Tier Now", "ขอระดับพีระมิดตอนนี้"), Func = Request("PickTierNow") })
         Toggle(farmBox, "ReturnOnStop", T("Return On Stop", "กลับที่เดิมเมื่อหยุด"), T("Goes back to where you started", "กลับไปจุดที่เริ่มฟาร์ม"))
         farmBox:AddSlider("PlaceReach", {
             Text = T("Place Distance", "ระยะวางบล็อก"),
@@ -3452,6 +3660,11 @@ local function BuildInterface()
         codeBox:AddButton({ Text = T("Redeem All Codes", "ใช้โค้ดทั้งหมด"), Style = "Primary", Func = Request("CodesNow") })
         Toggle(codeBox, "AutoGift", T("Auto Free Gift", "รับของขวัญฟรีอัตโนมัติ"), T("Claims the free gift once you join the game group", "รับของขวัญฟรีเมื่อเข้ากลุ่มเกมแล้ว"))
         codeBox:AddButton({ Text = T("Claim Now", "รับเดี๋ยวนี้"), Func = Request("GiftNow") })
+
+        local halloweenShopBox = ShopTab:AddRightGroupbox(T("Halloween Event", "กิจกรรมฮาโลวีน"), "star")
+        Toggle(halloweenShopBox, "AutoBuyJack", T("Auto Buy & Equip Jack", "ซื้อและสวมใส่ Jack อัตโนมัติ"),
+            T("Costs 50M Candy Corn. Grants +0.5 Hatch Luck, Quick Grab & Place.", "ราคา 50M แคนดี้คอร์น ได้รับ +0.5 โชคเปิดไข่, หยิบและวางไวพิเศษ"))
+        halloweenShopBox:AddButton({ Text = T("Buy Jack Now", "ซื้อ Jack ทันที"), Func = Request("BuyJackNow") })
     end
 
     local function BuildPlayer(window)
@@ -3483,6 +3696,8 @@ local function BuildInterface()
         Toggle(moveBox, "InfJump", T("Infinite Jump", "กระโดดไม่จำกัด"))
 
         local tpBox = PlayerTab:AddRightGroupbox(T("Teleport", "วาร์ป"), "teleport")
+        tpBox:AddButton({ Text = T("Halloween World (Portal)", "โลกฮาโลวีน (วาร์ป)"), Func = Request("TpHalloween") })
+        tpBox:AddButton({ Text = T("Main World (Portal)", "โลกหลัก (วาร์ป)"), Func = Request("TpMain") })
         tpBox:AddButton({ Text = T("Quarry", "เหมืองหิน"), Func = Request("TpQuarry") })
         tpBox:AddButton({ Text = T("Pyramid", "พีระมิด"), Func = Request("TpPyramid") })
         tpBox:AddButton({ Text = T("Pool", "สระ"), Func = Request("TpPool") })
