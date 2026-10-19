@@ -5364,7 +5364,17 @@ local function BuildInterface()
 
     local function BuildSpawn(tab)
         local spawnBox = tab:AddLeftGroupbox(T("Ore & Loot Spawner", "เสกแร่และไอเทม"), nil, "OP")
-        spawnBox:AddButton({ Text = T("Spawn Max Ores", "เสกแร่สูงสุด 1-คลิก"), Style = "Primary", Func = LongAction("Spawn Max Ores", function()
+        Feature(spawnBox, "TurboSpawn", T("Continuous Turbo Spawner", "เสกของรัวต่อเนื่อง"), T("Continuously streams selected or top tier loot directly into your backpack", "ฟาร์มเสกไอเทมที่เลือกหรือไอเทมระดับสูงเข้ากระเป๋าต่อเนื่องแบบไม่หยุด"))
+        Pick(spawnBox, "SpawnItem", T("Ore / Item / Pet", "แร่ / ไอเทม / สัตว์เลี้ยง"), T("Every ore, egg, fruit, rune and pet; farmed into inventory", "แร่ ไข่ ผลไม้ รูน และสัตว์เลี้ยงทั้งหมด ดึงเข้ากระเป๋าทันที"), xDTaraZ.Spawn.Choices, true)
+        Decorate("SpawnItem", function(label) local entry = State.SpawnLabels[label] return entry and entry.id end)
+        NumberInput(spawnBox, "SpawnAmount", T("Amount", "จำนวน"), T("Target amount to acquire (up to 1,000,000)", "จำนวนที่ต้องการได้ (สูงสุด 1,000,000)"), 1)
+        spawnBox:AddButton({ Text = T("Spawn Selected Item", "เสกไอเทมที่เลือก"), Style = "Primary", Func = Action(function()
+            local picked = State.SpawnLabels[opt.SpawnItem]
+            if not picked then return Notify("Pick an item first", "Warning") end
+            local acquired, outcome, reason = xDTaraZ.Spawn.Give(picked.id, picked.kind, opt.SpawnAmount)
+            Notify(acquired and ("Obtained %s"):format(xDTaraZ.Util.Abbreviate(outcome)) or (reason or "Done"), acquired and "Success" or "Warning")
+        end) }):AddButton(RefreshButton("SpawnItem", xDTaraZ.Spawn.Choices))
+        spawnBox:AddButton({ Text = T("Spawn Tier 40-48 Ores", "เสกแร่ Tier 40-48"), Style = "Success", Func = LongAction("Max Ores", function()
             return xDTaraZ.Stage.FarmMaxOres(35)
         end, function(count)
             return (count or 0) > 0 and ("Spawned %d ores!"):format(count) or "Spawn finished"
@@ -5374,6 +5384,12 @@ local function BuildInterface()
         end, function(count)
             return (count or 0) > 0 and ("Collected %d drops from all stages!"):format(count) or "Stage farm finished"
         end) })
+        spawnBox:AddButton({ Text = T("Spawn Enhance Stones", "เสกหินตีบวก"), Style = "Primary", Func = LongAction("Stones", function()
+            local before = xDTaraZ.Data.Count(xDTaraZ.Data.Get(), "EnhantStone_1")
+            xDTaraZ.Stage.FarmStones(xDTaraZ.Stage.Best())
+            task.wait(0.3)
+            return xDTaraZ.Data.Count(xDTaraZ.Data.Get(true), "EnhantStone_1") - before
+        end, function(gained) return ("+%d enhance stones"):format(gained or 0) end) })
         spawnBox:AddButton({ Text = T("Spawn Stage Loot", "เสกของด่าน"), Func = LongAction("Stage Loot", function()
             local before = xDTaraZ.Data.Count(xDTaraZ.Data.Get(), "Coin")
             xDTaraZ.Stage.BattleStep()
