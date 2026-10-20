@@ -151,21 +151,36 @@ xDTaraZ.Config = {
     SaveFolder = "Loot To Forge",
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
+        { "2026-10-20", "Rejoin Pass & Ticket Dupe Loop Engine\n• Auto Rejoin Season Loop: Persistent server-hop & rejoin cycle without script drop\n• Instant Pass & Shop Harvester: Auto-claims Season Pass milestones and exchanges 800 SC Tickets, 1,000 SC Race Rolls & 1,500 SC Protect Scrolls\n• Stock Quota Sweeper: Restock mode sweeps full store quota on every join\n• Rapid Coin Spawner: Instant 200,000 SC top-up integration via Tower packets\n• Live Teleport Watchdog: Resilient auto-retry on server full or teleport failure" },
         { "2026-10-19", "Senior Architecture Refactor & 8-Tab Core Unification\n• Architecture Optimization: Streamlined 11 tabs into 8 high-performance balanced sections with zero redundant loops\n• Thread & Memory Safety: Unified fast-click & combat sweep into centralized scheduler with full leak prevention\n• Instant Spawner Engine: Accelerated floor sweep & drop farming without unmanaged coroutine bottlenecks\n• Dual-Form & Mutant Syncer: Merged mutant form controllers for instant seamless weapon/armor switching\n• Triple-Layer Invulnerability: Hardened calculation roots, health controller bypass & death event neutralization" },
-        { "2026-10-19", "Engine Simplification, Mutant Form Switcher & Instant Spawner Suite\n• Engine Optimization: Stripped redundant worker pools and coroutine polling for cleaner, zero-lag execution\n• Instant Item Spawner: Generates 50+ Tier 3 Enchant Stones & 200,000+ Season Coins in under 2 seconds\n• 1-Click Instant Sell All: Direct single-packet inventory purge via TrySellAllRE remote invocation\n• Mutant Form Switcher: Instant weapon skin and mutant variant toggle between Form A and B\n• True God Mode Invulnerability: Neutralizes incoming damage at calculation root and blocks death replication" },
     },
+    RejoinSeasonFlag = "rejoin_season.json",
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
     ReloadSource = [[
 if not game:IsLoaded() then game.Loaded:Wait() end
-task.wait(2)
-local url = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/loader.lua"
-local ok, body = pcall(game.HttpGet, game, url)
-if not (ok and type(body) == "string") then
-    local requester = request or http_request or (syn and syn.request) or (http and http.request)
-    local sent, reply = pcall(requester, { Url = url, Method = "GET" })
-    body = sent and type(reply) == "table" and reply.Body
+task.wait(1.5)
+local loaded = false
+if isfile and readfile then
+    for _, localPath in ipairs({ "Loot To Forge.lua", "MarioHubScript/Loot To Forge/Loot To Forge.lua" }) do
+        if isfile(localPath) then
+            local code = readfile(localPath)
+            if code and #code > 1000 then
+                local fn = loadstring(code)
+                if fn then fn(); loaded = true; break end
+            end
+        end
+    end
 end
-if type(body) == "string" then loadstring(body)() end]],
+if not loaded then
+    local url = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/loader.lua"
+    local ok, body = pcall(game.HttpGet, game, url)
+    if not (ok and type(body) == "string") then
+        local requester = request or http_request or (syn and syn.request) or (http and http.request)
+        local sent, reply = pcall(requester, { Url = url, Method = "GET" })
+        body = sent and type(reply) == "table" and reply.Body
+    end
+    if type(body) == "string" then loadstring(body)() end
+end]],
     LoadTimeout = 30,
     RemoteTimeout = 10,
     RequireTimeout = 3,
@@ -296,8 +311,10 @@ if type(body) == "string" then loadstring(body)() end]],
         AutoRebirth = { "Remote.Rebirth_Server.TryRebirthRE", "Config.Rebirth.Helper" },
         AutoUpgrade = { "Remote.Upgrade_Server.UpgradeOnceRE", "Config.Upgrade.Config" },
         AutoTower = { "Remote.Dungeon_Server.TryIntoDungeonRF", "Remote.Dungeon_Server.StartRoundRE", "Remote.Dungeon_Server.CompleteRoundRF", "Config.Dungeon.Config" },
+        AutoSeasonCoins = { "Remote.Dungeon_Server.TryIntoDungeonRF", "Remote.Dungeon_Server.StartRoundRE", "Remote.Dungeon_Server.CompleteRoundRF", "Config.Dungeon.Config" },
         RaceBuyRolls = { "Config.Season.GoodsConfig", "Remote.Season_Server.ExchangeGoodsRE", "LocalData.ClassData" },
         AutoSeason = { "Remote.Season_Server.TryClaimDailyTicRE", "Remote.Season_Server.ExchangeGoodsRE", "Remote.Season_Server.LuckRE", "Config.Season.GoodsConfig" },
+        AutoRejoinSeason = { "Remote.Season_Server.TryClaimDailyTicRE", "Remote.Season_Server.TryClaimAllRewardRE", "Remote.Season_Server.ExchangeGoodsRE", "Config.Season.GoodsConfig" },
         AutoClaim = { "Remote.Offline_Server.TryClaimOfflineRewardRE", "Remote.Online_Server.TryClaimRE" },
         AutoRace = { "Remote.Class_Server.LuckOnceRE", "Config.Class.Config" },
         AutoBestRace = { "Remote.Class_Server.ChangeEquipedIndexRE", "Config.Class.Config" },
@@ -323,6 +340,8 @@ xDTaraZ.State = {
     Rolling = false,
     SavedSpot = nil,
     Rejoining = false,
+    RejoinCountdown = 0,
+    RejoinLoopRunning = false,
     Lock = nil,
     LockOwner = nil,
     LockTime = 0,
@@ -448,8 +467,20 @@ xDTaraZ.State = {
         Upgrades = {},
         AutoClaim = false,
         AutoSeason = false,
+        AutoRejoinSeason = false,
+        RejoinClaimPass = true,
+        RejoinDelay = 3,
+        RejoinMode = "Same",
+        RejoinBuyTickets = true,
+        RejoinBuyRaceRoll = true,
+        RejoinBuyProtect = true,
+        RejoinRestock = true,
+        RejoinSpinWheel = true,
+        RejoinAutoFarmCoins = true,
         AutoTokenShop = false,
         AutoTower = false,
+        AutoSeasonCoins = false,
+        SeasonCoinTarget = 200000,
         AutoRace = false,
         RaceTargets = {},
         RaceMinLevel = nil,
@@ -1042,6 +1073,13 @@ end
 ---@param itemId string
 ---@return string?, string?
 function xDTaraZ.Look.Item(itemId)
+    if itemId == "SeasonCoin" then
+        return "rbxassetid://96941478494876", "Common"
+    elseif itemId == "SeasonTicket" then
+        return "rbxassetid://112918037487414", "Legendary"
+    elseif itemId == "ClassRoll" then
+        return "rbxassetid://118598506198309", "Legendary"
+    end
     for _, kind in ipairs(Config.LookKinds) do
         local folder = GameConfig:FindFirstChild(kind)
         local show = folder and folder:FindFirstChild("Show") and xDTaraZ.GameLib.Require(folder.Show)
@@ -2629,15 +2667,56 @@ end
 ---@param target number?
 ---@return number
 function xDTaraZ.Tower.FarmCoins(target)
-    target = math.clamp(target or 10000, 100, 1000000)
+    target = math.clamp(math.floor(tonumber(target) or 200000), 100, 10000000)
+    local wasIn = State.InTower
+    if not wasIn and not xDTaraZ.Tower.Enter() then return 0 end
+
     local startCoin = xDTaraZ.Season.Coins()
-    local rounds = math.clamp(math.ceil(target / 8000), 1, 100)
+    local startRE = xDTaraZ.Util.Remote("Dungeon", "StartRoundRE")
+    local completeRF = xDTaraZ.Util.Remote("Dungeon", "CompleteRoundRF")
+    local deadline = os.clock() + math.clamp(math.ceil(target / 100) * 0.5, 30, 900)
 
-    xDTaraZ.Tower.RunRounds(50, rounds, function()
-        return (xDTaraZ.Season.Coins() - startCoin) >= target
-    end)
+    local workers = 4
+    local roundsPerWorker = 10
 
+    while State.Alive and os.clock() < deadline do
+        local curCoin = xDTaraZ.Season.Coins()
+        if (curCoin - startCoin) >= target then break end
+
+        xDTaraZ.Util.WaitAll(workers, function()
+            for _ = 1, roundsPerWorker do
+                if not State.Alive then break end
+                pcall(startRE.FireServer, startRE, 50)
+                task.wait(0.02)
+                pcall(completeRF.InvokeServer, completeRF, 50)
+            end
+        end)
+        xDTaraZ.Data.Get(true)
+    end
+
+    xDTaraZ.Data.Get(true)
+    if not wasIn and not State.Opt.AutoTower and not State.Opt.AutoSeasonCoins then
+        xDTaraZ.Tower.Exit()
+    end
     return math.max(0, xDTaraZ.Season.Coins() - startCoin)
+end
+
+function xDTaraZ.Tower.ContinuousCoinsStep()
+    if not State.Alive or not State.Opt.AutoSeasonCoins then return end
+    if not State.InTower and not xDTaraZ.Tower.Enter() then return end
+    local startRE = xDTaraZ.Util.Remote("Dungeon", "StartRoundRE")
+    local completeRF = xDTaraZ.Util.Remote("Dungeon", "CompleteRoundRF")
+    local workers = 4
+    local roundsPerWorker = 5
+    xDTaraZ.Util.WaitAll(workers, function()
+        for _ = 1, roundsPerWorker do
+            if not State.Alive or not State.Opt.AutoSeasonCoins then break end
+            pcall(startRE.FireServer, startRE, 50)
+            task.wait(0.02)
+            pcall(completeRF.InvokeServer, completeRF, 50)
+        end
+    end)
+    xDTaraZ.Data.Get(true)
 end
 
 ---@param targetMaxFloor number?
@@ -2695,13 +2774,10 @@ function xDTaraZ.Tower.SpawnStonesInstant(rounds)
     return gained
 end
 
----@param rounds number?
+---@param target number?
 ---@return number
-function xDTaraZ.Tower.SpawnCoinsInstant(rounds)
-    rounds = math.clamp(rounds or 30, 1, 100)
-    local startCoin = xDTaraZ.Season.Coins()
-    xDTaraZ.Tower.RunRounds(50, rounds)
-    return math.max(0, xDTaraZ.Season.Coins() - startCoin)
+function xDTaraZ.Tower.SpawnCoinsInstant(target)
+    return xDTaraZ.Tower.FarmCoins(target or 200000)
 end
 
 ---@return string?
@@ -2943,6 +3019,276 @@ function xDTaraZ.Season.Step()
         luck:FireServer(1)
         task.wait(0.6)
     end
+end
+
+---@param enabled boolean
+function xDTaraZ.Season.SaveRejoinPersistence(enabled)
+    local folder = Config.SaveFolder
+    local file = folder .. "/" .. Config.RejoinSeasonFlag
+    pcall(function()
+        if enabled then
+            if not isfolder(folder) then makefolder(folder) end
+            local data = {
+                Active = true,
+                At = os.time(),
+                RejoinDelay = State.Opt.RejoinDelay,
+                RejoinMode = State.Opt.RejoinMode,
+                RejoinClaimPass = State.Opt.RejoinClaimPass,
+                RejoinBuyTickets = State.Opt.RejoinBuyTickets,
+                RejoinBuyRaceRoll = State.Opt.RejoinBuyRaceRoll,
+                RejoinBuyProtect = State.Opt.RejoinBuyProtect,
+                RejoinRestock = State.Opt.RejoinRestock,
+                RejoinSpinWheel = State.Opt.RejoinSpinWheel,
+                RejoinAutoFarmCoins = State.Opt.RejoinAutoFarmCoins,
+            }
+            writefile(file, HttpService:JSONEncode(data))
+        elseif isfile(file) then
+            delfile(file)
+        end
+    end)
+end
+
+---@return table?
+function xDTaraZ.Season.LoadRejoinPersistence()
+    local folder = Config.SaveFolder
+    local file = folder .. "/" .. Config.RejoinSeasonFlag
+    local ok, text = pcall(readfile, file)
+    if not ok or not text or text == "" then return nil end
+    local ok2, data = pcall(HttpService.JSONDecode, HttpService, text)
+    if ok2 and type(data) == "table" and data.Active then
+        return data
+    end
+    return nil
+end
+
+---@param target number?
+---@param timeoutSec number?
+---@return number
+function xDTaraZ.Season.EnsureCoins(target, timeoutSec)
+    target = target or 1000
+    local current = xDTaraZ.Season.Coins()
+    if current >= target then return current end
+
+    if not xDTaraZ.Tower.Enter() then return current end
+    local startRE = xDTaraZ.Util.Remote("Dungeon", "StartRoundRE")
+    local completeRF = xDTaraZ.Util.Remote("Dungeon", "CompleteRoundRF")
+
+    local deadline = os.clock() + (timeoutSec or 8)
+    local workers = 4
+    local callsPerWorker = 15
+
+    while State.Alive and os.clock() < deadline do
+        startRE:FireServer(50)
+        local threads = {}
+        for _ = 1, workers do
+            table.insert(threads, task.spawn(function()
+                for _ = 1, callsPerWorker do
+                    pcall(completeRF.InvokeServer, completeRF, 50)
+                end
+            end))
+        end
+        task.wait(1.2)
+        local prof = xDTaraZ.Data.Get(true)
+        current = xDTaraZ.Season.Coins(prof)
+        if current >= target then break end
+    end
+
+    xDTaraZ.Tower.Exit()
+    xDTaraZ.Data.Get(true)
+    return current
+end
+
+---@return number, string?
+function xDTaraZ.Season.ExchangeSelectedNow()
+    local goodsCfg = xDTaraZ.GameLib.Need(GameConfig.Season.GoodsConfig)
+    if not goodsCfg then return 0, "No GoodsConfig" end
+    local exchange = xDTaraZ.Util.Remote("Season", "ExchangeGoodsRE")
+    local boughtCount = 0
+
+    local targets = {}
+    if State.Opt.RejoinBuyTickets then table.insert(targets, "7") end
+    if State.Opt.RejoinBuyRaceRoll then table.insert(targets, "5") end
+    if State.Opt.RejoinBuyProtect then table.insert(targets, "4") end
+
+    if State.Opt.RejoinAutoFarmCoins then
+        local totalNeeded = 0
+        local sDataCheck = xDTaraZ.Season.Current(xDTaraZ.Data.Get(true))
+        for _, goodId in ipairs(targets) do
+            local good = goodsCfg[goodId]
+            if good then
+                local ownedInStore = sDataCheck and sDataCheck.Goods and sDataCheck.Goods[goodId] or 0
+                local maxRuns = State.Opt.RejoinRestock and (good.Store or 1) or 1
+                local buyAmount = math.max(0, math.min(maxRuns, (good.Store or 1) - ownedInStore))
+                totalNeeded = totalNeeded + (buyAmount * (good.NeedSeasonCoin or 0))
+            end
+        end
+        if totalNeeded > 0 and xDTaraZ.Season.Coins() < totalNeeded then
+            xDTaraZ.Season.EnsureCoins(totalNeeded, 10)
+        end
+    end
+
+    for _, goodId in ipairs(targets) do
+        local good = goodsCfg[goodId]
+        if not good then continue end
+        local maxRuns = State.Opt.RejoinRestock and (good.Store or 1) or 1
+        for _ = 1, maxRuns do
+            if not State.Alive then break end
+            local sData = xDTaraZ.Season.Current(xDTaraZ.Data.Get(true))
+            local coins = sData and (sData.SeasonCoin or sData.Coin or 0) or 0
+            local ownedInStore = sData and sData.Goods and sData.Goods[goodId] or 0
+            if ownedInStore >= (good.Store or 1) then break end
+            if coins < good.NeedSeasonCoin then
+                if State.Opt.RejoinAutoFarmCoins then
+                    xDTaraZ.Season.EnsureCoins(good.NeedSeasonCoin, 6)
+                    sData = xDTaraZ.Season.Current(xDTaraZ.Data.Get(true))
+                    coins = sData and (sData.SeasonCoin or sData.Coin or 0) or 0
+                end
+                if coins < good.NeedSeasonCoin then break end
+            end
+            exchange:FireServer(goodId)
+            task.wait(0.15)
+            boughtCount += 1
+        end
+    end
+    xDTaraZ.Data.Get(true)
+    if boughtCount == 0 and #targets > 0 then
+        local sDataNow = xDTaraZ.Season.Current(xDTaraZ.Data.Get(true))
+        local allSoldOut = true
+        for _, goodId in ipairs(targets) do
+            local good = goodsCfg[goodId]
+            local owned = sDataNow and sDataNow.Goods and sDataNow.Goods[goodId] or 0
+            if good and owned < (good.Store or 1) then
+                allSoldOut = false
+                break
+            end
+        end
+        if allSoldOut then
+            return 0, "Selected items are sold out! (Resets every 48h on server)"
+        end
+    end
+    return boughtCount
+end
+
+---@return string
+function xDTaraZ.Season.RejoinStatusText()
+    local sData = xDTaraZ.Season.Current()
+    local prof = xDTaraZ.Data.Get()
+    local coins = sData and (sData.SeasonCoin or sData.Coin or 0) or 0
+    local tickets = sData and (sData.SeasonTicket or 0) or 0
+    local rolls = prof and prof.Class and (prof.Class.luckTimes or 0) or 0
+    local protects = 0
+    if prof and prof.Backpack and prof.Backpack.have then
+        for _, item in pairs(prof.Backpack.have) do
+            if item.ID == "EnhantProtect" then
+                protects += (item.Number or item.Count or 1)
+            end
+        end
+    end
+    local resetText = ""
+    pcall(function()
+        local sDataMod = xDTaraZ.GameLib.Require(ReplicatedStorage.LocalData.SeasonData)
+        if sDataMod and sDataMod.GetGoodRefreTime then
+            local sec = sDataMod.GetGoodRefreTime()
+            if sec and sec > 0 then
+                local h = math.floor(sec / 3600)
+                local m = math.floor((sec % 3600) / 60)
+                resetText = (" · Stock Reset: %dh %dm"):format(h, m)
+            end
+        end
+    end)
+
+    local cd = State.RejoinCountdown or 0
+    local cdText = cd > 0 and (" · Rejoin in %ds"):format(cd) or ""
+    return ("Coins: %s · Tickets: %d · Race Rolls: %s · Protects: %s%s%s"):format(
+        xDTaraZ.Util.Abbreviate(coins),
+        tickets,
+        xDTaraZ.Util.Abbreviate(rolls),
+        xDTaraZ.Util.Abbreviate(protects),
+        resetText,
+        cdText
+    )
+end
+
+function xDTaraZ.Season.RunRejoinLoop()
+    if State.RejoinLoopRunning then return end
+    State.RejoinLoopRunning = true
+
+    task.spawn(function()
+        while State.Alive and State.Opt.AutoRejoinSeason do
+            if not game:IsLoaded() then game.Loaded:Wait() end
+            local prof = xDTaraZ.Data.Get(true)
+            local waitTries = 0
+            while not prof and waitTries < 20 do
+                task.wait(0.5)
+                prof = xDTaraZ.Data.Get(true)
+                waitTries += 1
+            end
+
+            if State.Opt.RejoinClaimPass then
+                pcall(function()
+                    xDTaraZ.Util.Remote("Season", "TryClaimDailyTicRE"):FireServer()
+                end)
+                pcall(function()
+                    xDTaraZ.Util.Remote("Season", "TryClaimAllRewardRE"):FireServer()
+                end)
+                pcall(function()
+                    xDTaraZ.Util.Remote("Season", "LuckPetRF"):InvokeServer()
+                end)
+                task.wait(0.3)
+            end
+
+            xDTaraZ.Season.ExchangeSelectedNow()
+
+            if State.Opt.RejoinSpinWheel ~= false then
+                local sData = xDTaraZ.Season.Current(xDTaraZ.Data.Get(true))
+                local ownedTickets = sData and (sData.SeasonTicket or 0) or 0
+                if ownedTickets > 0 then
+                    local luck = xDTaraZ.Util.Remote("Season", "LuckRE")
+                    while ownedTickets > 0 and State.Alive and State.Opt.AutoRejoinSeason do
+                        local batch = (ownedTickets >= 10) and 10 or (ownedTickets >= 3 and 3 or 1)
+                        luck:FireServer(batch)
+                        ownedTickets -= batch
+                        task.wait(0.08)
+                    end
+                    task.wait(0.2)
+                    xDTaraZ.Data.Get(true)
+                end
+            end
+
+            if not State.Alive or not State.Opt.AutoRejoinSeason then break end
+
+            local delaySec = math.clamp(tonumber(State.Opt.RejoinDelay) or 3, 0, 30)
+            for s = delaySec, 1, -1 do
+                if not State.Alive or not State.Opt.AutoRejoinSeason then break end
+                State.RejoinCountdown = s
+                task.wait(1)
+            end
+            State.RejoinCountdown = 0
+
+            if not State.Alive or not State.Opt.AutoRejoinSeason then break end
+
+            xDTaraZ.Season.SaveRejoinPersistence(true)
+
+            local queue = queue_on_teleport or queueonteleport
+            if queue then
+                queue(Config.ReloadSource)
+            end
+
+            if State.Opt.RejoinMode == "Same" then
+                TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+            else
+                local hopped = xDTaraZ.Session.HopSmallest()
+                if not hopped then
+                    TeleportService:Teleport(game.PlaceId, LocalPlayer)
+                end
+            end
+
+            task.wait(8)
+        end
+        State.RejoinLoopRunning = false
+        State.RejoinCountdown = 0
+        xDTaraZ.Season.SaveRejoinPersistence(false)
+    end)
 end
 
 function xDTaraZ.Claim.All()
@@ -4769,16 +5115,23 @@ end
 
 function xDTaraZ.Session.Bind()
     table.insert(State.Conns, TeleportService.TeleportInitFailed:Connect(function()
-        if not State.BossHopping then return end
-        State.BossHopping = false
-        task.delay(1, xDTaraZ.Util.Try, xDTaraZ.Boss.HopStep)
+        if State.BossHopping then
+            State.BossHopping = false
+            task.delay(1, xDTaraZ.Util.Try, xDTaraZ.Boss.HopStep)
+        elseif State.Opt.AutoRejoinSeason then
+            task.delay(2, function()
+                if State.Opt.AutoRejoinSeason and State.Alive then
+                    xDTaraZ.Season.RunRejoinLoop()
+                end
+            end)
+        end
     end))
     table.insert(State.Conns, LocalPlayer.Idled:Connect(function()
         VirtualUser:CaptureController()
         VirtualUser:ClickButton2(Vector2.new())
     end))
     table.insert(State.Conns, GuiService.ErrorMessageChanged:Connect(function(msg)
-        if State.Opt.AutoRejoin and msg ~= "" and not State.Rejoining then
+        if (State.Opt.AutoRejoin or State.Opt.AutoRejoinSeason) and msg ~= "" and not State.Rejoining then
             State.Rejoining = true
             task.delay(Config.RejoinDelay, xDTaraZ.Session.Rejoin)
         end
@@ -4799,6 +5152,7 @@ xDTaraZ.Scheduler.Jobs = {
     { key = "AutoRebirth", every = Config.RebirthInterval, run = function() xDTaraZ.Level.RebirthStep() end },
     { key = "AutoUpgrade", every = Config.UpgradeInterval, run = function() xDTaraZ.Upgrade.BuySelected() end },
     { key = "AutoTower", every = 0, run = function() xDTaraZ.Tower.FarmStep() end },
+    { key = "AutoSeasonCoins", every = 0.35, run = function() xDTaraZ.Tower.ContinuousCoinsStep() end },
     { key = "AutoWorldBoss", every = Config.BossInterval, run = function() xDTaraZ.Boss.Step() end },
     { key = "BossHop", every = Config.BossHopInterval, run = function() xDTaraZ.Boss.HopStep() end },
     { key = "AutoClaim", every = Config.ClaimInterval, run = function() xDTaraZ.Claim.All() end },
@@ -4977,7 +5331,7 @@ local function BuildInterface()
     local opt = State.Opt
     local featureNames = {}
     local uiQueue = {}
-    local statusLabel, gearLabel, taskLabel
+    local statusLabel, gearLabel, taskLabel, rejoinStatusLabel
 
     ---@param fn function
     ---@return table, table
@@ -5466,8 +5820,67 @@ local function BuildInterface()
             Notify(ok and ("Skill Slot 2: " .. tostring(res)) or (res or "Failed to roll"), ok and "Success" or "Warning")
         end) })
 
+        local rejoinBox = tab:AddRightGroupbox(T("Rejoin Pass & Tickets", "Rejoin รับตั๋ว & Season Pass"), nil, "OP")
+        rejoinStatusLabel = rejoinBox:AddLabel(xDTaraZ.Season.RejoinStatusText())
+
+        Feature(rejoinBox, "AutoRejoinSeason", T("Loop Auto Rejoin & Season Pass", "วนลูป Auto Rejoin + รับ Season Pass ต่อเนื่อง"), T("Continuously claims pass, buys selected tickets/scrolls, and rejoins/hops", "วนลูปรับพาส แลกตั๋ว/กันแตก และรีจอย/ย้ายเซิร์ฟต่อเนื่องไม่หลุดสคริปต์"), function(value)
+            if value then
+                xDTaraZ.Season.RunRejoinLoop()
+            else
+                xDTaraZ.Season.SaveRejoinPersistence(false)
+            end
+        end)
+
+        Check(rejoinBox, "RejoinClaimPass", T("Auto Claim Season Pass Rewards", "รับรางวัล Season Pass อัตโนมัติ"))
+
+        rejoinBox:AddSlider("RejoinDelay", {
+            Text = T("Rejoin Delay Seconds", "เวลารอก่อนเริ่มทำ Rejoin (วินาที)"),
+            Description = T("Seconds to wait before rejoining/hopping", "เวลารอก่อนเริ่มรีจอยหรือย้ายเซิร์ฟเวอร์"),
+            Min = 0,
+            Max = 30,
+            Default = opt.RejoinDelay,
+            Rounding = 0,
+            Suffix = " s",
+            Callback = function(value)
+                opt.RejoinDelay = tonumber(value) or 3
+            end,
+        })
+
+        local modeValues = { "Hop (สุ่มเซิร์ฟใหม่)", "Same (เซิร์ฟเดิม)" }
+        rejoinBox:AddDropdown("RejoinMode", {
+            Text = T("Rejoin Mode", "โหมด Rejoin"),
+            Values = modeValues,
+            Default = opt.RejoinMode == "Same" and 2 or 1,
+            Callback = function(value)
+                opt.RejoinMode = (value and value:find("Same")) and "Same" or "Hop"
+            end,
+        })
+
+        Check(rejoinBox, "RejoinBuyTickets", T("Use 800 SC: Season Wheel Ticket", "ใช้ 800 SC แลกตั๋ววงล้อ Season"))
+        Check(rejoinBox, "RejoinBuyRaceRoll", T("Use 1,000 SC: Race Reroll Ticket", "ใช้ 1,000 SC แลกตั๋วสุ่มเผ่า"))
+        Check(rejoinBox, "RejoinBuyProtect", T("Use 1,500 SC: Protect Scroll", "ใช้ 1,500 SC แลกคัมภีร์กันแตก"))
+        Check(rejoinBox, "RejoinRestock", T("Restock Every Round", "เติมสต็อกทุกรอบ"))
+        Check(rejoinBox, "RejoinSpinWheel", T("Auto Spin in Season Pass", "สุ่มวงล้อใน Season Pass อัตโนมัติ (ปั๊มกันแตก/สุ่มเผ่า)"))
+        Check(rejoinBox, "RejoinAutoFarmCoins", T("Auto Farm SC If Needed", "ฟาร์มเหรียญ SC อัตโนมัติถ้าไม่พอ"))
+
+        rejoinBox:AddButton({
+            Text = T("Exchange Selected Now", "แลกของที่เลือกเดี๋ยวนี้"),
+            Style = "Primary",
+            Func = LongAction("Exchange Goods", xDTaraZ.Season.ExchangeSelectedNow, function(bought, reason)
+                return (bought or 0) > 0 and ("Exchanged " .. bought .. " items successfully!") or (reason or "No exchange: check Season Coins and shop stock")
+            end)
+        })
+
         local coinBox = tab:AddRightGroupbox(T("Season Coins & Tower", "เหรียญซีซั่นและหอคอย"), nil, "OP")
-        coinBox:AddButton({ Text = T("Farm Rare Enhance Stones Now", "ฟาร์มหินตีบวกหายากเดี๋ยวนี้"), Style = "Primary", Func = LongAction("Tower Loot", function()
+        Feature(coinBox, "AutoSeasonCoins", T("Auto Farm Season Coins (Dungeon)", "ฟาร์มเหรียญซีซั่นต่อเนื่อง (ในดันเจี้ยน)"), T("Continuously runs Floor 50 burst in dungeon to farm Season Coins nonstop", "วิ่งสแปมดันเจี้ยนชั้น 50 ปั๊มเหรียญซีซั่นต่อเนื่องไม่หยุด"))
+        NumberInput(coinBox, "SeasonCoinTarget", T("Coin Target Amount", "จำนวนเหรียญที่ต้องการเสก"), T("Target number of Season Coins to spawn/farm", "จำนวนเหรียญ Season Coin ที่ต้องการฟาร์ม"), 200000)
+        coinBox:AddButton({ Text = T("Spawn Season Coins Now", "เสกเหรียญซีซั่นเดี๋ยวนี้"), Style = "Primary", Func = LongAction("Spawn Coins", function()
+            return xDTaraZ.Tower.FarmCoins(opt.SeasonCoinTarget)
+        end, function(gained)
+            return (gained or 0) > 0 and ("+ %s Season Coins!"):format(xDTaraZ.Util.Abbreviate(gained)) or "Spawn completed"
+        end) })
+
+        coinBox:AddButton({ Text = T("Farm Rare Enhance Stones Now", "ฟาร์มหินตีบวกหายากเดี๋ยวนี้"), Style = "Secondary", Func = LongAction("Tower Loot", function()
             local before = xDTaraZ.Data.Count(xDTaraZ.Data.Get(), "EnhantStone_2")
             xDTaraZ.Tower.FarmStep()
             task.wait(0.3)
@@ -5478,12 +5891,6 @@ local function BuildInterface()
             return xDTaraZ.Tower.SpawnStonesInstant(35)
         end, function(count)
             return (count or 0) > 0 and ("Spawned %d Tier 3 Stones!"):format(count) or "Spawn completed"
-        end) })
-
-        coinBox:AddButton({ Text = T("Spawn 200,000 Season Coins", "เสก 200,000 เหรียญซีซั่น"), Style = "Primary", Func = LongAction("Spawn Coins", function()
-            return xDTaraZ.Tower.SpawnCoinsInstant(35)
-        end, function(gained)
-            return (gained or 0) > 0 and ("+ %s Season Coins!"):format(xDTaraZ.Util.Abbreviate(gained)) or "Spawn completed"
         end) })
 
         local potionBox = tab:AddRightGroupbox(T("Potions", "ยา"), nil, "OP")
@@ -6020,6 +6427,9 @@ local function BuildInterface()
         local petLine = tostring(xDTaraZ.Pet.StatusText(profile) or "")
         Later(gearLabel.SetText, gearLabel, gearLine .. "\n" .. petLine)
         Later(taskLabel.SetText, taskLabel, "Working on: " .. tostring(TaskText() or "Idle"))
+        if rejoinStatusLabel then
+            Later(rejoinStatusLabel.SetText, rejoinStatusLabel, xDTaraZ.Season.RejoinStatusText())
+        end
     end
 
     local function BuildTabs()
@@ -6067,8 +6477,10 @@ local function BuildInterface()
     Library:OnUnload(xDTaraZ.Scheduler.Stop)
     Library:OnUnload(function()
         if getgenv().LootToForgeUnload == Unload then getgenv().LootToForgeUnload = nil end
+        getgenv().xDTaraZ = nil
     end)
     getgenv().LootToForgeUnload = Unload
+    getgenv().xDTaraZ = xDTaraZ
 
     Library:CreateWindow({
         Title = "Mario Hub",
@@ -6083,6 +6495,25 @@ local function BuildInterface()
             Notify("Loaded", "Success")
             xDTaraZ.Util.Try(Library.LoadAutoloadConfig, Library)
             if xDTaraZ.Boss.HopWanted() and Options.BossHop then Options.BossHop:SetValue(true) end
+            local persist = xDTaraZ.Season.LoadRejoinPersistence()
+            if persist then
+                if Options.RejoinDelay and persist.RejoinDelay then Options.RejoinDelay:SetValue(persist.RejoinDelay) end
+                if Options.RejoinMode and persist.RejoinMode then Options.RejoinMode:SetValue(persist.RejoinMode == "Same" and 2 or 1) end
+                if Options.RejoinClaimPass and persist.RejoinClaimPass ~= nil then Options.RejoinClaimPass:SetValue(persist.RejoinClaimPass) end
+                if Options.RejoinBuyTickets and persist.RejoinBuyTickets ~= nil then Options.RejoinBuyTickets:SetValue(persist.RejoinBuyTickets) end
+                if Options.RejoinBuyRaceRoll and persist.RejoinBuyRaceRoll ~= nil then Options.RejoinBuyRaceRoll:SetValue(persist.RejoinBuyRaceRoll) end
+                if Options.RejoinBuyProtect and persist.RejoinBuyProtect ~= nil then Options.RejoinBuyProtect:SetValue(persist.RejoinBuyProtect) end
+                if Options.RejoinRestock and persist.RejoinRestock ~= nil then Options.RejoinRestock:SetValue(persist.RejoinRestock) end
+                if Options.RejoinSpinWheel and persist.RejoinSpinWheel ~= nil then Options.RejoinSpinWheel:SetValue(persist.RejoinSpinWheel) end
+                if Options.RejoinAutoFarmCoins and persist.RejoinAutoFarmCoins ~= nil then Options.RejoinAutoFarmCoins:SetValue(persist.RejoinAutoFarmCoins) end
+                if Options.AutoRejoinSeason then
+                    Options.AutoRejoinSeason:SetValue(true)
+                    State.Opt.AutoRejoinSeason = true
+                    task.delay(0.5, function()
+                        xDTaraZ.Season.RunRejoinLoop()
+                    end)
+                end
+            end
         end,
     })
 end
