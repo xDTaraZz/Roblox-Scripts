@@ -3171,22 +3171,38 @@ end
 
 ---@return string
 function xDTaraZ.Season.RejoinStatusText()
-    local sData = xDTaraZ.Season.Current()
-    local prof = xDTaraZ.Data.Get()
-    local coins = sData and (sData.SeasonCoin or sData.Coin or 0) or 0
-    local tickets = sData and (sData.SeasonTicket or 0) or 0
-    local rolls = prof and prof.Class and (prof.Class.luckTimes or 0) or 0
+    local coins = 0
+    local tickets = 0
+    local rolls = 0
     local protects = 0
-    if prof and prof.Backpack and prof.Backpack.have then
-        for _, item in pairs(prof.Backpack.have) do
-            if item.ID == "EnhantProtect" then
-                protects += (item.Number or item.Count or 1)
+    local resetText = ""
+    local cd = State.RejoinCountdown or 0
+    local cdText = cd > 0 and (" · Rejoin in %ds"):format(cd) or ""
+
+    pcall(function()
+        local prof = State.Profile
+        if not prof then
+            local ok, fetched = pcall(xDTaraZ.Data.Get)
+            if ok and type(fetched) == "table" then
+                prof = fetched
             end
         end
-    end
-    local resetText = ""
+        local sData = prof and xDTaraZ.Season.Current(prof)
+        coins = sData and (sData.SeasonCoin or sData.Coin or 0) or 0
+        tickets = sData and (sData.SeasonTicket or 0) or 0
+        rolls = prof and prof.Class and (prof.Class.luckTimes or 0) or 0
+        if prof and prof.Backpack and prof.Backpack.have then
+            for _, item in pairs(prof.Backpack.have) do
+                if item.ID == "EnhantProtect" then
+                    protects += (item.Number or item.Count or 1)
+                end
+            end
+        end
+    end)
+
     pcall(function()
-        local sDataMod = xDTaraZ.GameLib.Require(ReplicatedStorage.LocalData.SeasonData)
+        local sDataInst = ReplicatedStorage:FindFirstChild("LocalData") and ReplicatedStorage.LocalData:FindFirstChild("SeasonData")
+        local sDataMod = sDataInst and xDTaraZ.GameLib.Loaded[sDataInst]
         if sDataMod and sDataMod.GetGoodRefreTime then
             local sec = sDataMod.GetGoodRefreTime()
             if sec and sec > 0 then
@@ -3197,9 +3213,7 @@ function xDTaraZ.Season.RejoinStatusText()
         end
     end)
 
-    local cd = State.RejoinCountdown or 0
-    local cdText = cd > 0 and (" · Rejoin in %ds"):format(cd) or ""
-    return ("Coins: %s · Tickets: %d · Race Rolls: %s · Protects: %s%s%s"):format(
+    local ok, text = pcall(string.format, "Coins: %s · Tickets: %d · Race Rolls: %s · Protects: %s%s%s",
         xDTaraZ.Util.Abbreviate(coins),
         tickets,
         xDTaraZ.Util.Abbreviate(rolls),
@@ -3207,6 +3221,7 @@ function xDTaraZ.Season.RejoinStatusText()
         resetText,
         cdText
     )
+    return ok and text or "Coins: 0 · Tickets: 0 · Race Rolls: 0 · Protects: 0"
 end
 
 function xDTaraZ.Season.RunRejoinLoop()
@@ -5821,7 +5836,7 @@ local function BuildInterface()
         end) })
 
         local rejoinBox = tab:AddRightGroupbox(T("Rejoin Pass & Tickets", "Rejoin รับตั๋ว & Season Pass"), nil, "OP")
-        rejoinStatusLabel = rejoinBox:AddLabel(xDTaraZ.Season.RejoinStatusText())
+        rejoinStatusLabel = rejoinBox:AddLabel("Coins: - · Tickets: - · Race Rolls: - · Protects: -")
 
         Feature(rejoinBox, "AutoRejoinSeason", T("Loop Auto Rejoin & Season Pass", "วนลูป Auto Rejoin + รับ Season Pass ต่อเนื่อง"), T("Continuously claims pass, buys selected tickets/scrolls, and rejoins/hops", "วนลูปรับพาส แลกตั๋ว/กันแตก และรีจอย/ย้ายเซิร์ฟต่อเนื่องไม่หลุดสคริปต์"), function(value)
             if value then
