@@ -3128,26 +3128,52 @@ function xDTaraZ.Season.ExchangeSelectedNow()
     end
 
     for _, goodId in ipairs(targets) do
+        pcall(function() exchange:FireServer(goodId, -5) end)
+        pcall(function() exchange:FireServer(tonumber(goodId), -5) end)
+    end
+    task.wait(0.05)
+
+    local keyVariations = {
+        function(id) return tostring(id) end,
+        function(id) return "0" .. tostring(id) end,
+        function(id) return " " .. tostring(id) end,
+        function(id) return tostring(id) .. " " end,
+        function(id) return "00" .. tostring(id) end,
+    }
+
+    for _, goodId in ipairs(targets) do
         local good = goodsCfg[goodId]
         if not good then continue end
         local maxRuns = State.Opt.RejoinRestock and (good.Store or 1) or 1
-        for _ = 1, maxRuns do
+
+        for _, makeKey in ipairs(keyVariations) do
             if not State.Alive then break end
+            local currentKey = makeKey(goodId)
             local sData = xDTaraZ.Season.Current(xDTaraZ.Data.Get(true))
-            local coins = sData and (sData.SeasonCoin or sData.Coin or 0) or 0
-            local ownedInStore = sData and sData.Goods and sData.Goods[goodId] or 0
-            if ownedInStore >= (good.Store or 1) then break end
-            if coins < good.NeedSeasonCoin then
-                if State.Opt.RejoinAutoFarmCoins then
-                    xDTaraZ.Season.EnsureCoins(good.NeedSeasonCoin, 6)
+            local ownedInStore = sData and sData.Goods and sData.Goods[currentKey] or 0
+            if ownedInStore < (good.Store or 1) then
+                local remaining = (good.Store or 1) - ownedInStore
+                local runs = math.min(maxRuns, remaining)
+                for _ = 1, runs do
+                    if not State.Alive then break end
                     sData = xDTaraZ.Season.Current(xDTaraZ.Data.Get(true))
-                    coins = sData and (sData.SeasonCoin or sData.Coin or 0) or 0
+                    local coins = sData and (sData.SeasonCoin or sData.Coin or 0) or 0
+                    if coins < good.NeedSeasonCoin and State.Opt.RejoinAutoFarmCoins then
+                        xDTaraZ.Season.EnsureCoins(good.NeedSeasonCoin, 6)
+                        sData = xDTaraZ.Season.Current(xDTaraZ.Data.Get(true))
+                        coins = sData and (sData.SeasonCoin or sData.Coin or 0) or 0
+                    end
+                    if coins < good.NeedSeasonCoin then break end
+
+                    for b = 1, 3 do
+                        task.spawn(function()
+                            exchange:FireServer(currentKey)
+                        end)
+                    end
+                    task.wait(0.12)
+                    boughtCount += 1
                 end
-                if coins < good.NeedSeasonCoin then break end
             end
-            exchange:FireServer(goodId)
-            task.wait(0.15)
-            boughtCount += 1
         end
     end
     xDTaraZ.Data.Get(true)
