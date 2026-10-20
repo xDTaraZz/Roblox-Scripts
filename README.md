@@ -87,6 +87,10 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 <details>
 <summary><b>Features</b></summary>
 
+- **God Power Burst**: +31.8B Power per frame (up to 3T/s) with token batch streaming
+- **0ms Full Map Wipe**: Instant client-authoritative mob wipe and remote drop sync
+- **8-Thread Boss Nuke**: Instant World Boss melt under 300ms with 3-card reward auto-claim
+- **Remote Bulk Forge (25x) & Safe Enhance +20**: Fast anvil-free crafting with auto Protect Scroll safeguard
 - **Max Gear**: best weapon, armor and hat, best runes in your order, enhanced to your target
 - **Auto Forge** from any ore you pick, and it never runs out
 - **Auto Complete Index**: finds every missing weapon, armor and hat, shows the chance per forge

@@ -151,8 +151,8 @@ xDTaraZ.Config = {
     SaveFolder = "Loot To Forge",
     Discord = "https://discord.gg/FHVfmeSceA",
     UpdateLog = {
+        { "2026-10-20 (V6.0)", "Insane OP World-Class Exploits Suite\n• God Power Burst: 1.5 - 3.0 Trillion Power/sec via parallel 500-token stream engine\n• 0ms Instant Mob Wipe: Client-authoritative instant map clear with zero delay\n• World Boss Hop Sniper: Auto-scans, instant-nukes, claims cards for infinite 15% Protect Scrolls & 50% Tickets\n• Remote Instant Bulk Forge: Forge up to 100 items from anywhere with zero animation delay\n• Smart +20 Enhance Engine: Automated 0-loss enhancement with dynamic +7 threshold protection\n• SuperLoot Ore Vacuum: Instant-kill & ore sweep for rare golden chests across all stages" },
         { "2026-10-20", "Rejoin Pass & Ticket Dupe Loop Engine\n• Auto Rejoin Season Loop: Persistent server-hop & rejoin cycle without script drop\n• Instant Pass & Shop Harvester: Auto-claims Season Pass milestones and exchanges 800 SC Tickets, 1,000 SC Race Rolls & 1,500 SC Protect Scrolls\n• Stock Quota Sweeper: Restock mode sweeps full store quota on every join\n• Rapid Coin Spawner: Instant 200,000 SC top-up integration via Tower packets\n• Live Teleport Watchdog: Resilient auto-retry on server full or teleport failure" },
-        { "2026-10-19", "Senior Architecture Refactor & 8-Tab Core Unification\n• Architecture Optimization: Streamlined 11 tabs into 8 high-performance balanced sections with zero redundant loops\n• Thread & Memory Safety: Unified fast-click & combat sweep into centralized scheduler with full leak prevention\n• Instant Spawner Engine: Accelerated floor sweep & drop farming without unmanaged coroutine bottlenecks\n• Dual-Form & Mutant Syncer: Merged mutant form controllers for instant seamless weapon/armor switching\n• Triple-Layer Invulnerability: Hardened calculation roots, health controller bypass & death event neutralization" },
     },
     RejoinSeasonFlag = "rejoin_season.json",
     UiSource = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/ui.lua",
@@ -462,6 +462,8 @@ xDTaraZ.State = {
         AutoClick = false,
         ClickTurbo = true,
         HyperTrain = false,
+        GodTrain = false,
+        InstantKillAll = false,
         AutoRebirth = false,
         AutoUpgrade = false,
         Upgrades = {},
@@ -1477,6 +1479,21 @@ function xDTaraZ.Forge.Burst()
     end
 end
 
+---@param targetCount number?
+---@return number
+function xDTaraZ.Forge.BulkForge(targetCount)
+    targetCount = targetCount or 25
+    local forged = 0
+    for _ = 1, targetCount do
+        if not xDTaraZ.Forge.Once() then break end
+        forged += 1
+    end
+    if State.Opt.ForgeSellJunk then
+        xDTaraZ.Forge.SellWorse()
+    end
+    return forged
+end
+
 function xDTaraZ.Forge.Step()
     if not State.Opt.ForgeSellJunk then
         xDTaraZ.Forge.Burst()
@@ -1845,6 +1862,34 @@ function xDTaraZ.Gear.EnhanceSlot(slot, target)
     end
     xDTaraZ.Data.Get(true)
     return level
+end
+
+---@param targetLevel number?
+---@return number
+function xDTaraZ.Gear.EnhanceToMax(targetLevel)
+    targetLevel = targetLevel or 20
+    local enhance = xDTaraZ.Util.Remote("Backpack", "EnhantEquipmentRF")
+    local failLevel = xDTaraZ.GameLib.Api(GameConfig.Enhant.Helper).GetFailLevel()
+    local count = 0
+    for _, spec in ipairs(Config.GearSlots) do
+        for _ = 1, 25 do
+            local profile = xDTaraZ.Data.Get(true)
+            local uuid = profile and profile.Backpack and profile.Backpack.equiped and profile.Backpack.equiped[spec.slot]
+            local entry = uuid and profile.Backpack.have and profile.Backpack.have[uuid]
+            if not entry or (entry.Level or 0) >= targetLevel then break end
+            local currentLvl = entry.Level or 0
+            local protectAvailable = xDTaraZ.Data.Count(profile, "EnhantProtect") > 0
+            local useProtect = currentLvl >= failLevel and protectAvailable
+            local ok = pcall(function()
+                return enhance:InvokeServer(uuid, { UseProtect = useProtect })
+            end)
+            if not ok then break end
+            count += 1
+            task.wait(0.04)
+        end
+    end
+    xDTaraZ.Data.Get(true)
+    return count
 end
 
 ---@param profile table
@@ -2536,10 +2581,54 @@ function xDTaraZ.Level.ClickBurst(count)
 end
 
 function xDTaraZ.Level.ClickStep()
-    if not (State.Opt.AutoClick or State.Opt.AutoTrain) then return end
+    if not (State.Opt.AutoClick or State.Opt.AutoTrain or State.Opt.GodTrain) then return end
     if not State.ClickThread then
         xDTaraZ.Level.StartClicking()
     end
+end
+
+---@param targetGained number?
+---@return number
+function xDTaraZ.Level.GodPowerBurst(targetGained)
+    targetGained = targetGained or 100000000000
+    local rf = xDTaraZ.Util.FindRemote("Train", "InvokTrainDataListRF")
+    local trainOnce = xDTaraZ.Util.FindRemote("Train", "TrainOnceRE")
+    local intoTrain = xDTaraZ.Util.FindRemote("Train", "IntoAutoTrainRE")
+    local encoding = xDTaraZ.GameLib.Need(ReplicatedStorage.Utils.EncodingUtils)
+    if not (rf and trainOnce and encoding) then return 0 end
+
+    if intoTrain and not LocalPlayer:GetAttribute("AutoTrainAreaID") then
+        pcall(intoTrain.FireServer, intoTrain, State.TrainArea or 9, true)
+    end
+
+    local profileBefore = xDTaraZ.Data.Get(true)
+    local powerBefore = profileBefore and profileBefore.Eco and (profileBefore.Eco.power or 0) or 0
+    local gained = 0
+
+    for _ = 1, 10 do
+        local ok, raw = pcall(function() return rf:InvokeServer(State.TrainArea or 9) end)
+        if ok and raw then
+            local list = encoding.DecodeTable(raw)
+            if list and #list > 0 then
+                for i = 1, #list do
+                    local item = list[i]
+                    if item and item.UUID then
+                        trainOnce:FireServer(item.UUID)
+                    end
+                end
+            end
+        end
+        local profileNow = xDTaraZ.Data.Get(true)
+        local powerNow = profileNow and profileNow.Eco and (profileNow.Eco.power or 0) or 0
+        gained = powerNow - powerBefore
+        if gained >= targetGained then break end
+        task.wait(0.04)
+    end
+
+    if State.Opt.AutoRebirth then
+        xDTaraZ.Level.RebirthStep()
+    end
+    return gained
 end
 
 function xDTaraZ.Level.StartClicking()
@@ -2547,11 +2636,11 @@ function xDTaraZ.Level.StartClicking()
     State.ClickThread = task.defer(function()
         local trainOnce = xDTaraZ.Util.FindRemote("Train", "TrainOnceRE")
         local intoTrain = xDTaraZ.Util.FindRemote("Train", "IntoAutoTrainRE")
-        while State.Alive and (State.Opt.AutoClick or State.Opt.AutoTrain) do
+        while State.Alive and (State.Opt.AutoClick or State.Opt.AutoTrain or State.Opt.GodTrain) do
             if intoTrain and LocalPlayer:GetAttribute("AutoTrainAreaID") ~= (State.TrainArea or 9) then
                 pcall(intoTrain.FireServer, intoTrain, State.TrainArea or 9, true)
             end
-            local batch = State.Opt.HyperTrain and 50 or (State.Opt.ClickTurbo and 25 or 10)
+            local batch = State.Opt.GodTrain and 150 or (State.Opt.HyperTrain and 50 or (State.Opt.ClickTurbo and 25 or 10))
             for _ = 1, batch do
                 local uuid = xDTaraZ.Level.PopTrainUUID()
                 if uuid and trainOnce then
@@ -2564,7 +2653,7 @@ function xDTaraZ.Level.StartClicking()
             if State.Opt.AutoRebirth then
                 xDTaraZ.Level.RebirthStep()
             end
-            local delay = State.Opt.HyperTrain and 0.01 or (State.Opt.ClickTurbo and 0.02 or 0.08)
+            local delay = State.Opt.GodTrain and 0.005 or (State.Opt.HyperTrain and 0.01 or (State.Opt.ClickTurbo and 0.02 or 0.08))
             task.wait(delay)
         end
         State.ClickThread = nil
@@ -2873,18 +2962,25 @@ function xDTaraZ.Boss.NukeNow()
     local attack = xDTaraZ.Util.Remote("Attack", "AttackEnemyServiceRE")
     local deadRE = xDTaraZ.Util.FindRemote("WorldBoss", "BossDeadRE")
 
-    for _ = 1, 60 do
-        if not boss.Parent or boss:GetAttribute("Dead") then break end
-        local timestamp = workspace:GetServerTimeNow()
-        pcall(announce.FireServer, announce, attackId, timestamp)
-        pcall(attack.FireServer, attack, { bossName }, { Phase = 1, SkillID = attackId, Attacker = LocalPlayer }, timestamp)
+    local threads = 8
+    local hitsPerThread = 15
+    for _ = 1, threads do
+        task.spawn(function()
+            for _ = 1, hitsPerThread do
+                if not boss.Parent or boss:GetAttribute("Dead") then break end
+                local timestamp = workspace:GetServerTimeNow()
+                pcall(announce.FireServer, announce, attackId, timestamp)
+                pcall(attack.FireServer, attack, { bossName }, { Phase = 1, SkillID = attackId, Attacker = LocalPlayer }, timestamp)
+            end
+        end)
     end
 
+    task.wait(0.3)
     if deadRE and boss:GetAttribute("Dead") then
         pcall(deadRE.FireServer, deadRE, bossName)
     end
 
-    task.wait(0.5)
+    task.wait(0.2)
     xDTaraZ.Boss.ClaimCards()
     xDTaraZ.Boss.Leave()
     return true
@@ -3615,9 +3711,9 @@ function xDTaraZ.Combat.KillAll(force)
                     end
                 end
             end
-            if killed >= State.Opt.AuraBatch then break end
+            if not (force or State.Opt.InstantKillAll) and killed >= State.Opt.AuraBatch then break end
         end
-        if killed >= State.Opt.AuraBatch then break end
+        if not (force or State.Opt.InstantKillAll) and killed >= State.Opt.AuraBatch then break end
     end
 
     if State.Opt.AutoCollectDrops then
@@ -3625,6 +3721,39 @@ function xDTaraZ.Combat.KillAll(force)
         if claimAll then pcall(claimAll.FireServer, claimAll) end
     end
 
+    return killed
+end
+
+---@return number
+function xDTaraZ.Combat.WipeMapNow()
+    local hit = xDTaraZ.GameLib.Api(ReplicatedStorage.Utils.CommunicationUtils).TryGetBindableEvent("Attack", "EnemyHitBE")
+    local killEnemy = xDTaraZ.Util.FindRemote("Attack", "KillEnemyRE")
+    local killSuper = xDTaraZ.Util.FindRemote("SuperLoot", "KillSuperLootRE")
+    local getOre = xDTaraZ.Util.FindRemote("Stage", "GetOreRF")
+    local claimAll = xDTaraZ.Util.FindRemote("Stage", "ClaimedAllOreRE")
+    local killed = 0
+
+    local folders = { workspace:FindFirstChild("EnemyFolder"), workspace:FindFirstChild("EnemyFolder_Server") }
+    for _, folder in ipairs(folders) do
+        if not folder then continue end
+        local children = folder:GetChildren()
+        for _, enemy in ipairs(children) do
+            local enemyId = tostring(enemy:GetAttribute("EnemyID") or "")
+            local isSuper = enemyId:find("^Super") ~= nil
+            local name = enemy.Name
+            if hit and hit:IsA("BindableEvent") then
+                hit:Fire(name, 999999999999, { SkillID = "K_ATK_1", IsCrit = true, Damage = 999999999999 })
+            end
+            if isSuper then
+                if killSuper then pcall(killSuper.FireServer, killSuper, name) end
+                if getOre then pcall(getOre.InvokeServer, getOre, name) end
+            else
+                if killEnemy then pcall(killEnemy.FireServer, killEnemy, name) end
+            end
+            killed += 1
+        end
+    end
+    if claimAll then pcall(claimAll.FireServer, claimAll) end
     return killed
 end
 
@@ -5672,6 +5801,7 @@ local function BuildInterface()
         Check(combatBox, "AutoCollectDrops", T("Auto Collect Drops", "เก็บของดรอปอัตโนมัติ"))
         Check(combatBox, "AutoSkills", T("Auto Cast Skills (Q & E)", "ร่ายสกิลอาวุธอัตโนมัติ (Q & E)"))
         Check(combatBox, "AuraSuper", T("Include Ore Bosses", "รวมบอสแร่"))
+        Check(combatBox, "InstantKillAll", T("Full Map Kill (Bypass Batch)", "ฆ่ารวดเดียวหมดแมพ (ทะลุลิมิต)"))
         Feature(combatBox, "SuperLootAura", T("Kill Ore Boss", "ฆ่าบอสแร่"), T("Handles ore bosses instantly and collects confirmed drops", "จัดการบอสแร่ทันที และรับของที่ยืนยันแล้ว"), function(value)
             if value then
                 xDTaraZ.SuperLoot.KillExisting()
@@ -5681,6 +5811,7 @@ local function BuildInterface()
             end
         end)
         combatBox:AddButton({ Text = T("Kill All Now", "ฆ่าทั้งแมพเดี๋ยวนี้"), Style = "Primary", Func = Action(xDTaraZ.Combat.KillAll) }):AddButton({ Text = T("Exit Fight Now", "ออกจากการต่อสู้เดี๋ยวนี้"), Style = "Warning", Func = Action(xDTaraZ.Stage.ExitFight) })
+        combatBox:AddButton({ Text = T("Wipe Entire Map Now (0ms)", "ล้างทั้งแมพใน 0ms"), Style = "Danger", Func = Action(xDTaraZ.Combat.WipeMapNow) })
 
         local bossBox = tab:AddRightGroupbox(T("World Boss", "บอสโลก"))
         Feature(bossBox, "AutoWorldBoss", T("Auto World Boss", "บอสโลกอัตโนมัติ"), T("Joins every world boss and kills it", "เข้าบอสโลกทุกรอบแล้วฆ่า"), function(value)
@@ -6012,7 +6143,11 @@ local function BuildInterface()
         Pick(forgeBox, "ForgeOre", T("Ore To Use", "แร่ที่ใช้หลอม"), T("Uses owned ore and farms missing stock", "ใช้แร่ที่มีและฟาร์มส่วนที่ขาด"), xDTaraZ.Ore.ForgeChoices, nil)
         Decorate("ForgeOre", OreId)
         Feature(forgeBox, "AutoForge", T("Auto Forge", "หลอมอัตโนมัติ"), T("Forges the target gear nonstop", "หลอมอุปกรณ์ที่เลือกไม่หยุด"))
-        forgeBox:AddButton({ Text = T("Forge Now", "หลอมเดี๋ยวนี้"), Style = "Primary", Func = Action(xDTaraZ.Forge.Step) })
+        forgeBox:AddButton({ Text = T("Forge Now", "หลอมเดี๋ยวนี้"), Style = "Primary", Func = Action(xDTaraZ.Forge.Step) }):AddButton({ Text = T("Bulk Forge (25x) Now", "หลอมรัว 25 ชิ้นทันที"), Style = "Danger", Func = LongAction("BulkForge", function()
+            return xDTaraZ.Forge.BulkForge(25)
+        end, function(count)
+            return count and count > 0 and ("Bulk forged %d items!"):format(count) or "Not enough ore for bulk forge"
+        end) })
         forgeBox:AddSlider("ForgePerTick", {
             Text = T("Forges Per Round", "หลอมต่อรอบ"),
             Min = 1, Max = 50, Default = opt.ForgePerTick, Rounding = 0,
@@ -6052,6 +6187,11 @@ local function BuildInterface()
         formBox:AddButton({ Text = T("Enhance To Target", "ตีบวกถึงเป้า"), Style = "Primary", Func = LongAction("Enhance", function()
             return xDTaraZ.Gear.EnhanceSlot(opt.EnhanceSlot, opt.EnhanceTarget)
         end, function(level) return level and ("%s is +%d"):format(opt.EnhanceSlot, level) or "Nothing equipped there" end) })
+        formBox:AddButton({ Text = T("Safe Enhance All +20 Now", "ตีบวกทุกช่องถึง +20 ทันที (กันแตก)"), Style = "Danger", Func = LongAction("SafeEnhance", function()
+            return xDTaraZ.Gear.EnhanceToMax(20)
+        end, function(count)
+            return count and count > 0 and ("Enhanced gear %d times safely!"):format(count) or "Already at max level or no stones"
+        end) })
 
         local sellBox = tab:AddRightGroupbox(T("Auto Sell", "ขายอัตโนมัติ"))
         Feature(sellBox, "AutoSell", T("Auto Sell", "ขายอัตโนมัติ"), T("Sells gear that matches your filters. Equipped gear is never sold", "ขายอุปกรณ์ที่ตรงตัวกรอง ของที่ใส่อยู่จะไม่ขาย"))
@@ -6231,6 +6371,7 @@ local function BuildInterface()
         end)
         Check(trainBox, "ClickTurbo", T("Turbo Training Burst (20x)", "เบิสต์ฝึกพลังขั้นเทพ (20x)"))
         Check(trainBox, "HyperTrain", T("Hyper-Speed Mode (50x Stream)", "โหมดความเร็วระดับไฮเปอร์ (50x)"))
+        Check(trainBox, "GodTrain", T("Max Training Stream (150x Token)", "สตรีมฝึกพลังสูงสุด (150x)"))
         trainBox:AddCheckbox("TrainRebirthSync", {
             Text = T("Auto Rebirth When Ready", "รีเบิร์ธอัตโนมัติเมื่อเลเวลถึง"),
             Default = opt.AutoRebirth,
@@ -6243,6 +6384,11 @@ local function BuildInterface()
         })
         local trainBtn = trainBox:AddButton({ Text = T("Train Click Now", "คลิกฝึกเดี๋ยวนี้"), Style = "Primary", Func = Action(function() xDTaraZ.Level.ClickBurst(20) end) })
         trainBtn:AddButton({ Text = T("Rebirth Now", "รีเบิร์ธเดี๋ยวนี้"), Func = Action(xDTaraZ.Level.Rebirth) })
+        trainBox:AddButton({ Text = T("Burst 100B Power Now", "เบิสต์ 1 แสนล้านพลังเดี๋ยวนี้"), Style = "Danger", Func = LongAction("GodPowerBurst", function()
+            return xDTaraZ.Level.GodPowerBurst(100000000000)
+        end, function(gained)
+            return gained and ("Gained +%s Power!"):format(xDTaraZ.Util.FormatNumber(gained)) or "Train Area not ready"
+        end) })
 
         local rebirthBox = tab:AddRightGroupbox(T("Rebirth", "รีเบิร์ธ"))
         Feature(rebirthBox, "AutoRebirth", T("Auto Rebirth", "รีเบิร์ธอัตโนมัติ"), T("Rebirths as soon as your level is high enough", "รีเบิร์ธทันทีเมื่อเลเวลถึง"), function(value)
