@@ -34,7 +34,7 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 | **[Open Sea For Animals](#-open-sea-for-animals)** | Loot every wave from your base, auto hatch, sell filters, Kaitun |
 | **[Murder Mystery 2](#-murder-mystery-2)** | Silent aim, auto shoot, kill all, coin farm, role ESP, auto win |
 | **[Driving Empire](#-driving-empire)** | Auto ATM farm, auto drive, playtime rewards, teleport, ESP |
-| **[Sniper Arena](#-sniper-arena)** | Silent aim, ragebot, aimbot, skin changer, ESP with preview and radar |
+| **[Sniper Arena](#-sniper-arena)** | Hitbox expander, silent aim, ragebot, anti-aim, knife aura, chams, skin changer |
 | **[Violence District](#-violence-district)** | Auto repair, instant escape, killer auto slash and hook, auto farm both roles, ESP |
 | **[Anime Dice](#-anime-dice)** | Smart Kaitun, fast roll, auto upgrade and rebirth, auto tower, redeem all codes |
 | **[Ride A Pet](#-ride-a-pet)** | Smart Candy, Halloween eggs, fast egg farming, Instant E, Smart Kaitun |
@@ -180,17 +180,22 @@ loadstring(game:HttpGet("https://raw.githubusercontent.com/xDTaraZz/Roblox-Scrip
 <details>
 <summary><b>Features</b></summary>
 
+- **Hitbox Expander**: scalable head and body hitboxes with transparency control and verified server registration
+- **Anti-Aim / Spinbot**: ByteNet protocol-layer desync with 1080°/s spinbot and jitter modes
+- **Knife Aura**: 360° automatic melee attack within configurable range
+- **Fast Switch**: cancels bolt-action cocking animations for instant weapon cycling
 - **Silent aim**: shots land on the target inside the FOV, your view never moves
 - **Ragebot**: shoots every visible enemy on its own, view stays still
 - Hit chance and headshot chance sliders
 - **Aimbot** with hold, toggle or always mode, head/body/arm/leg, smoothness and prediction
 - Target priority: crosshair, mouse, distance or lowest health, with FOV circle and max distance
-- **Trigger bot**, **Instant scope**, **No spread**, **No recoil**
+- **Trigger bot**, **Instant scope**, **No spread**, **No recoil**, **Full Auto**, **Fast Reload**, **Infinite Ammo**
+- **No Scope Overlay**, **Anti-Flash**, **Anti-Smoke**, **Engine X-Ray Chams**, **Anti-Peek Occlusion Bypass**
 - **Skin changer** for snipers, rifles, knives and gloves, with rarity filter (only you see it)
 - **ESP**: box, name, health, distance, tracers, head dot, chams, off-screen arrows, live preview beside the menu
 - **Radar** minimap
-- Fast respawn, infinite dash, anti AFK
-- Auto open owned cases, auto sell by rarity with a price limit, auto claim quests
+- Fast respawn, infinite dash, infinite air jump, auto bunny hop, anti AFK
+- Auto open owned cases, auto sell by rarity with a price limit, auto claim quests, redeem all codes
 
 </details>
 
