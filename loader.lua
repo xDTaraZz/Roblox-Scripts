@@ -3,6 +3,7 @@ if not game:IsLoaded() then
 end
 
 local BASE = "https://raw.githubusercontent.com/xDTaraZz/Roblox-Scripts/refs/heads/main/All%20Map/"
+local OLD_BASE = BASE .. "old/"
 local DISCORD = "discord.gg/FHVfmeSceA"
 
 local GAMES = {
@@ -80,7 +81,11 @@ if not name then
     return
 end
 
-local source, why = Fetch(BASE .. (name:gsub(" ", "%%20")) .. ".lua")
+local fileName = (name:gsub(" ", "%%20")) .. ".lua"
+local source, why = Fetch(BASE .. fileName)
+if not source then
+    source, why = Fetch(OLD_BASE .. fileName)
+end
 if not source then
     Notify("Could not download " .. name .. ". Check your connection and try again, or ask in " .. DISCORD, why)
     return
